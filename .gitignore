@@ -5,6 +5,7 @@
 /public/hot
 /public/storage
 /storage/*.key
+/storage/framework/phpstan
 /storage/pail
 /vendor
 .env

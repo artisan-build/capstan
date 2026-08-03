@@ -3,6 +3,7 @@
 namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
+use App\Enums\OrgRole;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
@@ -24,6 +25,7 @@ use Laravel\Fortify\TwoFactorAuthenticatable;
  * @property string|null $two_factor_secret
  * @property string|null $two_factor_recovery_codes
  * @property Carbon|null $two_factor_confirmed_at
+ * @property OrgRole $org_role
  * @property string|null $remember_token
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
@@ -44,8 +46,27 @@ class User extends Authenticatable implements PasskeyUser
     {
         return [
             'email_verified_at' => 'datetime',
+            'org_role' => OrgRole::class,
             'password' => 'hashed',
         ];
+    }
+
+    public function canIssueInvitations(): bool
+    {
+        return in_array($this->org_role, [OrgRole::Owner, OrgRole::Admin], true);
+    }
+
+    public function canChangeOrgRoleTo(User $target, OrgRole $role): bool
+    {
+        if ($this->org_role === OrgRole::Owner) {
+            return true;
+        }
+
+        if ($this->org_role !== OrgRole::Admin) {
+            return false;
+        }
+
+        return $target->org_role !== OrgRole::Owner && $role !== OrgRole::Owner;
     }
 
     /**

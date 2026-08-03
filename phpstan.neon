@@ -3,6 +3,8 @@ includes:
     - vendor/nesbot/carbon/extension.neon
 
 parameters:
+    tmpDir: storage/framework/phpstan
+
     paths:
         - app/
         - bootstrap/app.php
