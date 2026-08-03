@@ -4,7 +4,7 @@ namespace App\Actions;
 
 use App\Enums\OrgRole;
 use App\Models\User;
-use Illuminate\Database\QueryException;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -19,20 +19,25 @@ class RegisterFirstOwner
             return DB::transaction(function () use ($input) {
                 $now = now();
 
+                DB::delete(
+                    'delete from first_owner_claims where name = ? and not exists (select 1 from users)',
+                    ['first_owner'],
+                );
+
                 DB::table('first_owner_claims')->insert([
                     'name' => 'first_owner',
                     'created_at' => $now,
                     'updated_at' => $now,
                 ]);
 
-                return User::create([
+                return User::forceCreate([
                     'name' => $input['name'],
                     'email' => $input['email'],
                     'password' => $input['password'],
                     'org_role' => OrgRole::Owner,
                 ]);
             });
-        } catch (QueryException) {
+        } catch (UniqueConstraintViolationException) {
             throw ValidationException::withMessages([
                 'email' => __('The first owner has already been claimed.'),
             ]);

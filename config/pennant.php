@@ -7,11 +7,5 @@ return [
         'array' => [
             'driver' => 'array',
         ],
-
-        'database' => [
-            'driver' => 'database',
-            'connection' => null,
-            'table' => 'features',
-        ],
     ],
 ];

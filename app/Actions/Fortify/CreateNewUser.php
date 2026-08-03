@@ -6,6 +6,7 @@ use App\Actions\RegisterFirstOwner;
 use App\Actions\RegisterInvitedUser;
 use App\Concerns\PasswordValidationRules;
 use App\Concerns\ProfileValidationRules;
+use App\Models\Invitation;
 use App\Models\User;
 use Illuminate\Support\Facades\Validator;
 use Laravel\Fortify\Contracts\CreatesNewUsers;
@@ -21,9 +22,25 @@ class CreateNewUser implements CreatesNewUsers
      */
     public function create(array $input): User
     {
+        if (User::query()->exists()) {
+            Validator::make($input, [
+                'invitation_code' => ['required', 'string', 'max:255', 'exists:invitations,code'],
+            ])->after(function ($validator) use ($input) {
+                if ($validator->errors()->has('invitation_code')) {
+                    return;
+                }
+
+                $code = $input['invitation_code'] ?? null;
+
+                if (! is_string($code) || ! Invitation::query()->where('code', $code)->unused()->exists()) {
+                    $validator->errors()->add('invitation_code', __('A valid invitation code is required.'));
+                }
+            })->validate();
+        }
+
         Validator::make($input, [
             ...$this->profileRules(),
-            'invitation_code' => ['nullable', 'string'],
+            'invitation_code' => ['nullable', 'string', 'max:255'],
             'password' => $this->passwordRules(),
         ])->validate();
 

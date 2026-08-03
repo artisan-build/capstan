@@ -27,7 +27,7 @@ class RegisterInvitedUser
                 ]);
             }
 
-            $user = User::create([
+            $user = User::forceCreate([
                 'name' => $input['name'],
                 'email' => $input['email'],
                 'password' => $input['password'],
