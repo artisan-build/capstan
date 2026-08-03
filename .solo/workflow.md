@@ -55,6 +55,8 @@ Rector rule / pint.json edit) — that gets its own dedicated PR.
   fork-and-self-host OSS; a forker won't have the Pro license). (brain D20.)
 - One fork-and-deploy app; server capabilities toggle via **Laravel Pennant** flags whose resolvers read
   **`.env` → `config()`** (config is source of truth, NOT Pennant's DB store). (brain D23.)
+- **Pennant features MUST be class-based** (one class per feature with a `resolve()` method), NOT closures
+  registered in a service provider. (Ed's strong preference, 2026-08-03.)
 - Artifacts = rich HTML kept safe by **origin ISOLATION not sanitization**: a separate cookieless render
   origin (custom domain) + sandboxed opaque-origin iframe + strict CSP; egress a rebindable default-locked
   policy. Blob on the **Flysystem default disk**, metadata in DB; **private storage, app-mediated serve —
