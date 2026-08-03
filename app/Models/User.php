@@ -8,6 +8,7 @@ use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Carbon;
@@ -37,6 +38,13 @@ class User extends Authenticatable implements PasskeyUser
     /** @use HasFactory<UserFactory> */
     use HasFactory, Notifiable, PasskeyAuthenticatable, TwoFactorAuthenticatable;
 
+    protected static function booted(): void
+    {
+        static::created(function (User $user): void {
+            Team::default()->users()->syncWithoutDetaching([$user->id]);
+        });
+    }
+
     /**
      * Get the attributes that should be cast.
      *
@@ -54,6 +62,14 @@ class User extends Authenticatable implements PasskeyUser
     public function canIssueInvitations(): bool
     {
         return in_array($this->org_role, [OrgRole::Owner, OrgRole::Admin], true);
+    }
+
+    /**
+     * @return BelongsToMany<Team, $this>
+     */
+    public function teams(): BelongsToMany
+    {
+        return $this->belongsToMany(Team::class)->withTimestamps();
     }
 
     public function canChangeOrgRoleTo(User $target, OrgRole $role): bool
