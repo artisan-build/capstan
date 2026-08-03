@@ -36,7 +36,7 @@ class RegisterFirstOwner
                     'password' => $input['password'],
                     'org_role' => OrgRole::Owner,
                 ]);
-            });
+            }, 3);
         } catch (UniqueConstraintViolationException) {
             throw ValidationException::withMessages([
                 'email' => __('The first owner has already been claimed.'),
