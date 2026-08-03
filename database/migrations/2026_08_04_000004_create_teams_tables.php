@@ -37,7 +37,19 @@ return new class extends Migration
             $table->timestamps();
 
             $table->primary(['team_id', 'user_id']);
+            $table->index('user_id');
         });
+
+        $defaultTeamId = DB::table('teams')->where('slug', Team::DEFAULT_SLUG)->value('id');
+
+        DB::table('team_user')->insertUsing(
+            ['team_id', 'user_id', 'created_at', 'updated_at'],
+            DB::table('users')->selectRaw('? as team_id, id as user_id, ? as created_at, ? as updated_at', [
+                $defaultTeamId,
+                $now,
+                $now,
+            ]),
+        );
     }
 
     /**
