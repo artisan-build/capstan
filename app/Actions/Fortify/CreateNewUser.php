@@ -2,6 +2,8 @@
 
 namespace App\Actions\Fortify;
 
+use App\Actions\RegisterFirstOwner;
+use App\Actions\RegisterInvitedUser;
 use App\Concerns\PasswordValidationRules;
 use App\Concerns\ProfileValidationRules;
 use App\Models\User;
@@ -21,13 +23,23 @@ class CreateNewUser implements CreatesNewUsers
     {
         Validator::make($input, [
             ...$this->profileRules(),
+            'invitation_code' => ['nullable', 'string'],
             'password' => $this->passwordRules(),
         ])->validate();
 
-        return User::create([
+        $registration = [
             'name' => $input['name'],
             'email' => $input['email'],
             'password' => $input['password'],
+        ];
+
+        if (! User::query()->exists()) {
+            return app(RegisterFirstOwner::class)->handle($registration);
+        }
+
+        return app(RegisterInvitedUser::class)->handle([
+            ...$registration,
+            'invitation_code' => $input['invitation_code'] ?? null,
         ]);
     }
 }
