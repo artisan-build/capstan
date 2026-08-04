@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Cli;
 
 use App\Cli\LoopbackRedirect;
 use App\Http\Controllers\Controller;
+use App\Models\AuthorizationCode;
 use App\Models\User;
 use App\Support\CliTokenNames;
 use Illuminate\Contracts\View\View;
@@ -61,10 +62,15 @@ class AuthorizeController extends Controller
 
         /** @var User $user */
         $user = Auth::user();
-        $token = $user->createToken(CliTokenNames::forLabel($validated['label'] ?? null))->plainTextToken;
+
+        ['code' => $code] = AuthorizationCode::issue(
+            $user,
+            $redirectUri,
+            CliTokenNames::sanitizeLabel($validated['label'] ?? null),
+        );
 
         return redirect()->away(LoopbackRedirect::appendQuery($redirectUri, [
-            'token' => $token,
+            'code' => $code,
             'state' => $state,
         ]));
     }
