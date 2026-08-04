@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\ArtifactVisibility;
 use Database\Factories\ArtifactFactory;
 use Illuminate\Database\Eloquent\Attributes\UseFactory;
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -13,7 +14,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Storage;
 
 /**
- * @property int $id
+ * @property string $id
  * @property int|null $author_id
  * @property ArtifactVisibility $visibility
  * @property Carbon|null $expires_at
@@ -27,6 +28,8 @@ class Artifact extends Model
 {
     /** @use HasFactory<ArtifactFactory> */
     use HasFactory;
+
+    use HasUuids;
 
     protected $fillable = [
         'author_id',

@@ -12,7 +12,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create('artifacts', function (Blueprint $table) {
-            $table->id();
+            $table->uuid('id')->primary();
             $table->foreignId('author_id')->nullable()->constrained('users')->nullOnDelete();
             $table->string('visibility');
             $table->timestamp('expires_at')->nullable();
