@@ -17,6 +17,7 @@ if (Features::enabled(Features::registration())) {
 
 Route::middleware(['auth', 'verified'])->group(function () {
     Route::view('dashboard', 'dashboard')->name('dashboard');
+    Route::livewire('team', 'pages::team')->name('team.index');
 });
 
 // The content route lives in routes/render.php on a lean, sessionless stack.

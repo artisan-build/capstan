@@ -10,4 +10,9 @@ class InvitationPolicy
     {
         return $user->canIssueInvitations();
     }
+
+    public function delete(User $user): bool
+    {
+        return $user->canIssueInvitations();
+    }
 }

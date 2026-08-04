@@ -1,0 +1,217 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Actions\ChangeOrgRole;
+use App\Actions\EnsureAnotherOwnerRemains;
+use App\Enums\OrgRole;
+use App\Models\Invitation;
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
+use Livewire\Livewire;
+use Tests\TestCase;
+
+class TeamManagementTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_team_page_access_is_limited_to_owners_and_admins(): void
+    {
+        $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+        $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
+        $member = User::factory()->create(['org_role' => OrgRole::Member]);
+
+        $this->get(route('team.index'))->assertRedirect(route('login'));
+
+        $this->actingAs($member)
+            ->get(route('team.index'))
+            ->assertForbidden();
+
+        $this->actingAs($admin)
+            ->get(route('team.index'))
+            ->assertOk();
+
+        $this->actingAs($owner)
+            ->get(route('team.index'))
+            ->assertOk();
+    }
+
+    public function test_roles_can_be_changed_through_the_team_component_with_policy_enforcement(): void
+    {
+        $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+        $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
+        $member = User::factory()->create(['org_role' => OrgRole::Member]);
+
+        $this->actingAs($owner);
+
+        Livewire::test('pages::team')
+            ->set("roleChanges.{$admin->id}", OrgRole::Member->value)
+            ->call('changeRole', $admin->id)
+            ->assertHasNoErrors();
+
+        $this->assertSame(OrgRole::Member, $admin->refresh()->org_role);
+
+        $admin->forceFill(['org_role' => OrgRole::Admin])->save();
+        $this->actingAs($admin);
+
+        Livewire::test('pages::team')
+            ->set("roleChanges.{$member->id}", OrgRole::Admin->value)
+            ->call('changeRole', $member->id)
+            ->assertHasNoErrors();
+
+        $this->assertSame(OrgRole::Admin, $member->refresh()->org_role);
+
+        Livewire::test('pages::team')
+            ->set("roleChanges.{$owner->id}", OrgRole::Member->value)
+            ->call('changeRole', $owner->id)
+            ->assertForbidden();
+
+        $this->assertSame(OrgRole::Owner, $owner->refresh()->org_role);
+
+        Livewire::test('pages::team')
+            ->set("roleChanges.{$member->id}", OrgRole::Owner->value)
+            ->call('changeRole', $member->id)
+            ->assertForbidden();
+
+        $this->assertSame(OrgRole::Admin, $member->refresh()->org_role);
+
+        $this->actingAs($owner);
+
+        Livewire::test('pages::team')
+            ->set("roleChanges.{$member->id}", OrgRole::Owner->value)
+            ->call('changeRole', $member->id)
+            ->assertHasNoErrors();
+
+        $this->assertSame(OrgRole::Owner, $member->refresh()->org_role);
+    }
+
+    public function test_last_owner_cannot_be_demoted_through_component_or_direct_action(): void
+    {
+        $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+
+        $this->actingAs($owner);
+
+        Livewire::test('pages::team')
+            ->set("roleChanges.{$owner->id}", OrgRole::Admin->value)
+            ->call('changeRole', $owner->id)
+            ->assertHasErrors("roleChanges.{$owner->id}");
+
+        $this->assertSame(OrgRole::Owner, $owner->refresh()->org_role);
+
+        try {
+            app(ChangeOrgRole::class)->handle($owner, $owner, OrgRole::Admin);
+            $this->fail('The sole owner demotion should fail.');
+        } catch (ValidationException $exception) {
+            $this->assertSame('The organization must always have at least one owner.', $exception->errors()['org_role'][0]);
+            $this->assertSame(OrgRole::Owner, $owner->refresh()->org_role);
+        }
+    }
+
+    public function test_one_of_two_owners_can_be_demoted(): void
+    {
+        $actor = User::factory()->create(['org_role' => OrgRole::Owner]);
+        $target = User::factory()->create(['org_role' => OrgRole::Owner]);
+
+        app(ChangeOrgRole::class)->handle($actor, $target, OrgRole::Admin);
+
+        $this->assertSame(OrgRole::Admin, $target->refresh()->org_role);
+        $this->assertSame(1, User::query()->where('org_role', OrgRole::Owner)->count());
+    }
+
+    public function test_last_owner_guard_runs_inside_the_change_role_transaction(): void
+    {
+        $actor = User::factory()->create(['org_role' => OrgRole::Owner]);
+        $target = User::factory()->create(['org_role' => OrgRole::Owner]);
+
+        $this->app->instance(EnsureAnotherOwnerRemains::class, new class($this) extends EnsureAnotherOwnerRemains
+        {
+            public function __construct(private readonly TestCase $test) {}
+
+            public function handle(User $target): void
+            {
+                $this->test->assertGreaterThan(0, DB::transactionLevel());
+
+                parent::handle($target);
+            }
+        });
+
+        app(ChangeOrgRole::class)->handle($actor, $target, OrgRole::Admin);
+
+        $this->assertSame(OrgRole::Admin, $target->refresh()->org_role);
+    }
+
+    public function test_invitations_can_be_issued_through_the_team_component(): void
+    {
+        $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
+
+        $this->actingAs($admin);
+
+        $component = Livewire::test('pages::team')
+            ->set('invitationEmail', 'new-member@example.com')
+            ->set('invitationRole', OrgRole::Member->value)
+            ->call('issueInvitation')
+            ->assertHasNoErrors();
+
+        $invitation = Invitation::firstOrFail();
+
+        $component->assertSee($invitation->code);
+        $this->assertSame('new-member@example.com', $invitation->email);
+        $this->assertSame(OrgRole::Member, $invitation->role);
+        $this->assertSame($admin->id, $invitation->issued_by);
+    }
+
+    public function test_admin_cannot_issue_owner_invitation_through_a_crafted_component_request(): void
+    {
+        $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
+
+        $this->actingAs($admin);
+
+        Livewire::test('pages::team')
+            ->set('invitationRole', OrgRole::Owner->value)
+            ->call('issueInvitation')
+            ->assertForbidden();
+
+        $this->assertDatabaseCount('invitations', 0);
+    }
+
+    public function test_owner_can_issue_owner_invitation_through_the_team_component(): void
+    {
+        $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+
+        $this->actingAs($owner);
+        Livewire::test('pages::team')
+            ->set('invitationRole', OrgRole::Owner->value)
+            ->call('issueInvitation')
+            ->assertHasNoErrors();
+
+        $this->assertSame(OrgRole::Owner, Invitation::firstOrFail()->role);
+    }
+
+    public function test_claimable_invitations_can_be_revoked_and_used_invitations_are_not_listed(): void
+    {
+        $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
+        $usedBy = User::factory()->create(['org_role' => OrgRole::Member]);
+        $claimable = Invitation::factory()->email('claimable@example.com')->create(['issued_by' => $admin->id]);
+        $used = Invitation::factory()->email('used@example.com')->create([
+            'issued_by' => $admin->id,
+            'used_by' => $usedBy->id,
+            'used_at' => now(),
+        ]);
+
+        $this->actingAs($admin);
+
+        $this->get(route('team.index'))
+            ->assertOk()
+            ->assertSee('claimable@example.com')
+            ->assertDontSee('used@example.com');
+
+        Livewire::test('pages::team')
+            ->call('revokeInvitation', $claimable->id)
+            ->assertHasNoErrors();
+
+        $this->assertNull($claimable->fresh());
+        $this->assertNotNull($used->fresh());
+    }
+}
