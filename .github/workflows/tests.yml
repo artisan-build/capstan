@@ -13,6 +13,11 @@ jobs:
   tests:
     runs-on: ubuntu-latest
 
+    strategy:
+      matrix:
+        # Add '8.6' here when it reaches RC to check upgrade-readiness.
+        php: ['8.5']
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -20,7 +25,7 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.4'
+          php-version: ${{ matrix.php }}
           tools: composer:v2
           coverage: none
 
@@ -41,6 +46,11 @@ jobs:
 
   tests-postgres:
     runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        # Add '8.6' here when it reaches RC to check upgrade-readiness.
+        php: ['8.5']
 
     services:
       postgres:
@@ -64,7 +74,7 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.4'
+          php-version: ${{ matrix.php }}
           tools: composer:v2
           coverage: none
           extensions: pdo_pgsql, pgsql
@@ -94,3 +104,15 @@ jobs:
           DB_DATABASE: testing
           DB_USERNAME: postgres
           DB_PASSWORD: postgres
+
+  # Stable required check that aggregates the test matrix, so branch protection needn't change when PHP versions are added/removed.
+  ci:
+    name: ci
+    needs: [tests, tests-postgres]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate on matrix test results
+        run: |
+          [ "${{ needs.tests.result }}" = "success" ] \
+            && [ "${{ needs.tests-postgres.result }}" = "success" ]
