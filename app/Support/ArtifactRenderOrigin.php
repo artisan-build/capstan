@@ -31,11 +31,16 @@ class ArtifactRenderOrigin
         return is_string($origin) && $origin !== '';
     }
 
+    public function renderHost(): string
+    {
+        return (string) parse_url($this->renderOrigin(), PHP_URL_HOST);
+    }
+
     public function renderHostFor(Artifact $artifact): string
     {
         // Path A uses one shared render subdomain. Keep this seam: Path B can
         // switch this resolver to a per-artifact host without changing data.
-        return (string) parse_url($this->renderOrigin(), PHP_URL_HOST);
+        return $this->renderHost();
     }
 
     public function signedContentUrl(Artifact $artifact): string
