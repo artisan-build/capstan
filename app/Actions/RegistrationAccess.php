@@ -16,7 +16,7 @@ class RegistrationAccess
 
         return is_string($code)
             && $code !== ''
-            && Invitation::query()->where('code', $code)->unused()->exists();
+            && Invitation::query()->where('code', $code)->stillClaimable()->exists();
     }
 
     public function ensureCanView(?string $code): void
