@@ -2,6 +2,7 @@
 
 use App\Actions\ChangeOrgRole;
 use App\Actions\IssueInvitation;
+use App\Actions\RemoveMember;
 use App\Actions\RevokeInvitation;
 use App\Enums\OrgRole;
 use App\Models\Invitation;
@@ -84,6 +85,22 @@ new #[Title('Team')] class extends Component {
         Flux::toast(variant: 'success', text: __('Invitation revoked.'));
     }
 
+    public function removeMember(int $userId, RemoveMember $removeMember): void
+    {
+        $target = User::query()->findOrFail($userId);
+
+        try {
+            $removeMember->handle(Auth::user()->refresh(), $target);
+        } catch (ValidationException $exception) {
+            $this->addError("removeMember.{$userId}", $exception->errors()['org_role'][0] ?? $exception->getMessage());
+
+            return;
+        }
+
+        unset($this->roleChanges[$userId]);
+        Flux::toast(variant: 'success', text: __('Member removed.'));
+    }
+
     public function roleOptionsFor(User $target): array
     {
         return collect(OrgRole::cases())
@@ -129,6 +146,7 @@ new #[Title('Team')] class extends Component {
                             <th class="py-3 pe-4 font-medium">{{ __('Email') }}</th>
                             <th class="py-3 pe-4 font-medium">{{ __('Joined') }}</th>
                             <th class="py-3 font-medium">{{ __('Role') }}</th>
+                            <th class="py-3 text-right font-medium">{{ __('Actions') }}</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-zinc-200 dark:divide-zinc-700">
@@ -154,6 +172,23 @@ new #[Title('Team')] class extends Component {
                                         </flux:select>
                                     @endif
                                     @error("roleChanges.{$user->id}")
+                                        <p class="mt-2 text-sm text-red-600 dark:text-red-400">{{ $message }}</p>
+                                    @enderror
+                                </td>
+                                <td class="py-4 text-right">
+                                    @if (auth()->user()->can('remove', $user))
+                                        <flux:button
+                                            type="button"
+                                            variant="danger"
+                                            size="sm"
+                                            wire:click="removeMember({{ $user->id }})"
+                                            wire:confirm="{{ __('Remove this member from the organization?') }}"
+                                        >
+                                            {{ __('Remove') }}
+                                        </flux:button>
+                                    @endif
+
+                                    @error("removeMember.{$user->id}")
                                         <p class="mt-2 text-sm text-red-600 dark:text-red-400">{{ $message }}</p>
                                     @enderror
                                 </td>

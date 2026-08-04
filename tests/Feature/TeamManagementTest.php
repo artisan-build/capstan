@@ -4,9 +4,14 @@ namespace Tests\Feature;
 
 use App\Actions\ChangeOrgRole;
 use App\Actions\EnsureAnotherOwnerRemains;
+use App\Actions\RemoveMember;
 use App\Enums\OrgRole;
+use App\Models\Artifact;
+use App\Models\DeviceCode;
 use App\Models\Invitation;
+use App\Models\Team;
 use App\Models\User;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -181,6 +186,23 @@ class TeamManagementTest extends TestCase
         $this->assertSame(OrgRole::Admin, $target->refresh()->org_role);
     }
 
+    public function test_change_role_reauthorizes_against_the_fresh_locked_target_inside_the_transaction(): void
+    {
+        User::factory()->create(['org_role' => OrgRole::Owner]);
+        $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
+        $target = User::factory()->create(['org_role' => OrgRole::Member]);
+
+        $target->newQuery()->whereKey($target->id)->update(['org_role' => OrgRole::Owner]);
+
+        try {
+            app(ChangeOrgRole::class)->handle($admin, $target, OrgRole::Admin);
+            $this->fail('Admins should not be able to change a freshly promoted owner.');
+        } catch (AuthorizationException) {
+            $this->assertSame(OrgRole::Owner, $target->refresh()->org_role);
+            $this->assertSame(2, User::query()->where('org_role', OrgRole::Owner)->count());
+        }
+    }
+
     public function test_invitations_can_be_issued_through_the_team_component(): void
     {
         $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
@@ -288,5 +310,164 @@ class TeamManagementTest extends TestCase
             ->assertForbidden();
 
         $this->assertNotNull($claimable->fresh());
+    }
+
+    public function test_owner_removes_member_and_database_relations_follow_cascade_rules(): void
+    {
+        $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+        $member = User::factory()->create(['org_role' => OrgRole::Member]);
+        $team = Team::query()->create(['name' => 'Project', 'slug' => 'project', 'is_default' => false]);
+        $team->users()->attach($member);
+        $issuedInvitation = Invitation::factory()->create(['issued_by' => $member->id]);
+        $usedInvitation = Invitation::factory()->create(['issued_by' => $owner->id, 'used_by' => $member->id, 'used_at' => now()]);
+        $artifact = Artifact::factory()->create(['author_id' => $member->id]);
+        $actorArtifact = Artifact::factory()->create(['author_id' => $owner->id]);
+        $deviceCode = DeviceCode::factory()->create(['user_id' => $member->id]);
+        DB::table('passkeys')->insert([
+            'user_id' => $member->id,
+            'name' => 'Member passkey',
+            'credential_id' => 'member-passkey',
+            'credential' => json_encode(['id' => 'member-passkey']),
+            'last_used_at' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $this->actingAs($owner);
+
+        Livewire::test('pages::team')
+            ->call('removeMember', $member->id)
+            ->assertHasNoErrors();
+
+        $this->assertNull($member->fresh());
+        $this->assertDatabaseMissing('team_user', ['user_id' => $member->id]);
+        $this->assertNull($issuedInvitation->fresh());
+        $this->assertNull($usedInvitation->refresh()->used_by);
+        $this->assertNull($artifact->refresh()->author_id);
+        $this->assertSame($owner->id, $actorArtifact->refresh()->author_id);
+        $this->assertNull($deviceCode->refresh()->user_id);
+        $this->assertDatabaseMissing('passkeys', ['credential_id' => 'member-passkey']);
+    }
+
+    public function test_admin_can_remove_member_but_cannot_remove_owner_through_crafted_component_call(): void
+    {
+        $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+        $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
+        $member = User::factory()->create(['org_role' => OrgRole::Member]);
+
+        $this->actingAs($admin);
+
+        Livewire::test('pages::team')
+            ->call('removeMember', $member->id)
+            ->assertHasNoErrors();
+
+        $this->assertNull($member->fresh());
+
+        Livewire::test('pages::team')
+            ->call('removeMember', $owner->id)
+            ->assertForbidden();
+
+        $this->assertNotNull($owner->fresh());
+    }
+
+    public function test_self_removal_is_denied_for_owners_and_admins(): void
+    {
+        $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+        $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
+
+        $this->actingAs($owner);
+        Livewire::test('pages::team')
+            ->call('removeMember', $owner->id)
+            ->assertForbidden();
+
+        $this->assertNotNull($owner->fresh());
+
+        $this->actingAs($admin);
+        Livewire::test('pages::team')
+            ->call('removeMember', $admin->id)
+            ->assertForbidden();
+
+        $this->assertNotNull($admin->fresh());
+    }
+
+    public function test_owner_can_remove_another_owner_and_remove_member_invokes_owner_guard_inside_transaction(): void
+    {
+        $actor = User::factory()->create(['org_role' => OrgRole::Owner]);
+        $target = User::factory()->create(['org_role' => OrgRole::Owner]);
+
+        $guard = new class($this) extends EnsureAnotherOwnerRemains
+        {
+            public bool $called = false;
+
+            public function __construct(private readonly TestCase $test) {}
+
+            public function handle(User $target): void
+            {
+                $this->called = true;
+                $this->test->assertSame(OrgRole::Owner, $target->org_role);
+                $this->test->assertGreaterThan(0, DB::transactionLevel());
+
+                parent::handle($target);
+            }
+        };
+
+        $this->app->instance(EnsureAnotherOwnerRemains::class, $guard);
+
+        app(RemoveMember::class)->handle($actor, $target);
+
+        $this->assertNull($target->fresh());
+        $this->assertTrue($guard->called);
+        $this->assertSame(1, User::query()->where('org_role', OrgRole::Owner)->count());
+    }
+
+    public function test_remaining_owner_cannot_remove_themself_after_another_owner_was_removed(): void
+    {
+        $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+        $removedOwner = User::factory()->create(['org_role' => OrgRole::Owner]);
+
+        app(RemoveMember::class)->handle($owner, $removedOwner);
+
+        try {
+            app(RemoveMember::class)->handle($owner, $owner);
+            $this->fail('Owners should not be able to remove themselves from team management.');
+        } catch (AuthorizationException) {
+            $this->assertNotNull($owner->fresh());
+            $this->assertSame(1, User::query()->where('org_role', OrgRole::Owner)->count());
+        }
+    }
+
+    public function test_demoted_actor_cannot_remove_member_from_an_already_mounted_team_component(): void
+    {
+        $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
+        $target = User::factory()->create(['org_role' => OrgRole::Member]);
+
+        $this->actingAs($admin);
+
+        $component = Livewire::test('pages::team');
+
+        $admin->newQuery()->whereKey($admin->id)->update(['org_role' => OrgRole::Member]);
+
+        $component
+            ->call('removeMember', $target->id)
+            ->assertForbidden();
+
+        $this->assertNotNull($target->fresh());
+    }
+
+    public function test_remove_member_reauthorizes_against_the_fresh_locked_target_inside_the_transaction(): void
+    {
+        User::factory()->create(['org_role' => OrgRole::Owner]);
+        $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
+        $target = User::factory()->create(['org_role' => OrgRole::Member]);
+
+        $target->newQuery()->whereKey($target->id)->update(['org_role' => OrgRole::Owner]);
+
+        try {
+            app(RemoveMember::class)->handle($admin, $target);
+            $this->fail('Admins should not be able to remove a freshly promoted owner.');
+        } catch (AuthorizationException) {
+            $this->assertNotNull($target->fresh());
+            $this->assertSame(2, User::query()->where('org_role', OrgRole::Owner)->count());
+        }
     }
 }
