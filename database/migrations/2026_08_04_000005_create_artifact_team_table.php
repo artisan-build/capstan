@@ -13,7 +13,7 @@ return new class extends Migration
     {
         Schema::create('artifact_team', function (Blueprint $table) {
             // Artifacts land in PR5, so artifact_id is indexed now and gets its FK later.
-            $table->unsignedBigInteger('artifact_id');
+            $table->uuid('artifact_id');
             $table->foreignId('team_id')->constrained()->cascadeOnDelete();
             $table->timestamps();
 
