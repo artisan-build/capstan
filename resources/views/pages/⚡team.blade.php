@@ -5,10 +5,14 @@ use App\Actions\IssueInvitation;
 use App\Actions\RemoveMember;
 use App\Actions\RevokeInvitation;
 use App\Enums\OrgRole;
+use App\Mail\InvitationMail;
 use App\Models\Invitation;
 use App\Models\User;
+use App\Support\MailerStatus;
 use Flux\Flux;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\Computed;
@@ -23,6 +27,8 @@ new #[Title('Team')] class extends Component {
     public string $invitationRole = 'member';
 
     public ?string $issuedInvitationLink = null;
+
+    public ?int $issuedInvitationId = null;
 
     public function mount(): void
     {
@@ -73,8 +79,31 @@ new #[Title('Team')] class extends Component {
         );
 
         $this->issuedInvitationLink = url(route('register', ['code' => $invitation->code], false));
+        $this->issuedInvitationId = $invitation->id;
         $this->invitationEmail = null;
         $this->invitationRole = OrgRole::Member->value;
+    }
+
+    public function sendInvitationEmail(int $invitationId): void
+    {
+        Gate::forUser(Auth::user()->refresh())->authorize('create', Invitation::class);
+
+        if (! MailerStatus::emailDeliveryConfigured()) {
+            $this->addError('sendInvitationEmail', __('Email invite delivery is not configured.'));
+
+            return;
+        }
+
+        $invitation = Invitation::query()->findOrFail($invitationId);
+
+        if (! $invitation->email || ! $invitation->isUnused() || $invitation->isExpired()) {
+            $this->addError('sendInvitationEmail', __('Only claimable invitations with an email address can be sent.'));
+
+            return;
+        }
+
+        Mail::to($invitation->email)->send(new InvitationMail($invitation));
+        Flux::toast(variant: 'success', text: __('Invitation email sent.'));
     }
 
     public function revokeInvitation(int $invitationId, RevokeInvitation $revokeInvitation): void
@@ -107,6 +136,20 @@ new #[Title('Team')] class extends Component {
             ->filter(fn (OrgRole $role): bool => Auth::user()->canChangeOrgRoleTo($target, $role))
             ->mapWithKeys(fn (OrgRole $role): array => [$role->value => str($role->value)->headline()->toString()])
             ->all();
+    }
+
+    public function emailDeliveryConfigured(): bool
+    {
+        return MailerStatus::emailDeliveryConfigured();
+    }
+
+    public function issuedInvitationHasEmail(): bool
+    {
+        if (! $this->issuedInvitationId) {
+            return false;
+        }
+
+        return (bool) Invitation::query()->whereKey($this->issuedInvitationId)->whereNotNull('email')->exists();
     }
 
     #[Computed]
@@ -230,6 +273,16 @@ new #[Title('Team')] class extends Component {
                             <flux:input readonly x-bind:value="link" aria-label="{{ __('Invite link') }}" />
                             <flux:button type="button" x-on:click="navigator.clipboard?.writeText(link)">{{ __('Copy') }}</flux:button>
                         </div>
+
+                        @if ($this->emailDeliveryConfigured() && $this->issuedInvitationHasEmail())
+                            <flux:button type="button" size="sm" wire:click="sendInvitationEmail({{ $issuedInvitationId }})">
+                                {{ __('Email invite') }}
+                            </flux:button>
+                        @endif
+
+                        @error('sendInvitationEmail')
+                            <p class="text-sm text-red-600 dark:text-red-400">{{ $message }}</p>
+                        @enderror
                     </div>
                 @endif
             </div>
@@ -253,11 +306,23 @@ new #[Title('Team')] class extends Component {
                                     </div>
                                 </div>
 
-                                <flux:button type="button" variant="danger" size="sm" wire:click="revokeInvitation({{ $invitation->id }})">
-                                    {{ __('Revoke') }}
-                                </flux:button>
+                                <div class="flex gap-2 sm:justify-end">
+                                    @if ($this->emailDeliveryConfigured() && $invitation->email)
+                                        <flux:button type="button" size="sm" wire:click="sendInvitationEmail({{ $invitation->id }})">
+                                            {{ __('Email invite') }}
+                                        </flux:button>
+                                    @endif
+
+                                    <flux:button type="button" variant="danger" size="sm" wire:click="revokeInvitation({{ $invitation->id }})">
+                                        {{ __('Revoke') }}
+                                    </flux:button>
+                                </div>
                             </div>
                         @endforeach
+
+                        @error('sendInvitationEmail')
+                            <p class="text-sm text-red-600 dark:text-red-400">{{ $message }}</p>
+                        @enderror
                     </div>
                 @endif
             </div>
