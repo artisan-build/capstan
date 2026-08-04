@@ -6,6 +6,7 @@ use App\Actions\ChangeOrgRole;
 use App\Actions\EnsureAnotherOwnerRemains;
 use App\Actions\RemoveMember;
 use App\Enums\OrgRole;
+use App\Mail\InvitationMail;
 use App\Models\Artifact;
 use App\Models\DeviceCode;
 use App\Models\Invitation;
@@ -14,6 +15,7 @@ use App\Models\User;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -310,6 +312,131 @@ class TeamManagementTest extends TestCase
             ->assertForbidden();
 
         $this->assertNotNull($claimable->fresh());
+    }
+
+    public function test_email_invite_actions_are_hidden_and_blocked_when_mail_is_not_configured(): void
+    {
+        config(['mail.default' => 'log']);
+        Mail::fake();
+
+        $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
+        $invitation = Invitation::factory()->email('invitee@example.com')->create(['issued_by' => $admin->id]);
+
+        $this->actingAs($admin);
+
+        $this->get(route('team.index'))
+            ->assertOk()
+            ->assertDontSee('Email invite');
+
+        Livewire::test('pages::team')
+            ->call('sendInvitationEmail', $invitation->id)
+            ->assertHasErrors('sendInvitationEmail');
+
+        Mail::assertNothingSent();
+    }
+
+    public function test_configured_mailer_sends_invitation_email_for_claimable_email_invitation(): void
+    {
+        config([
+            'mail.default' => 'cloudflare',
+            'services.cloudflare.account_id' => 'test-account',
+            'services.cloudflare.token' => 'test-token',
+        ]);
+        Mail::fake();
+
+        $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
+        $invitation = Invitation::factory()->email('invitee@example.com')->create(['issued_by' => $admin->id]);
+
+        $this->actingAs($admin);
+
+        Livewire::test('pages::team')
+            ->call('sendInvitationEmail', $invitation->id)
+            ->assertHasNoErrors();
+
+        Mail::assertSent(InvitationMail::class, function (InvitationMail $mail) use ($invitation): bool {
+            return $mail->hasTo($invitation->email)
+                && $mail->invitation->is($invitation)
+                && str_contains($mail->render(), $invitation->code);
+        });
+    }
+
+    public function test_invitation_email_requires_claimable_invitation_with_email(): void
+    {
+        config([
+            'mail.default' => 'cloudflare',
+            'services.cloudflare.account_id' => 'test-account',
+            'services.cloudflare.token' => 'test-token',
+        ]);
+        Mail::fake();
+
+        $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
+        $usedBy = User::factory()->create(['org_role' => OrgRole::Member]);
+        $withoutEmail = Invitation::factory()->create(['issued_by' => $admin->id]);
+        $used = Invitation::factory()->email('used@example.com')->create([
+            'issued_by' => $admin->id,
+            'used_by' => $usedBy->id,
+            'used_at' => now(),
+        ]);
+        $expired = Invitation::factory()->email('expired@example.com')->expired()->create(['issued_by' => $admin->id]);
+
+        $this->actingAs($admin);
+
+        Livewire::test('pages::team')
+            ->call('sendInvitationEmail', $withoutEmail->id)
+            ->assertHasErrors('sendInvitationEmail');
+
+        Livewire::test('pages::team')
+            ->call('sendInvitationEmail', $used->id)
+            ->assertHasErrors('sendInvitationEmail');
+
+        Livewire::test('pages::team')
+            ->call('sendInvitationEmail', $expired->id)
+            ->assertHasErrors('sendInvitationEmail');
+
+        Mail::assertNothingSent();
+    }
+
+    public function test_demoted_actor_cannot_send_invitation_email_from_an_already_mounted_team_component(): void
+    {
+        config([
+            'mail.default' => 'cloudflare',
+            'services.cloudflare.account_id' => 'test-account',
+            'services.cloudflare.token' => 'test-token',
+        ]);
+        Mail::fake();
+
+        $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
+        $invitation = Invitation::factory()->email('invitee@example.com')->create(['issued_by' => $admin->id]);
+
+        $this->actingAs($admin);
+
+        $component = Livewire::test('pages::team');
+
+        $admin->newQuery()->whereKey($admin->id)->update(['org_role' => OrgRole::Member]);
+
+        $component
+            ->call('sendInvitationEmail', $invitation->id)
+            ->assertForbidden();
+
+        Mail::assertNothingSent();
+    }
+
+    public function test_invitation_mail_renders_subject_link_role_and_expiry(): void
+    {
+        $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
+        $invitation = Invitation::factory()
+            ->email('invitee@example.com')
+            ->role(OrgRole::Admin)
+            ->expiresAt(now()->addDays(3))
+            ->create(['issued_by' => $admin->id]);
+
+        $mail = new InvitationMail($invitation);
+        $rendered = $mail->render();
+
+        $this->assertSame("You're invited to join Capstan", $mail->envelope()->subject);
+        $this->assertStringContainsString(route('register', ['code' => $invitation->code]), $rendered);
+        $this->assertStringContainsString('Admin', $rendered);
+        $this->assertStringContainsString($invitation->expires_at->toFormattedDateString(), $rendered);
     }
 
     public function test_owner_removes_member_and_database_relations_follow_cascade_rules(): void
