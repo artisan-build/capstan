@@ -15,11 +15,13 @@ class ChangeOrgRole
     {
         Gate::forUser($actor)->authorize('updateOrgRole', [$target, $role]);
 
-        $updatedTarget = DB::transaction(function () use ($target, $role): User {
+        $updatedTarget = DB::transaction(function () use ($actor, $target, $role): User {
             $freshTarget = User::query()
                 ->whereKey($target->id)
                 ->lockForUpdate()
                 ->firstOrFail();
+
+            Gate::forUser($actor->refresh())->authorize('updateOrgRole', [$freshTarget, $role]);
 
             if ($freshTarget->org_role === OrgRole::Owner && $role !== OrgRole::Owner) {
                 $this->ensureAnotherOwnerRemains->handle($freshTarget);

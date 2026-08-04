@@ -15,11 +15,13 @@ class RemoveMember
     {
         Gate::forUser($actor)->authorize('remove', $target);
 
-        DB::transaction(function () use ($target): void {
+        DB::transaction(function () use ($actor, $target): void {
             $freshTarget = User::query()
                 ->whereKey($target->id)
                 ->lockForUpdate()
                 ->firstOrFail();
+
+            Gate::forUser($actor->refresh())->authorize('remove', $freshTarget);
 
             if ($freshTarget->org_role === OrgRole::Owner) {
                 $this->ensureAnotherOwnerRemains->handle($freshTarget);

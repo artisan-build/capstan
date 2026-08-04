@@ -7,6 +7,7 @@ use App\Actions\EnsureAnotherOwnerRemains;
 use App\Actions\RemoveMember;
 use App\Enums\OrgRole;
 use App\Models\Artifact;
+use App\Models\DeviceCode;
 use App\Models\Invitation;
 use App\Models\Team;
 use App\Models\User;
@@ -185,6 +186,23 @@ class TeamManagementTest extends TestCase
         $this->assertSame(OrgRole::Admin, $target->refresh()->org_role);
     }
 
+    public function test_change_role_reauthorizes_against_the_fresh_locked_target_inside_the_transaction(): void
+    {
+        User::factory()->create(['org_role' => OrgRole::Owner]);
+        $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
+        $target = User::factory()->create(['org_role' => OrgRole::Member]);
+
+        $target->newQuery()->whereKey($target->id)->update(['org_role' => OrgRole::Owner]);
+
+        try {
+            app(ChangeOrgRole::class)->handle($admin, $target, OrgRole::Admin);
+            $this->fail('Admins should not be able to change a freshly promoted owner.');
+        } catch (AuthorizationException) {
+            $this->assertSame(OrgRole::Owner, $target->refresh()->org_role);
+            $this->assertSame(2, User::query()->where('org_role', OrgRole::Owner)->count());
+        }
+    }
+
     public function test_invitations_can_be_issued_through_the_team_component(): void
     {
         $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
@@ -303,6 +321,17 @@ class TeamManagementTest extends TestCase
         $issuedInvitation = Invitation::factory()->create(['issued_by' => $member->id]);
         $usedInvitation = Invitation::factory()->create(['issued_by' => $owner->id, 'used_by' => $member->id, 'used_at' => now()]);
         $artifact = Artifact::factory()->create(['author_id' => $member->id]);
+        $actorArtifact = Artifact::factory()->create(['author_id' => $owner->id]);
+        $deviceCode = DeviceCode::factory()->create(['user_id' => $member->id]);
+        DB::table('passkeys')->insert([
+            'user_id' => $member->id,
+            'name' => 'Member passkey',
+            'credential_id' => 'member-passkey',
+            'credential' => json_encode(['id' => 'member-passkey']),
+            'last_used_at' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
 
         $this->actingAs($owner);
 
@@ -315,6 +344,9 @@ class TeamManagementTest extends TestCase
         $this->assertNull($issuedInvitation->fresh());
         $this->assertNull($usedInvitation->refresh()->used_by);
         $this->assertNull($artifact->refresh()->author_id);
+        $this->assertSame($owner->id, $actorArtifact->refresh()->author_id);
+        $this->assertNull($deviceCode->refresh()->user_id);
+        $this->assertDatabaseMissing('passkeys', ['credential_id' => 'member-passkey']);
     }
 
     public function test_admin_can_remove_member_but_cannot_remove_owner_through_crafted_component_call(): void
@@ -420,5 +452,22 @@ class TeamManagementTest extends TestCase
             ->assertForbidden();
 
         $this->assertNotNull($target->fresh());
+    }
+
+    public function test_remove_member_reauthorizes_against_the_fresh_locked_target_inside_the_transaction(): void
+    {
+        User::factory()->create(['org_role' => OrgRole::Owner]);
+        $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
+        $target = User::factory()->create(['org_role' => OrgRole::Member]);
+
+        $target->newQuery()->whereKey($target->id)->update(['org_role' => OrgRole::Owner]);
+
+        try {
+            app(RemoveMember::class)->handle($admin, $target);
+            $this->fail('Admins should not be able to remove a freshly promoted owner.');
+        } catch (AuthorizationException) {
+            $this->assertNotNull($target->fresh());
+            $this->assertSame(2, User::query()->where('org_role', OrgRole::Owner)->count());
+        }
     }
 }
