@@ -46,9 +46,33 @@ test('signed url mode streams byte-identical content with strict headers from re
 
     expect($response->headers->get('Content-Security-Policy'))
         ->toContain("connect-src 'none'")
+        ->toContain("form-action 'none'")
+        ->toContain("base-uri 'none'")
         ->toContain('frame-ancestors https://app.capstan.test')
         ->and($response->baseResponse->isRedirection())->toBeFalse()
         ->and($response->streamedContent())->toBe($content);
+});
+
+test('content url expiry is capped at five minutes even when artifact expiry is far future', function (): void {
+    $this->travelTo(now()->startOfSecond());
+    $artifact = storedArtifact('<html><body>long lived artifact</body></html>', ArtifactVisibility::OrgAuth, now()->addMonths(6));
+    $query = parse_url(app(ArtifactRenderOrigin::class)->signedContentUrl($artifact), PHP_URL_QUERY);
+    parse_str(is_string($query) ? $query : '', $parameters);
+
+    expect((int) $parameters['expires'])->toBeLessThanOrEqual(now()->addMinutes(5)->timestamp);
+});
+
+test('content url valid now is rejected after six minutes', function (): void {
+    $artifact = storedArtifact('<html><body>short content grant</body></html>', ArtifactVisibility::SignedUrl, now()->addMonths(6));
+    $url = app(ArtifactRenderOrigin::class)->signedContentUrl($artifact);
+
+    $this->get($url)->assertOk();
+
+    $this->travel(6)->minutes();
+
+    $this->get($url)
+        ->assertForbidden()
+        ->assertDontSee('short content grant');
 });
 
 test('tampered and expired signed urls are refused without content', function (): void {
@@ -95,6 +119,18 @@ test('org auth mode requires a granted team and refuses guests or ungranted user
         ->and($response->streamedContent())->toBe($content);
 });
 
+test('org auth signed content url authorizes unauthenticated render origin requests', function (): void {
+    $content = '<html><body>signed org render grant</body></html>';
+    $artifact = storedArtifact($content, ArtifactVisibility::OrgAuth, now()->addHour());
+    $artifact->teams()->sync([Team::default()->id]);
+
+    $response = $this->get(app(ArtifactRenderOrigin::class)->signedContentUrl($artifact))
+        ->assertOk()
+        ->assertStreamed();
+
+    expect($response->streamedContent())->toBe($content);
+});
+
 test('expired org auth artifacts are refused', function (): void {
     $artifact = storedArtifact('<html><body>expired org artifact</body></html>', ArtifactVisibility::OrgAuth, now()->subMinute());
     $artifact->teams()->sync([Team::default()->id]);
@@ -122,9 +158,7 @@ test('content route refuses app host and viewer uses opaque-origin sandbox ifram
 });
 
 test('robots txt disallows artifact paths', function (): void {
-    $this->get('/robots.txt')
-        ->assertOk()
-        ->assertSee('Disallow: /artifacts/');
+    expect(file_get_contents(public_path('robots.txt')))->toContain('Disallow: /artifacts/');
 });
 
 test('artifact serving does not expose storage urls or call temporary disk urls', function (): void {
@@ -143,4 +177,33 @@ test('artifact serving does not expose storage urls or call temporary disk urls'
     ])->implode("\n");
 
     expect($source)->not->toContain('temporaryUrl(')->not->toContain('->url(');
+});
+
+test('artifact serving routes fail closed when the feature is off', function (): void {
+    $artifact = storedArtifact('<html><body>feature off artifact</body></html>', ArtifactVisibility::SignedUrl, now()->addHour());
+    $shareUrl = app(ArtifactRenderOrigin::class)->signedViewerUrl($artifact);
+    $contentUrl = app(ArtifactRenderOrigin::class)->signedContentUrl($artifact);
+
+    config(['capstan.features.artifacts' => false]);
+    Feature::flushCache();
+
+    $this->get($shareUrl)
+        ->assertNotFound()
+        ->assertDontSee('feature off artifact');
+
+    $this->get($contentUrl)
+        ->assertNotFound()
+        ->assertDontSee('feature off artifact');
+});
+
+test('content length is taken from the stored blob instead of artifact metadata', function (): void {
+    $content = '<html><body>actual blob length</body></html>';
+    $artifact = storedArtifact($content, ArtifactVisibility::SignedUrl, now()->addHour());
+    $artifact->forceFill(['size_bytes' => 1])->save();
+
+    $response = $this->get(app(ArtifactRenderOrigin::class)->signedContentUrl($artifact))
+        ->assertOk()
+        ->assertHeader('Content-Length', (string) strlen($content));
+
+    expect($response->streamedContent())->toBe($content);
 });

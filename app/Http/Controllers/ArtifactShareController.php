@@ -18,6 +18,7 @@ class ArtifactShareController extends Controller
     public function show(Request $request, Artifact $artifact, ArtifactRenderOrigin $origin): Response
     {
         abort_unless(Feature::active(ArtifactsFeature::class), 404);
+        abort_unless($origin->isConfigured(), 404);
         abort_if($request->getHost() === $origin->renderHostFor($artifact), 404);
         $this->abortIfExpired($artifact);
 
@@ -34,15 +35,19 @@ class ArtifactShareController extends Controller
     public function content(Request $request, Artifact $artifact, ArtifactRenderOrigin $origin): StreamedResponse
     {
         abort_unless(Feature::active(ArtifactsFeature::class), 404);
+        abort_unless($origin->isConfigured(), 404);
         abort_unless($request->getHost() === $origin->renderHostFor($artifact), 404);
         $this->abortIfExpired($artifact);
 
         match ($artifact->visibility) {
             ArtifactVisibility::SignedUrl => abort_unless($request->hasValidSignature(false), 403),
-            ArtifactVisibility::OrgAuth => $request->hasValidSignature(false) ?: $this->authorizeOrgArtifact($request, $artifact),
+            // On the cookieless render origin, a valid signature is the authorization.
+            ArtifactVisibility::OrgAuth => $request->hasValidSignature(false) || $this->authorizeOrgArtifact($request, $artifact),
         };
 
-        $stream = Storage::disk()->readStream($artifact->storage_key);
+        $disk = Storage::disk();
+        $contentLength = $disk->size($artifact->storage_key);
+        $stream = $disk->readStream($artifact->storage_key);
         abort_unless(is_resource($stream), 404);
 
         return response()->stream(function () use ($stream): void {
@@ -50,7 +55,7 @@ class ArtifactShareController extends Controller
             fclose($stream);
         }, 200, [
             'Content-Type' => $artifact->content_type,
-            'Content-Length' => (string) $artifact->size_bytes,
+            'Content-Length' => (string) $contentLength,
             'Content-Security-Policy' => $origin->contentSecurityPolicy(),
             'X-Content-Type-Options' => 'nosniff',
             'Referrer-Policy' => 'no-referrer',

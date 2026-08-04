@@ -19,9 +19,16 @@ class ArtifactRenderOrigin
 
     public function renderOrigin(): string
     {
-        $origin = config('capstan.artifacts.render_origin') ?: config('app.url');
+        $origin = config('capstan.artifacts.render_origin');
 
         return $this->originFromUrl((string) $origin);
+    }
+
+    public function isConfigured(): bool
+    {
+        $origin = config('capstan.artifacts.render_origin');
+
+        return is_string($origin) && $origin !== '';
     }
 
     public function renderHostFor(Artifact $artifact): string
@@ -33,9 +40,10 @@ class ArtifactRenderOrigin
 
     public function signedContentUrl(Artifact $artifact): string
     {
-        $expiresAt = $artifact->expires_at && $artifact->expires_at->isFuture()
+        $ceiling = now()->addMinutes(5);
+        $expiresAt = $artifact->expires_at && $artifact->expires_at->isBefore($ceiling)
             ? $artifact->expires_at
-            : now()->addMinutes(5);
+            : $ceiling;
 
         $path = URL::temporarySignedRoute(
             'artifacts.content',
@@ -70,6 +78,8 @@ class ArtifactRenderOrigin
             $this->sourceDirective('font-src', [], 'font_src'),
             $this->sourceDirective('img-src', ['data:'], 'img_src'),
             "connect-src 'none'",
+            "form-action 'none'",
+            "base-uri 'none'",
             'frame-ancestors '.$this->appOrigin(),
         ]);
     }
