@@ -87,6 +87,21 @@ class TeamManagementTest extends TestCase
         $this->assertSame(OrgRole::Owner, $member->refresh()->org_role);
     }
 
+    public function test_crafted_invalid_role_values_are_rejected_without_changing_the_target(): void
+    {
+        $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+        $member = User::factory()->create(['org_role' => OrgRole::Member]);
+
+        $this->actingAs($owner);
+
+        Livewire::test('pages::team')
+            ->set("roleChanges.{$member->id}", 'super-owner')
+            ->call('changeRole', $member->id)
+            ->assertHasErrors("roleChanges.{$member->id}");
+
+        $this->assertSame(OrgRole::Member, $member->refresh()->org_role);
+    }
+
     public function test_last_owner_cannot_be_demoted_through_component_or_direct_action(): void
     {
         $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
@@ -142,6 +157,30 @@ class TeamManagementTest extends TestCase
         $this->assertSame(OrgRole::Admin, $target->refresh()->org_role);
     }
 
+    public function test_change_role_rereads_a_stale_target_inside_the_transaction_before_checking_owner_loss(): void
+    {
+        $actor = User::factory()->create(['org_role' => OrgRole::Owner]);
+        $target = User::factory()->create(['org_role' => OrgRole::Member]);
+
+        $target->newQuery()->whereKey($target->id)->update(['org_role' => OrgRole::Owner]);
+
+        $this->app->instance(EnsureAnotherOwnerRemains::class, new class($this) extends EnsureAnotherOwnerRemains
+        {
+            public function __construct(private readonly TestCase $test) {}
+
+            public function handle(User $target): void
+            {
+                $this->test->assertSame(OrgRole::Owner, $target->org_role);
+
+                parent::handle($target);
+            }
+        });
+
+        app(ChangeOrgRole::class)->handle($actor, $target, OrgRole::Admin);
+
+        $this->assertSame(OrgRole::Admin, $target->refresh()->org_role);
+    }
+
     public function test_invitations_can_be_issued_through_the_team_component(): void
     {
         $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
@@ -170,6 +209,24 @@ class TeamManagementTest extends TestCase
 
         Livewire::test('pages::team')
             ->set('invitationRole', OrgRole::Owner->value)
+            ->call('issueInvitation')
+            ->assertForbidden();
+
+        $this->assertDatabaseCount('invitations', 0);
+    }
+
+    public function test_demoted_actor_cannot_issue_invitation_from_an_already_mounted_team_component(): void
+    {
+        $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
+
+        $this->actingAs($admin);
+
+        $component = Livewire::test('pages::team');
+
+        $admin->newQuery()->whereKey($admin->id)->update(['org_role' => OrgRole::Member]);
+
+        $component
+            ->set('invitationRole', OrgRole::Member->value)
             ->call('issueInvitation')
             ->assertForbidden();
 
@@ -213,5 +270,23 @@ class TeamManagementTest extends TestCase
 
         $this->assertNull($claimable->fresh());
         $this->assertNotNull($used->fresh());
+    }
+
+    public function test_demoted_actor_cannot_revoke_invitation_from_an_already_mounted_team_component(): void
+    {
+        $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
+        $claimable = Invitation::factory()->email('claimable@example.com')->create(['issued_by' => $admin->id]);
+
+        $this->actingAs($admin);
+
+        $component = Livewire::test('pages::team');
+
+        $admin->newQuery()->whereKey($admin->id)->update(['org_role' => OrgRole::Member]);
+
+        $component
+            ->call('revokeInvitation', $claimable->id)
+            ->assertForbidden();
+
+        $this->assertNotNull($claimable->fresh());
     }
 }

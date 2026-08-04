@@ -36,10 +36,17 @@ new #[Title('Team')] class extends Component {
     public function changeRole(int $userId, ChangeOrgRole $changeOrgRole): void
     {
         $target = User::query()->findOrFail($userId);
-        $role = OrgRole::from($this->roleChanges[$userId] ?? $target->org_role->value);
+        $role = OrgRole::tryFrom((string) ($this->roleChanges[$userId] ?? $target->org_role->value));
+
+        if (! $role) {
+            $this->roleChanges[$userId] = $target->org_role->value;
+            $this->addError("roleChanges.{$userId}", __('Select a valid role.'));
+
+            return;
+        }
 
         try {
-            $changeOrgRole->handle(Auth::user(), $target, $role);
+            $changeOrgRole->handle(Auth::user()->refresh(), $target, $role);
         } catch (ValidationException $exception) {
             $this->roleChanges[$userId] = $target->refresh()->org_role->value;
             $this->addError("roleChanges.{$userId}", $exception->errors()['org_role'][0] ?? $exception->getMessage());
@@ -59,7 +66,7 @@ new #[Title('Team')] class extends Component {
         ]);
 
         $invitation = $issueInvitation->handle(
-            issuer: Auth::user(),
+            issuer: Auth::user()->refresh(),
             email: $validated['invitationEmail'] ?: null,
             role: OrgRole::from($validated['invitationRole']),
         );
@@ -73,7 +80,7 @@ new #[Title('Team')] class extends Component {
     {
         $invitation = Invitation::query()->stillClaimable()->findOrFail($invitationId);
 
-        $revokeInvitation->handle(Auth::user(), $invitation);
+        $revokeInvitation->handle(Auth::user()->refresh(), $invitation);
         Flux::toast(variant: 'success', text: __('Invitation revoked.'));
     }
 
@@ -126,21 +133,26 @@ new #[Title('Team')] class extends Component {
                     </thead>
                     <tbody class="divide-y divide-zinc-200 dark:divide-zinc-700">
                         @foreach ($this->users as $user)
+                            @php($roleOptions = $this->roleOptionsFor($user))
                             <tr wire:key="member-{{ $user->id }}">
                                 <td class="py-4 pe-4 font-medium text-zinc-900 dark:text-zinc-100">{{ $user->name }}</td>
                                 <td class="py-4 pe-4 text-zinc-600 dark:text-zinc-300">{{ $user->email }}</td>
                                 <td class="py-4 pe-4 text-zinc-600 dark:text-zinc-300">{{ $user->created_at?->toFormattedDateString() }}</td>
                                 <td class="min-w-44 py-4">
-                                    <flux:select
-                                        wire:model="roleChanges.{{ $user->id }}"
-                                        wire:change="changeRole({{ $user->id }})"
-                                        size="sm"
-                                        aria-label="{{ __('Role for :name', ['name' => $user->name]) }}"
-                                    >
-                                        @foreach ($this->roleOptionsFor($user) as $value => $label)
-                                            <option value="{{ $value }}">{{ $label }}</option>
-                                        @endforeach
-                                    </flux:select>
+                                    @if ($roleOptions === [])
+                                        <span class="text-zinc-700 dark:text-zinc-300">{{ str($user->org_role->value)->headline() }}</span>
+                                    @else
+                                        <flux:select
+                                            wire:model="roleChanges.{{ $user->id }}"
+                                            wire:change="changeRole({{ $user->id }})"
+                                            size="sm"
+                                            aria-label="{{ __('Role for :name', ['name' => $user->name]) }}"
+                                        >
+                                            @foreach ($roleOptions as $value => $label)
+                                                <option value="{{ $value }}">{{ $label }}</option>
+                                            @endforeach
+                                        </flux:select>
+                                    @endif
                                     @error("roleChanges.{$user->id}")
                                         <p class="mt-2 text-sm text-red-600 dark:text-red-400">{{ $message }}</p>
                                     @enderror
