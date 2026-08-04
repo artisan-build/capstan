@@ -6,6 +6,7 @@ Route::middleware(['auth'])->group(function () {
     Route::redirect('settings', 'settings/profile');
 
     Route::livewire('settings/profile', 'pages::settings.profile')->name('profile.edit');
+    Route::livewire('settings/tokens', 'settings.tokens')->name('tokens.edit');
 });
 
 Route::middleware(['auth', 'verified'])->group(function () {

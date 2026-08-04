@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Controllers\Cli\AuthorizeController;
+use App\Http\Controllers\Cli\DeviceVerifyController;
 use Illuminate\Support\Facades\Route;
 use Laravel\Fortify\Features;
 use Laravel\Fortify\Http\Controllers\RegisteredUserController;
@@ -14,6 +16,16 @@ if (Features::enabled(Features::registration())) {
 
 Route::middleware(['auth', 'verified'])->group(function () {
     Route::view('dashboard', 'dashboard')->name('dashboard');
+});
+
+Route::middleware('auth')->group(function (): void {
+    Route::get('cli/authorize', [AuthorizeController::class, 'show'])->name('cli.authorize.show');
+    Route::post('cli/authorize', [AuthorizeController::class, 'store'])->name('cli.authorize');
+
+    Route::middleware('throttle:cli-verify')->group(function (): void {
+        Route::get('cli/device', [DeviceVerifyController::class, 'show'])->name('cli.device.verify');
+        Route::post('cli/device', [DeviceVerifyController::class, 'store']);
+    });
 });
 
 require __DIR__.'/settings.php';
