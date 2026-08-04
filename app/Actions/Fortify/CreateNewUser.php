@@ -32,8 +32,22 @@ class CreateNewUser implements CreatesNewUsers
 
                 $code = $input['invitation_code'] ?? null;
 
-                if (! is_string($code) || ! Invitation::query()->where('code', $code)->unused()->exists()) {
+                if (! is_string($code)) {
                     $validator->errors()->add('invitation_code', __('A valid invitation code is required.'));
+
+                    return;
+                }
+
+                $invitation = Invitation::query()->where('code', $code)->unused()->first();
+
+                if (! $invitation) {
+                    $validator->errors()->add('invitation_code', __('A valid invitation code is required.'));
+
+                    return;
+                }
+
+                if ($invitation->isExpired()) {
+                    $validator->errors()->add('invitation_code', __('This invitation has expired.'));
                 }
             })->validate();
         }

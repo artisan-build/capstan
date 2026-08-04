@@ -27,11 +27,17 @@ class RegisterInvitedUser
                 ]);
             }
 
+            if ($invitation->isExpired()) {
+                throw ValidationException::withMessages([
+                    'invitation_code' => __('This invitation has expired.'),
+                ]);
+            }
+
             $user = User::forceCreate([
                 'name' => $input['name'],
                 'email' => $input['email'],
                 'password' => $input['password'],
-                'org_role' => OrgRole::Member,
+                'org_role' => $invitation->role ?? OrgRole::Member,
             ]);
 
             $claimed = Invitation::query()
