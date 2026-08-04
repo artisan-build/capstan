@@ -207,3 +207,15 @@ test('content length is taken from the stored blob instead of artifact metadata'
 
     expect($response->streamedContent())->toBe($content);
 });
+
+test('missing stored blob returns not found without leaking storage details', function (): void {
+    $artifact = storedArtifact('<html><body>missing blob</body></html>', ArtifactVisibility::SignedUrl, now()->addHour());
+    Storage::disk()->delete($artifact->storage_key);
+
+    $this->get(app(ArtifactRenderOrigin::class)->signedContentUrl($artifact))
+        ->assertNotFound()
+        ->assertDontSee($artifact->storage_key)
+        ->assertDontSee($artifact->content_hash)
+        ->assertDontSee('UnableToRetrieveMetadata')
+        ->assertDontSee('UnableToReadFile');
+});

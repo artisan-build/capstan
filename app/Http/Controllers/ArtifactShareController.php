@@ -46,20 +46,25 @@ class ArtifactShareController extends Controller
         };
 
         $disk = Storage::disk();
-        $contentLength = $disk->size($artifact->storage_key);
         $stream = $disk->readStream($artifact->storage_key);
         abort_unless(is_resource($stream), 404);
+        $contentLength = rescue(fn (): int => $disk->size($artifact->storage_key), null, false);
+
+        $headers = [
+            'Content-Type' => $artifact->content_type,
+            'Content-Security-Policy' => $origin->contentSecurityPolicy(),
+            'X-Content-Type-Options' => 'nosniff',
+            'Referrer-Policy' => 'no-referrer',
+        ];
+
+        if ($contentLength !== null) {
+            $headers['Content-Length'] = (string) $contentLength;
+        }
 
         return response()->stream(function () use ($stream): void {
             fpassthru($stream);
             fclose($stream);
-        }, 200, [
-            'Content-Type' => $artifact->content_type,
-            'Content-Length' => (string) $contentLength,
-            'Content-Security-Policy' => $origin->contentSecurityPolicy(),
-            'X-Content-Type-Options' => 'nosniff',
-            'Referrer-Policy' => 'no-referrer',
-        ]);
+        }, 200, $headers);
     }
 
     private function signedUrlContentUrl(Request $request, Artifact $artifact, ArtifactRenderOrigin $origin): string

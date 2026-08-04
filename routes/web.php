@@ -3,7 +3,6 @@
 use App\Http\Controllers\ArtifactShareController;
 use App\Http\Controllers\Cli\AuthorizeController;
 use App\Http\Controllers\Cli\DeviceVerifyController;
-use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Route;
 use Laravel\Fortify\Features;
 use Laravel\Fortify\Http\Controllers\RegisteredUserController;
@@ -24,10 +23,6 @@ Route::middleware('capstan.noindex_artifacts')->group(function (): void {
     Route::get('artifacts/{artifact}/share', [ArtifactShareController::class, 'show'])->name('artifacts.share');
     Route::get('artifacts/{artifact}/content', [ArtifactShareController::class, 'content'])->name('artifacts.content');
 });
-
-Route::get('robots.txt', fn (): Response => response("User-agent: *\nDisallow: /artifacts/\n", 200, [
-    'Content-Type' => 'text/plain; charset=UTF-8',
-]));
 
 Route::middleware('auth')->group(function (): void {
     Route::get('cli/authorize', [AuthorizeController::class, 'show'])->name('cli.authorize.show');
