@@ -9,6 +9,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Artifact;
 use App\Models\Team;
 use App\Models\User;
+use App\Support\ArtifactRenderOrigin;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -71,7 +72,7 @@ class ArtifactController extends Controller
 
         return new JsonResponse([
             'artifact' => $this->representation($artifact),
-            'share_url' => route('artifacts.share', ['artifact' => $artifact]),
+            'share_url' => app(ArtifactRenderOrigin::class)->signedViewerUrl($artifact),
         ], 201);
     }
 
@@ -88,7 +89,7 @@ class ArtifactController extends Controller
             'content_type' => $artifact->content_type,
             'size_bytes' => $artifact->size_bytes,
             'content_hash' => $artifact->content_hash,
-            'share_url' => route('artifacts.share', ['artifact' => $artifact]),
+            'share_url' => app(ArtifactRenderOrigin::class)->signedViewerUrl($artifact),
             'created_at' => $artifact->created_at?->toJSON(),
         ];
     }
