@@ -1,6 +1,5 @@
 <?php
 
-use App\Enums\OrgRole;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -14,7 +13,7 @@ return new class extends Migration
     {
         Schema::table('invitations', function (Blueprint $table) {
             $table->string('email')->nullable()->after('code');
-            $table->string('role')->default(OrgRole::Member->value)->after('email');
+            $table->string('role')->default('member')->after('email');
             $table->timestamp('expires_at')->nullable()->after('used_at');
         });
     }

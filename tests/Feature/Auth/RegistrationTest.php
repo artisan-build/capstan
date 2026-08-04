@@ -69,6 +69,22 @@ class RegistrationTest extends TestCase
         $this->get(route('register', ['code' => 'invalid']))->assertForbidden();
     }
 
+    public function test_registration_screen_rejects_expired_invitation_code(): void
+    {
+        $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+        $invitation = Invitation::factory()->expired()->create(['issued_by' => $owner->id]);
+
+        $this->get(route('register', ['code' => $invitation->code]))->assertForbidden();
+    }
+
+    public function test_registration_screen_accepts_unexpired_invitation_code(): void
+    {
+        $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+        $invitation = Invitation::factory()->create(['issued_by' => $owner->id]);
+
+        $this->get(route('register', ['code' => $invitation->code]))->assertOk();
+    }
+
     public function test_invited_user_can_register_as_member(): void
     {
         $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
@@ -198,6 +214,25 @@ class RegistrationTest extends TestCase
         ]);
         $this->assertNull($invitation->refresh()->used_at);
         $this->assertNull($invitation->used_by);
+    }
+
+    public function test_http_invited_registration_uses_the_invitation_role(): void
+    {
+        $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+        $invitation = Invitation::factory()->role(OrgRole::Admin)->create(['issued_by' => $owner->id]);
+
+        $this->post(route('register.store'), [
+            'name' => 'Admin User',
+            'email' => 'admin@example.com',
+            'password' => 'password',
+            'password_confirmation' => 'password',
+            'invitation_code' => $invitation->code,
+        ])->assertSessionHasNoErrors();
+
+        $this->assertDatabaseHas('users', [
+            'email' => 'admin@example.com',
+            'org_role' => OrgRole::Admin->value,
+        ]);
     }
 
     public function test_invited_registration_uses_the_invitation_role(): void
