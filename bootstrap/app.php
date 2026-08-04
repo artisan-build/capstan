@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\NoIndexArtifactPaths;
 use App\Http\Middleware\ResolveApiActor;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -27,6 +28,7 @@ return Application::configure(basePath: dirname(__DIR__))
 
         $middleware->alias([
             'capstan.auth' => ResolveApiActor::class,
+            'capstan.noindex_artifacts' => NoIndexArtifactPaths::class,
         ]);
 
         $middleware->prependToPriorityList([ThrottleRequests::class, ThrottleRequestsWithRedis::class], ResolveApiActor::class);

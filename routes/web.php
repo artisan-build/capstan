@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\ArtifactShareController;
 use App\Http\Controllers\Cli\AuthorizeController;
 use App\Http\Controllers\Cli\DeviceVerifyController;
 use Illuminate\Support\Facades\Route;
@@ -18,7 +19,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::view('dashboard', 'dashboard')->name('dashboard');
 });
 
-Route::get('artifacts/{artifact}/share', fn () => abort(501))->name('artifacts.share');
+Route::middleware('capstan.noindex_artifacts')->group(function (): void {
+    Route::get('artifacts/{artifact}/share', [ArtifactShareController::class, 'show'])->name('artifacts.share');
+    Route::get('artifacts/{artifact}/content', [ArtifactShareController::class, 'content'])->name('artifacts.content');
+});
 
 Route::middleware('auth')->group(function (): void {
     Route::get('cli/authorize', [AuthorizeController::class, 'show'])->name('cli.authorize.show');

@@ -38,7 +38,7 @@ test('ingest with a valid token creates an artifact stores the blob and returns 
         ->assertJsonPath('artifact.content_hash', $hash)
         ->assertJsonPath('artifact.size_bytes', strlen($content))
         ->assertJsonPath('artifact.content_type', 'text/html')
-        ->assertJsonPath('share_url', route('artifacts.share', ['artifact' => Artifact::query()->firstOrFail()]))
+        ->assertJson(fn ($json) => $json->where('share_url', fn (string $url): bool => str_contains($url, '/artifacts/'.Artifact::query()->firstOrFail()->id.'/share') && str_contains($url, 'signature='))->etc())
         ->assertJsonMissingPath('artifact.storage_key');
 
     $artifact = Artifact::query()->firstOrFail();
@@ -167,7 +167,8 @@ test('artifact ingest does not expose raw storage urls or aws configuration', fu
         'content_type' => 'text/html',
     ])->assertCreated();
 
-    expect($response->json('share_url'))->toBe(route('artifacts.share', ['artifact' => Artifact::query()->firstOrFail()]))
+    expect($response->json('share_url'))->toContain('/artifacts/'.Artifact::query()->firstOrFail()->id.'/share')
+        ->toContain('signature=')
         ->not->toContain('/storage')
         ->not->toContain($hash);
 
