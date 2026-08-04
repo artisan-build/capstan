@@ -49,10 +49,11 @@ class ArtifactController extends Controller
         $validated = $validator->validated();
         /** @var User $user */
         $user = Auth::user();
+        $defaultTeam = Team::default();
 
         [$contentHash, $storageKey] = Artifact::storeBlob($validated['content']);
 
-        $artifact = DB::transaction(function () use ($validated, $user, $contentHash, $storageKey): Artifact {
+        $artifact = DB::transaction(function () use ($validated, $user, $defaultTeam, $contentHash, $storageKey): Artifact {
             $artifact = Artifact::query()->create([
                 'author_id' => $user->id,
                 'visibility' => ArtifactVisibility::from($validated['visibility'] ?? ArtifactVisibility::OrgAuth->value),
@@ -63,7 +64,7 @@ class ArtifactController extends Controller
                 'storage_key' => $storageKey,
             ]);
 
-            $artifact->teams()->syncWithoutDetaching([Team::default()->id]);
+            $artifact->teams()->syncWithoutDetaching([$defaultTeam->id]);
 
             return $artifact;
         });

@@ -16,7 +16,8 @@ beforeEach(function (): void {
 
 function artifactTokenFor(User $user): string
 {
-    return $user->createToken('capstan-cli', ['artifact:ingest'])->plainTextToken;
+    // Tokens are unscoped today; ability-gated ingest is a later design decision.
+    return $user->createToken('capstan-cli')->plainTextToken;
 }
 
 test('ingest with a valid token creates an artifact stores the blob and returns a share url', function (): void {
