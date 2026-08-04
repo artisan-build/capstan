@@ -2,6 +2,7 @@
 
 use App\Enums\DeviceCodeStatus;
 use App\Http\ApiActor;
+use App\Models\AuthorizationCode;
 use App\Models\DeviceCode;
 use App\Models\User;
 use Illuminate\Console\Scheduling\Schedule;
@@ -76,12 +77,13 @@ test('loopback authorize allows at signs in query and fragment outside the autho
     'fragment at sign' => ['http://127.0.0.1:8080/cb#a@b'],
 ]);
 
-test('loopback authorize mints a token that authenticates the api', function (): void {
+test('loopback authorize issues a code that exchanges for a token that authenticates the api', function (): void {
     $user = User::factory()->create();
+    $redirectUri = 'http://localhost:49152/callback?existing=1';
 
     $response = $this->actingAs($user)
         ->post('/cli/authorize', [
-            'redirect_uri' => 'http://localhost:49152/callback?existing=1',
+            'redirect_uri' => $redirectUri,
             'state' => 'state-2',
             'label' => "  My Laptop\n ",
             'action' => 'approve',
@@ -89,14 +91,26 @@ test('loopback authorize mints a token that authenticates the api', function ():
         ->assertRedirect();
 
     $location = $response->headers->get('Location');
-    expect($location)->toBeString()->toContain('http://localhost:49152/callback?existing=1&');
+    expect($location)->toBeString()
+        ->toContain('http://localhost:49152/callback?existing=1&')
+        ->not->toContain('token=');
 
     parse_str((string) parse_url($location, PHP_URL_QUERY), $query);
 
     expect($query['state'])->toBe('state-2')
-        ->and($query['token'])->toBeString()->not->toBeEmpty();
+        ->and($query['code'])->toBeString()->not->toBeEmpty();
 
-    $this->withToken($query['token'])
+    expect($user->tokens()->count())->toBe(0);
+
+    $token = $this->postJson('/api/v1/cli/authorize/token', [
+        'code' => $query['code'],
+        'redirect_uri' => $redirectUri,
+    ])
+        ->assertOk()
+        ->assertJsonStructure(['token'])
+        ->json('token');
+
+    $this->withToken($token)
         ->getJson('/api/v1/me')
         ->assertOk()
         ->assertJson([
@@ -111,7 +125,7 @@ test('loopback authorize mints a token that authenticates the api', function ():
     ]);
 });
 
-test('loopback authorize appends token before a fragment', function (): void {
+test('loopback authorize appends code before a fragment', function (): void {
     $user = User::factory()->create();
 
     $response = $this->actingAs($user)
@@ -126,11 +140,12 @@ test('loopback authorize appends token before a fragment', function (): void {
     expect($location)->toBeString()
         ->toStartWith('http://127.0.0.1:49152/callback?')
         ->toEndWith('#frag')
-        ->and($location)->toContain('token=')
-        ->and($location)->toContain('state=state-frag');
+        ->and($location)->toContain('code=')
+        ->and($location)->toContain('state=state-frag')
+        ->and($location)->not->toContain('token=');
 });
 
-test('loopback authorize preserves existing query parameters when appending token', function (): void {
+test('loopback authorize preserves existing query parameters when appending code', function (): void {
     $user = User::factory()->create();
 
     $response = $this->actingAs($user)
@@ -144,8 +159,9 @@ test('loopback authorize preserves existing query parameters when appending toke
     $location = $response->headers->get('Location');
     expect($location)->toBeString()
         ->toStartWith('http://127.0.0.1:49152/callback?existing=1&')
-        ->and($location)->toContain('token=')
-        ->and($location)->toContain('state=state-query');
+        ->and($location)->toContain('code=')
+        ->and($location)->toContain('state=state-query')
+        ->and($location)->not->toContain('token=');
 });
 
 test('loopback deny redirects with access denied and does not mint a token', function (): void {
@@ -167,9 +183,11 @@ test('loopback deny redirects with access denied and does not mint a token', fun
     expect($query)->toMatchArray([
         'error' => 'access_denied',
         'state' => 'state-3',
-    ])->and($query)->not->toHaveKey('token');
+    ])->and($query)->not->toHaveKey('token')
+        ->and($query)->not->toHaveKey('code');
 
     expect($user->tokens()->count())->toBe(0);
+    expect(AuthorizationCode::query()->count())->toBe(0);
 });
 
 test('device flow happy path mints one token and consumes the grant', function (): void {
