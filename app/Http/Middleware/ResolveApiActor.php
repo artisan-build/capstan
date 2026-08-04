@@ -15,6 +15,8 @@ class ResolveApiActor
 {
     public const string ATTRIBUTE = 'api_actor';
 
+    private const int LAST_USED_THROTTLE_SECONDS = 60;
+
     /** @param Closure(Request): Response $next */
     public function handle(Request $request, Closure $next): Response
     {
@@ -37,6 +39,7 @@ class ResolveApiActor
         }
 
         $user->withAccessToken($accessToken);
+        $this->stampLastUsed($accessToken);
         Auth::setUser($user);
         $request->attributes->set(self::ATTRIBUTE, ApiActor::user($user->getKey()));
 
@@ -63,5 +66,14 @@ class ResolveApiActor
         }
 
         return false;
+    }
+
+    private function stampLastUsed(PersonalAccessToken $accessToken): void
+    {
+        if ($accessToken->last_used_at !== null && $accessToken->last_used_at->gt(now()->subSeconds(self::LAST_USED_THROTTLE_SECONDS))) {
+            return;
+        }
+
+        $accessToken->forceFill(['last_used_at' => now()])->save();
     }
 }

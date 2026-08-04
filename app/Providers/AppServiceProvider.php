@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Http\Middleware\ResolveApiActor;
 use Carbon\CarbonImmutable;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
@@ -59,7 +60,9 @@ class AppServiceProvider extends ServiceProvider
         });
 
         RateLimiter::for('api', function (Request $request): Limit {
-            return Limit::perMinute(60)->by(sha1($request->bearerToken() ?: $request->ip() ?: 'unknown'));
+            $actor = ResolveApiActor::actor($request);
+
+            return Limit::perMinute(60)->by($actor?->userId !== null ? 'user:'.$actor->userId : 'ip:'.($request->ip() ?: 'unknown'));
         });
     }
 }

@@ -50,19 +50,37 @@ final class LoopbackRedirect
         }
 
         $authorityStart = $schemeEnd + 3;
-        $pathStart = strpos($uri, '/', $authorityStart);
-        $authority = $pathStart === false
+        $authorityEnd = self::firstPosition($uri, ['/', '?', '#'], $authorityStart);
+        $authority = $authorityEnd === null
             ? substr($uri, $authorityStart)
-            : substr($uri, $authorityStart, $pathStart - $authorityStart);
+            : substr($uri, $authorityStart, $authorityEnd - $authorityStart);
 
         return str_contains($authority, '@');
+    }
+
+    /** @param list<string> $needles */
+    private static function firstPosition(string $haystack, array $needles, int $offset): ?int
+    {
+        $positions = [];
+
+        foreach ($needles as $needle) {
+            $position = strpos($haystack, $needle, $offset);
+
+            if ($position !== false) {
+                $positions[] = $position;
+            }
+        }
+
+        return $positions === [] ? null : min($positions);
     }
 
     /** @param array<string, string> $parameters */
     public static function appendQuery(string $uri, array $parameters): string
     {
-        $separator = str_contains($uri, '?') ? '&' : '?';
+        [$baseUri, $fragment] = array_pad(explode('#', $uri, 2), 2, null);
+        $separator = str_contains($baseUri, '?') ? '&' : '?';
+        $withQuery = $baseUri.$separator.http_build_query($parameters);
 
-        return $uri.$separator.http_build_query($parameters);
+        return $fragment === null ? $withQuery : $withQuery.'#'.$fragment;
     }
 }

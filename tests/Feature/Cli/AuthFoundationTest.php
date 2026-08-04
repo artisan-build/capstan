@@ -1,10 +1,13 @@
 <?php
 
 use App\Enums\DeviceCodeStatus;
+use App\Http\ApiActor;
 use App\Models\DeviceCode;
 use App\Models\User;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\Route;
 use Laravel\Sanctum\PersonalAccessToken;
 use Livewire\Livewire;
 
@@ -62,6 +65,17 @@ test('loopback authorize still accepts a valid loopback control', function (): v
         ->assertSee('127.0.0.1:49152');
 });
 
+test('loopback authorize allows at signs in query and fragment outside the authority', function (string $redirectUri): void {
+    $user = User::factory()->create();
+
+    $this->actingAs($user)
+        ->get('/cli/authorize?'.http_build_query(['redirect_uri' => $redirectUri]))
+        ->assertOk();
+})->with([
+    'query email' => ['http://127.0.0.1:8080/cb?x=a@b.com'],
+    'fragment at sign' => ['http://127.0.0.1:8080/cb#a@b'],
+]);
+
 test('loopback authorize mints a token that authenticates the api', function (): void {
     $user = User::factory()->create();
 
@@ -95,6 +109,43 @@ test('loopback authorize mints a token that authenticates the api', function ():
         'tokenable_id' => $user->id,
         'name' => 'capstan-cli — My Laptop',
     ]);
+});
+
+test('loopback authorize appends token before a fragment', function (): void {
+    $user = User::factory()->create();
+
+    $response = $this->actingAs($user)
+        ->post('/cli/authorize', [
+            'redirect_uri' => 'http://127.0.0.1:49152/callback#frag',
+            'state' => 'state-frag',
+            'action' => 'approve',
+        ])
+        ->assertRedirect();
+
+    $location = $response->headers->get('Location');
+    expect($location)->toBeString()
+        ->toStartWith('http://127.0.0.1:49152/callback?')
+        ->toEndWith('#frag')
+        ->and($location)->toContain('token=')
+        ->and($location)->toContain('state=state-frag');
+});
+
+test('loopback authorize preserves existing query parameters when appending token', function (): void {
+    $user = User::factory()->create();
+
+    $response = $this->actingAs($user)
+        ->post('/cli/authorize', [
+            'redirect_uri' => 'http://127.0.0.1:49152/callback?existing=1',
+            'state' => 'state-query',
+            'action' => 'approve',
+        ])
+        ->assertRedirect();
+
+    $location = $response->headers->get('Location');
+    expect($location)->toBeString()
+        ->toStartWith('http://127.0.0.1:49152/callback?existing=1&')
+        ->and($location)->toContain('token=')
+        ->and($location)->toContain('state=state-query');
 });
 
 test('loopback deny redirects with access denied and does not mint a token', function (): void {
@@ -252,6 +303,27 @@ test('api actor middleware authenticates valid tokens', function (): void {
         ]);
 });
 
+test('api actor middleware stamps last used at without hot-rowing', function (): void {
+    $user = User::factory()->create();
+    $newToken = $user->createToken('capstan-cli');
+
+    $this->withToken($newToken->plainTextToken)
+        ->getJson('/api/v1/me')
+        ->assertOk();
+
+    $accessToken = $newToken->accessToken->refresh();
+    expect($accessToken->last_used_at)->not->toBeNull();
+
+    $recentlyUsedAt = now()->subSeconds(30)->startOfSecond();
+    $accessToken->forceFill(['last_used_at' => $recentlyUsedAt])->save();
+
+    $this->withToken($newToken->plainTextToken)
+        ->getJson('/api/v1/me')
+        ->assertOk();
+
+    expect($accessToken->refresh()->last_used_at?->toDateTimeString())->toBe($recentlyUsedAt->toDateTimeString());
+});
+
 test('api actor middleware attaches the current access token to the user', function (): void {
     $user = User::factory()->create();
     $token = $user->createToken('capstan-cli', ['artifact:ingest'])->plainTextToken;
@@ -317,6 +389,17 @@ test('device code pruning keeps recent denied rows pollable and removes stale de
     $this->assertDatabaseMissing('device_codes', ['id' => $staleDenied->id]);
 });
 
+test('device code pruning is scheduled hourly', function (): void {
+    $events = app(Schedule::class)->events();
+
+    $scheduled = collect($events)->contains(function ($event): bool {
+        return str_contains($event->command, 'capstan:prune-device-codes')
+            && $event->expression === '0 * * * *';
+    });
+
+    expect($scheduled)->toBeTrue();
+});
+
 test('cli rate limiters have the expected budgets', function (): void {
     $deviceLimiter = RateLimiter::limiter('cli-device');
     $verifyLimiter = RateLimiter::limiter('cli-verify');
@@ -328,4 +411,34 @@ test('cli rate limiters have the expected budgets', function (): void {
 
     expect($deviceLimit->maxAttempts)->toBe(15)
         ->and($verifyLimit->maxAttempts)->toBe(10);
+});
+
+test('api rate limiter keys on resolved actor or ip instead of raw bearer', function (): void {
+    $limiter = RateLimiter::limiter('api');
+
+    $actorRequest = Request::create('/api/v1/me', 'GET', [], [], [], ['REMOTE_ADDR' => '192.0.2.30']);
+    $actorRequest->headers->set('Authorization', 'Bearer attacker-controlled');
+    $actorRequest->attributes->set('api_actor', ApiActor::user(123));
+
+    $ipRequest = Request::create('/api/v1/me', 'GET', [], [], [], ['REMOTE_ADDR' => '192.0.2.31']);
+    $ipRequest->headers->set('Authorization', 'Bearer another-attacker-controlled');
+
+    expect($limiter($actorRequest)->key)->toBe('user:123')
+        ->and($limiter($ipRequest)->key)->toBe('ip:192.0.2.31');
+});
+
+test('trusted proxies ignore forged forwarded host when generating urls', function (): void {
+    Route::get('/_proxy-url-test', fn () => response()->json([
+        'url' => url('/password/reset/test-token'),
+    ]));
+
+    $response = $this->call('GET', '/_proxy-url-test', [], [], [], [
+        'HTTP_HOST' => 'capstan.test',
+        'HTTP_X_FORWARDED_HOST' => 'evil.example',
+        'HTTP_X_FORWARDED_PROTO' => 'https',
+        'HTTP_X_FORWARDED_PORT' => '443',
+        'HTTP_ACCEPT' => 'application/json',
+    ])->assertOk();
+
+    expect(parse_url($response->json('url'), PHP_URL_HOST))->not->toBe('evil.example');
 });
