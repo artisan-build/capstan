@@ -44,7 +44,7 @@ Keep `MAIL_FROM_ADDRESS` on a Cloudflare-verified sending domain. Do not add unr
 After deployment, run a one-off test from the app environment:
 
 ```bash
-php artisan tinker --execute="Mail::raw('Capstan email test', fn ($message) => $message->to('you@yourdomain.example')->subject('Capstan email test'));"
+php artisan tinker --execute='Mail::raw("Capstan email test", fn ($message) => $message->to("you@yourdomain.example")->subject("Capstan email test"));'
 ```
 
 If delivery fails, check the Cloudflare Email Sending activity, the sending-domain DNS verification state, and the app logs for the Cloudflare API response.

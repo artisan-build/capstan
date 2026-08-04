@@ -86,13 +86,13 @@ new #[Title('Team')] class extends Component {
 
     public function sendInvitationEmail(int $invitationId): void
     {
+        Gate::forUser(Auth::user()->refresh())->authorize('create', Invitation::class);
+
         if (! MailerStatus::emailDeliveryConfigured()) {
             $this->addError('sendInvitationEmail', __('Email invite delivery is not configured.'));
 
             return;
         }
-
-        Gate::forUser(Auth::user()->refresh())->authorize('create', Invitation::class);
 
         $invitation = Invitation::query()->findOrFail($invitationId);
 

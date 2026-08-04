@@ -349,6 +349,10 @@ class TeamManagementTest extends TestCase
 
         $this->actingAs($admin);
 
+        $this->get(route('team.index'))
+            ->assertOk()
+            ->assertSee('Email invite');
+
         Livewire::test('pages::team')
             ->call('sendInvitationEmail', $invitation->id)
             ->assertHasNoErrors();
@@ -433,10 +437,25 @@ class TeamManagementTest extends TestCase
         $mail = new InvitationMail($invitation);
         $rendered = $mail->render();
 
-        $this->assertSame("You're invited to join Capstan", $mail->envelope()->subject);
+        $this->assertSame(__("You're invited to join :app", ['app' => config('app.name')]), $mail->envelope()->subject);
         $this->assertStringContainsString(route('register', ['code' => $invitation->code]), $rendered);
         $this->assertStringContainsString('Admin', $rendered);
         $this->assertStringContainsString($invitation->expires_at->toFormattedDateString(), $rendered);
+    }
+
+    public function test_invitation_mail_renders_never_for_legacy_invitation_without_expiry(): void
+    {
+        $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
+        $invitation = Invitation::create([
+            'code' => 'legacy-email-invite-code',
+            'email' => 'invitee@example.com',
+            'role' => OrgRole::Member,
+            'issued_by' => $admin->id,
+        ]);
+
+        $rendered = (new InvitationMail($invitation))->render();
+
+        $this->assertStringContainsString('never', $rendered);
     }
 
     public function test_owner_removes_member_and_database_relations_follow_cascade_rules(): void
