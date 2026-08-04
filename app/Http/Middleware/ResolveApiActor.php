@@ -36,6 +36,7 @@ class ResolveApiActor
             return ApiError::unauthenticated();
         }
 
+        $user->withAccessToken($accessToken);
         Auth::setUser($user);
         $request->attributes->set(self::ATTRIBUTE, ApiActor::user($user->getKey()));
 

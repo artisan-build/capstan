@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Enums\DeviceCodeStatus;
 use App\Models\DeviceCode;
 use Illuminate\Console\Command;
 
@@ -15,7 +16,10 @@ class PruneDeviceCodes extends Command
     {
         $deleted = DeviceCode::query()
             ->where('expires_at', '<=', now())
-            ->orWhere('status', 'denied')
+            ->orWhere(function ($query): void {
+                $query->where('status', DeviceCodeStatus::Denied->value)
+                    ->where('updated_at', '<=', now()->subSeconds(DeviceCode::LIFETIME_SECONDS));
+            })
             ->delete();
 
         $this->info("Pruned {$deleted} device code(s).");

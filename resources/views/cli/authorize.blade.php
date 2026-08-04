@@ -7,8 +7,9 @@
     </div>
 
     <flux:callout variant="secondary" icon="command-line">
+        <flux:callout.heading>{{ __('Callback address') }}</flux:callout.heading>
         <flux:callout.text>
-            {{ __('Approving signs the CLI in on this computer with an identity token scoped to your account.') }}
+            {{ __('Approving signs the CLI in on this computer with an identity token scoped to your account. The token will be sent to :callback.', ['callback' => $callbackAuthority]) }}
         </flux:callout.text>
     </flux:callout>
 

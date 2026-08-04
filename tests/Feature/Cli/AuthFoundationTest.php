@@ -3,6 +3,8 @@
 use App\Enums\DeviceCodeStatus;
 use App\Models\DeviceCode;
 use App\Models\User;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\RateLimiter;
 use Laravel\Sanctum\PersonalAccessToken;
 use Livewire\Livewire;
 
@@ -25,6 +27,39 @@ test('loopback authorize rejects non-loopback redirect uri on both legs', functi
             'action' => 'approve',
         ])
         ->assertUnprocessable();
+});
+
+test('loopback authorize rejects parser-confusion and non-loopback payloads on both legs', function (string $redirectUri): void {
+    $user = User::factory()->create();
+
+    $this->actingAs($user)
+        ->get('/cli/authorize?'.http_build_query(['redirect_uri' => $redirectUri]))
+        ->assertUnprocessable();
+
+    $this->actingAs($user)
+        ->post('/cli/authorize', [
+            'redirect_uri' => $redirectUri,
+            'state' => 'state-hostile',
+            'action' => 'approve',
+        ])
+        ->assertUnprocessable();
+})->with([
+    'backslash before allowed host' => ['http://evil.example\@127.0.0.1:49152/cb'],
+    'encoded backslash before allowed host' => ['http://evil.example%5C@127.0.0.1/cb'],
+    'userinfo before allowed host' => ['http://user@127.0.0.1/cb'],
+    'localhost suffix' => ['http://localhost.evil.com/cb'],
+    'https loopback' => ['https://127.0.0.1/cb'],
+    'ipv4 suffix' => ['http://127.0.0.1.evil.com/cb'],
+    'scheme-relative loopback' => ['//127.0.0.1/cb'],
+]);
+
+test('loopback authorize still accepts a valid loopback control', function (): void {
+    $user = User::factory()->create();
+
+    $this->actingAs($user)
+        ->get('/cli/authorize?'.http_build_query(['redirect_uri' => 'http://127.0.0.1:49152/cb']))
+        ->assertOk()
+        ->assertSee('127.0.0.1:49152');
 });
 
 test('loopback authorize mints a token that authenticates the api', function (): void {
@@ -217,6 +252,18 @@ test('api actor middleware authenticates valid tokens', function (): void {
         ]);
 });
 
+test('api actor middleware attaches the current access token to the user', function (): void {
+    $user = User::factory()->create();
+    $token = $user->createToken('capstan-cli', ['artifact:ingest'])->plainTextToken;
+
+    $this->withToken($token)
+        ->getJson('/api/v1/me')
+        ->assertOk();
+
+    expect(auth()->user()?->currentAccessToken())->toBeInstanceOf(PersonalAccessToken::class)
+        ->and(auth()->user()?->tokenCan('artifact:ingest'))->toBeTrue();
+});
+
 test('tokens page lists only current user tokens and revokes them', function (): void {
     $user = User::factory()->create();
     $other = User::factory()->create();
@@ -246,4 +293,39 @@ test('tokens page lists only current user tokens and revokes them', function ():
         ->assertForbidden();
 
     expect(PersonalAccessToken::query()->whereKey($otherTokenId)->exists())->toBeTrue();
+});
+
+test('device code pruning keeps recent denied rows pollable and removes stale denied rows', function (): void {
+    $expired = DeviceCode::factory()->create(['expires_at' => now()->subSecond()]);
+    $recentDenied = DeviceCode::factory()->create([
+        'status' => DeviceCodeStatus::Denied,
+        'expires_at' => now()->addMinute(),
+        'updated_at' => now(),
+    ]);
+    $staleDenied = DeviceCode::factory()->create([
+        'status' => DeviceCodeStatus::Denied,
+        'expires_at' => now()->addMinute(),
+        'updated_at' => now()->subSeconds(DeviceCode::LIFETIME_SECONDS + 1),
+    ]);
+
+    $this->artisan('capstan:prune-device-codes')
+        ->expectsOutput('Pruned 2 device code(s).')
+        ->assertSuccessful();
+
+    $this->assertDatabaseMissing('device_codes', ['id' => $expired->id]);
+    $this->assertDatabaseHas('device_codes', ['id' => $recentDenied->id]);
+    $this->assertDatabaseMissing('device_codes', ['id' => $staleDenied->id]);
+});
+
+test('cli rate limiters have the expected budgets', function (): void {
+    $deviceLimiter = RateLimiter::limiter('cli-device');
+    $verifyLimiter = RateLimiter::limiter('cli-verify');
+
+    $deviceLimit = $deviceLimiter(Request::create('/api/v1/cli/device', 'POST', [], [], [], ['REMOTE_ADDR' => '192.0.2.10']));
+    $verifyRequest = Request::create('/cli/device', 'POST', [], [], [], ['REMOTE_ADDR' => '192.0.2.20']);
+    $verifyRequest->setUserResolver(fn (): User => User::factory()->create());
+    $verifyLimit = $verifyLimiter($verifyRequest);
+
+    expect($deviceLimit->maxAttempts)->toBe(15)
+        ->and($verifyLimit->maxAttempts)->toBe(10);
 });

@@ -31,6 +31,7 @@ class AuthorizeController extends Controller
         return view('cli.authorize', [
             'email' => $user->email,
             'redirectUri' => $redirectUri,
+            'callbackAuthority' => $this->callbackAuthority($redirectUri),
             'state' => $validated['state'] ?? '',
             'label' => CliTokenNames::sanitizeLabel($validated['label'] ?? null) ?? '',
         ]);
@@ -66,5 +67,19 @@ class AuthorizeController extends Controller
             'token' => $token,
             'state' => $state,
         ]));
+    }
+
+    private function callbackAuthority(string $redirectUri): string
+    {
+        $parts = parse_url($redirectUri);
+
+        if (! is_array($parts)) {
+            return $redirectUri;
+        }
+
+        $host = $parts['host'] ?? '';
+        $port = isset($parts['port']) ? ':'.$parts['port'] : '';
+
+        return $host.$port;
     }
 }
