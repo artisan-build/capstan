@@ -104,3 +104,15 @@ jobs:
           DB_DATABASE: testing
           DB_USERNAME: postgres
           DB_PASSWORD: postgres
+
+  # Stable required check that aggregates the test matrix, so branch protection needn't change when PHP versions are added/removed.
+  ci:
+    name: ci
+    needs: [tests, tests-postgres]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate on matrix test results
+        run: |
+          [ "${{ needs.tests.result }}" = "success" ] \
+            && [ "${{ needs.tests-postgres.result }}" = "success" ]
