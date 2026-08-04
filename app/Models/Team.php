@@ -42,4 +42,12 @@ class Team extends Model
     {
         return $this->belongsToMany(User::class)->withTimestamps();
     }
+
+    /**
+     * @return BelongsToMany<Artifact, $this>
+     */
+    public function artifacts(): BelongsToMany
+    {
+        return $this->belongsToMany(Artifact::class)->withTimestamps();
+    }
 }
