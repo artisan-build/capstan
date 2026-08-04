@@ -19,10 +19,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::view('dashboard', 'dashboard')->name('dashboard');
 });
 
-Route::middleware('capstan.noindex_artifacts')->group(function (): void {
-    Route::get('artifacts/{artifact}/share', [ArtifactShareController::class, 'show'])->name('artifacts.share');
-    Route::get('artifacts/{artifact}/content', [ArtifactShareController::class, 'content'])->name('artifacts.content');
-});
+// The content route lives in routes/render.php on a lean, sessionless stack.
+Route::get('artifacts/{artifact}/share', [ArtifactShareController::class, 'show'])
+    ->middleware('capstan.noindex_artifacts')
+    ->name('artifacts.share');
 
 Route::middleware('auth')->group(function (): void {
     Route::get('cli/authorize', [AuthorizeController::class, 'show'])->name('cli.authorize.show');
