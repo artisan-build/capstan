@@ -47,6 +47,31 @@ return [
             'report' => false,
         ],
 
+        /*
+         * Public CLI release artifacts (capstan-cli), published by the release
+         * pipeline under `cli/<version>/<file>`. Separate from the default disk,
+         * which is the Cloud-managed bucket holding app artifact blobs.
+         *
+         * The bucket itself stays PRIVATE — there is no `url` and no public
+         * `visibility`, so nothing here is reachable except through the app's
+         * own gatekeeper route (`cli.download`), which streams the object.
+         *
+         * `throw => false` keeps a missing object a clean 404 rather than a 500;
+         * `report => true` still logs a genuine read-access failure (endpoint,
+         * credentials, path style, region) so it is not silently invisible.
+         */
+        'downloads' => [
+            'driver' => 's3',
+            'key' => env('CAPSTAN_DOWNLOADS_KEY'),
+            'secret' => env('CAPSTAN_DOWNLOADS_SECRET'),
+            'region' => env('CAPSTAN_DOWNLOADS_REGION', 'auto'),
+            'bucket' => env('CAPSTAN_DOWNLOADS_BUCKET'),
+            'endpoint' => env('CAPSTAN_DOWNLOADS_ENDPOINT'),
+            'use_path_style_endpoint' => true,
+            'throw' => false,
+            'report' => true,
+        ],
+
     ],
 
     /*

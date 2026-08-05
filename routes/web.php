@@ -3,6 +3,7 @@
 use App\Http\Controllers\ArtifactShareController;
 use App\Http\Controllers\Cli\AuthorizeController;
 use App\Http\Controllers\Cli\DeviceVerifyController;
+use App\Http\Controllers\CliDownloadController;
 use Illuminate\Support\Facades\Route;
 use Laravel\Fortify\Features;
 use Laravel\Fortify\Http\Controllers\RegisteredUserController;
@@ -34,5 +35,18 @@ Route::middleware('auth')->group(function (): void {
         Route::post('cli/device', [DeviceVerifyController::class, 'store']);
     });
 });
+
+// PUBLIC, unauthenticated serving of capstan-cli release artifacts from the
+// private `downloads` bucket (`cli/<version>/<file>`). capstan-cli is a PRIVATE
+// repo — there are no public GitHub Release URLs — so this app is the download
+// host as well as the gatekeeper. Deliberately outside every auth/team group.
+//
+// The `{path}` constraint permits version/file paths (dots, hyphens, slashes)
+// but EXCLUDES the more-specific `cli/authorize` and `cli/device` auth routes
+// above, which keep their own handlers. It also forbids a leading slash,
+// backslashes and null bytes; the controller re-validates the same shape.
+Route::get('cli/{path}', CliDownloadController::class)
+    ->where('path', '(?!authorize$)(?!authorize/)(?!device$)(?!device/)[A-Za-z0-9][A-Za-z0-9._/\-]*')
+    ->name('cli.download');
 
 require __DIR__.'/settings.php';
