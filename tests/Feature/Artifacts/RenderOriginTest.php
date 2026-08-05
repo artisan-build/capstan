@@ -49,6 +49,7 @@ test('signed url mode streams byte-identical content with strict headers from re
         ->toContain("form-action 'none'")
         ->toContain("base-uri 'none'")
         ->toContain('frame-ancestors https://app.capstan.test')
+        ->and($response->headers->get('Cache-Control'))->toContain('no-transform')
         ->and($response->baseResponse->isRedirection())->toBeFalse()
         ->and($response->streamedContent())->toBe($content);
 });

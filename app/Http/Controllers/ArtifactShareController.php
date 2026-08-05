@@ -55,6 +55,8 @@ class ArtifactShareController extends Controller
             'Content-Security-Policy' => $origin->contentSecurityPolicy(),
             'X-Content-Type-Options' => 'nosniff',
             'Referrer-Policy' => 'no-referrer',
+            // no-transform keeps intermediaries (e.g. Cloudflare's edge) from rewriting the served blob.
+            'Cache-Control' => 'no-transform',
         ];
 
         if ($contentLength !== null) {
