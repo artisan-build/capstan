@@ -37,6 +37,9 @@ jobs:
           cp .env.example .env
           php artisan key:generate
           touch database/database.sqlite
+          # Proves the Built for Cloud auth-foundation opt-outs hold on a fresh
+          # database: no invitations collision, no stray users.is_admin column.
+          php artisan migrate:fresh --force
 
       - name: Run Pest
         run: php artisan test
@@ -86,7 +89,7 @@ jobs:
         run: |
           cp .env.example .env
           php artisan key:generate
-          php artisan migrate --force
+          php artisan migrate:fresh --force
         env:
           DB_CONNECTION: pgsql
           DB_HOST: 127.0.0.1
