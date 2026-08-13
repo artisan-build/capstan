@@ -7,6 +7,7 @@ use App\Enums\OrgRole;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -29,6 +30,7 @@ use Laravel\Sanctum\HasApiTokens;
  * @property string|null $two_factor_recovery_codes
  * @property Carbon|null $two_factor_confirmed_at
  * @property OrgRole $org_role
+ * @property-read bool $is_admin
  * @property string|null $remember_token
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
@@ -59,6 +61,27 @@ class User extends Authenticatable implements PasskeyUser
             'org_role' => OrgRole::class,
             'password' => 'hashed',
         ];
+    }
+
+    /**
+     * Derived, read-only admin flag for Built for Cloud (D30).
+     *
+     * The package's `bfc.admin` middleware (EnsureUserIsAdmin) reads
+     * `getAttribute('is_admin')`. Capstan's admin concept is OrgRole, so this
+     * accessor projects that onto the name BfC expects instead of adding a
+     * second source of truth. There is deliberately NO `is_admin` column, no
+     * migration, and no entry in $fillable.
+     *
+     * Consequence: Capstan does NOT use BfC's `create-admin` command — that
+     * write path needs a real column. Grant admin by setting `org_role`.
+     *
+     * @return Attribute<bool, never>
+     */
+    protected function isAdmin(): Attribute
+    {
+        return Attribute::make(
+            get: fn (): bool => $this->org_role === OrgRole::Owner || $this->org_role === OrgRole::Admin,
+        );
     }
 
     public function canIssueInvitations(): bool

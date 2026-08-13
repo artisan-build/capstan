@@ -29,6 +29,14 @@
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
         <env name="SESSION_DRIVER" value="array"/>
+        <!-- Built for Cloud auth-foundation opt-outs (see docs/built-for-cloud.md).
+             Use the literal "(false)": PHPUnit casts value="false" to a real
+             boolean and then putenv()s it as an empty string, which is not the
+             `=== false` the package's migration guards check for. Laravel's
+             Env repository maps "(false)" to boolean false. -->
+        <env name="BUILT_FOR_CLOUD_PRODUCT" value="Capstan"/>
+        <env name="BUILT_FOR_CLOUD_INVITATIONS" value="(false)"/>
+        <env name="BUILT_FOR_CLOUD_USER_ADMIN_COLUMN" value="(false)"/>
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
