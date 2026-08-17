@@ -5,7 +5,7 @@ namespace App\Models;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 /**
  * @property int $id
@@ -42,9 +42,13 @@ class Spoke extends Model
         return $this->belongsTo(User::class);
     }
 
-    /** @return HasMany<SpokeInbox, $this> */
-    public function inboxes(): HasMany
+    /**
+     * The inboxes this spoke is currently ready to receive for.
+     *
+     * @return BelongsToMany<Inbox, $this>
+     */
+    public function inboxes(): BelongsToMany
     {
-        return $this->hasMany(SpokeInbox::class);
+        return $this->belongsToMany(Inbox::class, 'spoke_inboxes')->withTimestamps();
     }
 }

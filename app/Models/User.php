@@ -113,6 +113,14 @@ class User extends Authenticatable implements PasskeyUser
         return $this->hasMany(Spoke::class);
     }
 
+    /**
+     * @return HasMany<Inbox, $this>
+     */
+    public function inboxes(): HasMany
+    {
+        return $this->hasMany(Inbox::class);
+    }
+
     public function canChangeOrgRoleTo(User $target, OrgRole $role): bool
     {
         if ($this->org_role === OrgRole::Owner) {

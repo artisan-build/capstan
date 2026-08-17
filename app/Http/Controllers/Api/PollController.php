@@ -6,14 +6,17 @@ use App\Enums\MessageStatus;
 use App\Enums\MessageType;
 use App\Features\Postmaster;
 use App\Http\ApiError;
+use App\Http\ApiErrorException;
 use App\Http\Controllers\Controller;
 use App\Models\Envelope;
+use App\Models\Inbox;
 use App\Models\Spoke;
 use App\Models\User;
 use App\Support\Address;
 use App\Support\EnvelopeSigner;
 use App\Support\ServerIdentity;
 use Carbon\CarbonImmutable;
+use Illuminate\Contracts\Database\Query\Builder as QueryBuilder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -24,10 +27,21 @@ use Illuminate\Validation\Rule;
 use InvalidArgumentException;
 use JsonException;
 use Laravel\Pennant\Feature;
+use RuntimeException;
 use stdClass;
 
 class PollController extends Controller
 {
+    /** Request caps. Documented in docs/postmaster.md; keep both in sync. */
+    public const int MAX_READY_INBOXES = 256;
+
+    public const int MAX_ACKS = 1000;
+
+    public const int MAX_OUTBOUND = 100;
+
+    /** Bind-parameter defence in depth: never let one statement carry an unbounded IN list. */
+    private const int QUERY_CHUNK = 500;
+
     public function __invoke(Request $request, EnvelopeSigner $signer, ServerIdentity $identity): JsonResponse
     {
         if (! Feature::active(Postmaster::class)) {
@@ -81,32 +95,32 @@ class PollController extends Controller
 
         $serverId = $identity->id();
 
-        /** @var array{inbound: list<array<string, mixed>>, cursor: string|null} $response */
-        $response = DB::transaction(function () use ($user, $token, $validation, $envelopes, $serverId): array {
-            $spoke = $this->resolveSpoke($user->id, (int) $token->getKey());
-            $readyInboxes = array_values(array_unique($validation['ready_inboxes']));
+        try {
+            /** @var array{inbound: list<array<string, mixed>>, cursor: string|null} $response */
+            $response = DB::transaction(function () use ($user, $token, $validation, $envelopes, $serverId): array {
+                $now = now();
+                $spoke = $this->resolveSpoke($user->id, (int) $token->getKey(), $now);
+                $readyInboxes = array_values(array_unique($validation['ready_inboxes']));
 
-            $this->refreshRouting($spoke, $readyInboxes, $validation['cursor']);
+                $this->refreshRouting($spoke, $user->id, $readyInboxes, $validation['cursor'], $now);
+                $this->assertSendersOwned($user->id, $envelopes, $serverId);
 
-            foreach ($envelopes as $envelope) {
-                $this->storeEnvelope($envelope, $serverId);
-            }
+                foreach ($envelopes as $envelope) {
+                    $this->storeEnvelope($envelope, $serverId, $now);
+                }
 
-            $this->processAcks($validation['acks'], $readyInboxes, $serverId);
-            $inbound = $this->inbound($readyInboxes, $serverId);
+                $this->processAcks($user->id, $validation['acks'], $serverId, $now);
+                $inbound = $this->inbound($spoke, $user->id, $serverId);
+                $this->markDelivered($inbound, $now);
 
-            foreach ($inbound as $envelope) {
-                $envelope->forceFill([
-                    'status' => MessageStatus::Delivered,
-                    'delivered_at' => now(),
-                ])->save();
-            }
-
-            return [
-                'inbound' => $inbound->map(fn (Envelope $envelope): array => $this->wireEnvelope($envelope))->values()->all(),
-                'cursor' => $inbound->last()?->id,
-            ];
-        });
+                return [
+                    'inbound' => $inbound->map(fn (Envelope $envelope): array => $this->wireEnvelope($envelope))->values()->all(),
+                    'cursor' => $inbound->last()?->id,
+                ];
+            });
+        } catch (ApiErrorException $rejection) {
+            return $rejection->toResponse($request);
+        }
 
         return new JsonResponse($response);
     }
@@ -127,9 +141,21 @@ class PollController extends Controller
             'cursor' => $payload->cursor ?? null,
         ];
 
+        // Enforce the caps before the wildcard rules below are expanded: per-element
+        // validation of an over-sized array is itself a CPU sink worth tens of seconds.
+        $overCap = $this->overCapErrors([
+            'presence.ready_inboxes' => [$presence instanceof stdClass ? ($presence->ready_inboxes ?? null) : null, self::MAX_READY_INBOXES],
+            'outbound' => [$rawOutbound, self::MAX_OUTBOUND],
+            'acks' => [$input['acks'], self::MAX_ACKS],
+        ]);
+
+        if ($overCap !== []) {
+            return $this->validationError($overCap);
+        }
+
         $validator = Validator::make($input, [
             'presence' => ['required', 'array'],
-            'presence.ready_inboxes' => ['present', 'array'],
+            'presence.ready_inboxes' => ['present', 'array', 'max:'.self::MAX_READY_INBOXES],
             'presence.ready_inboxes.*' => [
                 'required',
                 'string',
@@ -139,7 +165,7 @@ class PollController extends Controller
                     }
                 },
             ],
-            'outbound' => ['array'],
+            'outbound' => ['array', 'max:'.self::MAX_OUTBOUND],
             'outbound.*' => ['array'],
             'outbound.*.id' => ['required', 'string', 'max:255'],
             'outbound.*.type' => ['required', 'string', Rule::in(MessageType::values())],
@@ -158,7 +184,7 @@ class PollController extends Controller
             ],
             'outbound.*.refs' => ['present', 'array', 'size:0'],
             'outbound.*.signature' => ['required', 'string', 'regex:/^[0-9a-f]{64}$/'],
-            'acks' => ['array'],
+            'acks' => ['array', 'max:'.self::MAX_ACKS],
             'acks.*' => ['string', 'max:255'],
             'cursor' => ['nullable', 'string', 'max:255'],
         ]);
@@ -200,6 +226,23 @@ class PollController extends Controller
         ];
     }
 
+    /**
+     * @param  array<string, array{mixed, int}>  $fields
+     * @return array<string, list<string>>
+     */
+    private function overCapErrors(array $fields): array
+    {
+        $errors = [];
+
+        foreach ($fields as $field => [$value, $max]) {
+            if (is_array($value) && count($value) > $max) {
+                $errors[$field] = ["The $field field must not have more than $max items."];
+            }
+        }
+
+        return $errors;
+    }
+
     /** @return \Closure(string, mixed, \Closure(string): void): void */
     private function addressRule(): \Closure
     {
@@ -235,10 +278,8 @@ class PollController extends Controller
         return $envelope;
     }
 
-    private function resolveSpoke(int $userId, int $tokenId): Spoke
+    private function resolveSpoke(int $userId, int $tokenId, CarbonImmutable $now): Spoke
     {
-        $now = now();
-
         DB::table('spokes')->insertOrIgnore([
             'user_id' => $userId,
             'token_id' => $tokenId,
@@ -249,27 +290,31 @@ class PollController extends Controller
         return Spoke::query()->where('token_id', $tokenId)->lockForUpdate()->firstOrFail();
     }
 
-    /** @param list<string> $readyInboxes */
-    private function refreshRouting(Spoke $spoke, array $readyInboxes, ?string $cursor): void
+    /**
+     * Claim every advertised inbox for the polling user (first user wins, forever) and
+     * replace this spoke's routing set with the claimed rows. The persisted rows — not
+     * the request array — are what delivery and acknowledgement later consult.
+     *
+     * @param  list<string>  $readyInboxes
+     */
+    private function refreshRouting(Spoke $spoke, int $userId, array $readyInboxes, ?string $cursor, CarbonImmutable $now): void
     {
-        $inboxes = $spoke->inboxes();
+        $inboxIds = $readyInboxes === [] ? [] : $this->claimInboxes($userId, $readyInboxes, $now);
 
-        if ($readyInboxes === []) {
-            $inboxes->delete();
-        } else {
-            $inboxes->whereNotIn('local_part', $readyInboxes)->delete();
+        /** @var list<int> $current */
+        $current = DB::table('spoke_inboxes')->where('spoke_id', $spoke->id)->pluck('inbox_id')->all();
+
+        foreach (array_chunk(array_values(array_diff($current, $inboxIds)), self::QUERY_CHUNK) as $stale) {
+            DB::table('spoke_inboxes')->where('spoke_id', $spoke->id)->whereIn('inbox_id', $stale)->delete();
         }
 
-        $now = now();
-        $rows = array_map(fn (string $localPart): array => [
-            'spoke_id' => $spoke->id,
-            'local_part' => $localPart,
-            'created_at' => $now,
-            'updated_at' => $now,
-        ], $readyInboxes);
-
-        if ($rows !== []) {
-            DB::table('spoke_inboxes')->insertOrIgnore($rows);
+        foreach (array_chunk(array_values(array_diff($inboxIds, $current)), self::QUERY_CHUNK) as $fresh) {
+            DB::table('spoke_inboxes')->insertOrIgnore(array_map(fn (int $inboxId): array => [
+                'spoke_id' => $spoke->id,
+                'inbox_id' => $inboxId,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ], $fresh));
         }
 
         $spoke->forceFill([
@@ -278,10 +323,97 @@ class PollController extends Controller
         ])->save();
     }
 
-    private function storeEnvelope(Envelope $envelope, string $serverId): void
+    /**
+     * Race-safe first-claim: insertOrIgnore, then read back and let the database decide who
+     * owns each local part. A failed statement would abort the whole transaction on
+     * PostgreSQL, so a unique violation is never caught here.
+     *
+     * @param  non-empty-list<string>  $localParts
+     * @return list<int>
+     */
+    private function claimInboxes(int $userId, array $localParts, CarbonImmutable $now): array
+    {
+        foreach (array_chunk($localParts, self::QUERY_CHUNK) as $chunk) {
+            DB::table('inboxes')->insertOrIgnore(array_map(fn (string $localPart): array => [
+                'user_id' => $userId,
+                'local_part' => $localPart,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ], $chunk));
+        }
+
+        /** @var Collection<int, Inbox> $inboxes */
+        $inboxes = new Collection;
+
+        foreach (array_chunk($localParts, self::QUERY_CHUNK) as $chunk) {
+            $inboxes = $inboxes->merge(Inbox::query()->whereIn('local_part', $chunk)->get(['id', 'user_id', 'local_part']));
+        }
+
+        $foreign = $inboxes->where('user_id', '!=', $userId)->pluck('local_part')->sort()->values()->all();
+
+        if ($foreign !== []) {
+            throw new ApiErrorException(409, 'inbox_claimed', 'One or more advertised inboxes are owned by another user.', [
+                'inboxes' => $foreign,
+            ]);
+        }
+
+        if ($inboxes->count() !== count($localParts)) {
+            throw new RuntimeException('Postmaster inbox claims could not be resolved.');
+        }
+
+        return array_values($inboxes->map(fn (Inbox $inbox): int => $inbox->id)->all());
+    }
+
+    /**
+     * Every outbound `from` must be a local address whose inbox the sending user owns.
+     * This binds a sender to its user, not to a specific spoke — see docs/postmaster.md.
+     *
+     * @param  list<Envelope>  $envelopes
+     */
+    private function assertSendersOwned(int $userId, array $envelopes, string $serverId): void
+    {
+        if ($envelopes === []) {
+            return;
+        }
+
+        $senders = [];
+
+        foreach ($envelopes as $index => $envelope) {
+            $from = Address::parse($envelope->from_address);
+
+            if (! $from->isLocal($serverId)) {
+                throw $this->senderNotOwned($index, $envelope->from_address);
+            }
+
+            $senders[$index] = $from->localPart;
+        }
+
+        $owned = [];
+
+        foreach (array_chunk(array_values(array_unique($senders)), self::QUERY_CHUNK) as $chunk) {
+            $owned = [...$owned, ...Inbox::query()->where('user_id', $userId)->whereIn('local_part', $chunk)->pluck('local_part')->all()];
+        }
+
+        $owned = array_flip($owned);
+
+        foreach ($senders as $index => $localPart) {
+            if (! isset($owned[$localPart])) {
+                throw $this->senderNotOwned($index, $envelopes[$index]->from_address);
+            }
+        }
+    }
+
+    private function senderNotOwned(int $index, string $from): ApiErrorException
+    {
+        return new ApiErrorException(403, 'sender_not_owned', 'The envelope sender must be an inbox owned by the authenticated user on this server.', [
+            'index' => $index,
+            'from' => $from,
+        ]);
+    }
+
+    private function storeEnvelope(Envelope $envelope, string $serverId, CarbonImmutable $now): void
     {
         $to = Address::parse($envelope->to_address);
-        $now = now();
 
         DB::table('messages')->insertOrIgnore([
             'id' => $envelope->id,
@@ -296,56 +428,86 @@ class PollController extends Controller
             'message_id' => $envelope->message_id,
             'signature' => $envelope->signature,
             'status' => $to->isLocal($serverId) ? MessageStatus::Pending->value : MessageStatus::PendingRelay->value,
+            'received_at' => $now,
             'created_at' => $envelope->created_at,
             'updated_at' => $now,
         ]);
     }
 
     /**
+     * Acks are scoped by inbox ownership, so a spoke that has stopped advertising an inbox
+     * can still acknowledge the batch it already received.
+     *
      * @param  list<string>  $acks
-     * @param  list<string>  $readyInboxes
      */
-    private function processAcks(array $acks, array $readyInboxes, string $serverId): void
+    private function processAcks(int $userId, array $acks, string $serverId, CarbonImmutable $now): void
     {
-        if ($acks === [] || $readyInboxes === []) {
-            return;
-        }
-
-        $messages = Envelope::query()
-            ->whereIn('message_id', array_unique($acks))
-            ->where('to_server_id', $serverId)
-            ->whereIn('to_local_part', $readyInboxes)
-            ->where('status', '!=', MessageStatus::Acked->value)
-            ->get();
-
-        foreach ($messages as $message) {
-            $message->forceFill([
-                'status' => MessageStatus::Acked,
-                'acked_at' => now(),
-            ])->save();
+        foreach (array_chunk(array_values(array_unique($acks)), self::QUERY_CHUNK) as $chunk) {
+            Envelope::query()
+                ->whereIn('message_id', $chunk)
+                ->where('to_server_id', $serverId)
+                ->whereIn('to_local_part', $this->ownedLocalParts($userId))
+                ->where('status', '!=', MessageStatus::Acked->value)
+                ->update([
+                    'status' => MessageStatus::Acked->value,
+                    'acked_at' => $now,
+                ]);
         }
     }
 
     /**
-     * @param  list<string>  $readyInboxes
+     * Delivery is scoped by this spoke's persisted routing rows, restricted to inboxes
+     * its user owns. Server-assigned `received_at` is the priority key on every driver.
+     *
      * @return Collection<int, Envelope>
      */
-    private function inbound(array $readyInboxes, string $serverId): Collection
+    private function inbound(Spoke $spoke, int $userId, string $serverId): Collection
     {
         $limit = max(0, (int) config('capstan.postmaster.poll.max_inbound', 50));
 
-        if ($readyInboxes === [] || $limit === 0) {
+        if ($limit === 0) {
             return new Collection;
         }
 
         return Envelope::query()
             ->where('to_server_id', $serverId)
-            ->whereIn('to_local_part', $readyInboxes)
+            ->whereIn('to_local_part', $this->routedLocalParts($spoke, $userId))
             ->whereIn('status', [MessageStatus::Pending->value, MessageStatus::Delivered->value])
-            ->orderBy('created_at')
+            ->orderBy('received_at')
             ->orderBy('id')
             ->limit($limit)
             ->get();
+    }
+
+    /** @param Collection<int, Envelope> $inbound */
+    private function markDelivered(Collection $inbound, CarbonImmutable $now): void
+    {
+        foreach ($inbound->pluck('id')->chunk(self::QUERY_CHUNK) as $ids) {
+            // First delivery time survives redelivery; status flips once, in bulk.
+            Envelope::query()->whereIn('id', $ids)->whereNull('delivered_at')->update(['delivered_at' => $now]);
+            Envelope::query()->whereIn('id', $ids)->where('status', MessageStatus::Pending->value)->update(['status' => MessageStatus::Delivered->value]);
+        }
+    }
+
+    /** @return \Closure(QueryBuilder): void */
+    private function ownedLocalParts(int $userId): \Closure
+    {
+        return function (QueryBuilder $query) use ($userId): void {
+            $query->select('local_part')->from('inboxes')->where('user_id', $userId);
+        };
+    }
+
+    /** @return \Closure(QueryBuilder): void */
+    private function routedLocalParts(Spoke $spoke, int $userId): \Closure
+    {
+        return function (QueryBuilder $query) use ($spoke, $userId): void {
+            $query
+                ->select('inboxes.local_part')
+                ->from('inboxes')
+                ->join('spoke_inboxes', 'spoke_inboxes.inbox_id', '=', 'inboxes.id')
+                ->where('spoke_inboxes.spoke_id', $spoke->id)
+                ->where('inboxes.user_id', $userId);
+        };
     }
 
     /** @return array<string, mixed> */

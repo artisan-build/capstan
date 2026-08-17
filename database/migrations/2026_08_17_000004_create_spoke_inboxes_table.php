@@ -8,13 +8,14 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // Routing: which of its owner's inboxes a spoke is currently ready to receive for.
         Schema::create('spoke_inboxes', function (Blueprint $table): void {
             $table->id();
             $table->foreignId('spoke_id')->constrained()->cascadeOnDelete();
-            $table->string('local_part', 64)->index();
+            $table->foreignId('inbox_id')->constrained()->cascadeOnDelete();
             $table->timestamps();
 
-            $table->unique(['spoke_id', 'local_part']);
+            $table->unique(['spoke_id', 'inbox_id']);
         });
     }
 

@@ -3,6 +3,7 @@
 namespace App\Providers;
 
 use App\Http\Middleware\ResolveApiActor;
+use App\Support\PostmasterClock;
 use App\Support\ServerIdentity;
 use Carbon\CarbonImmutable;
 use Illuminate\Cache\RateLimiting\Limit;
@@ -29,6 +30,12 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->configureDefaults();
+
+        // Fork-and-deploy footgun: a non-UTC APP_TIMEZONE breaks every envelope signature.
+        // Config, not Pennant's store, is the source of truth for the flag (D23).
+        if (config('capstan.features.postmaster')) {
+            PostmasterClock::assertUtc();
+        }
     }
 
     /**
