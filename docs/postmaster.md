@@ -147,6 +147,27 @@ must remain out-of-band: never send failure notices over the spoke poll channel 
 report. While Postmaster is disabled, the sweep voids outstanding challenges so re-enabling cannot
 produce alerts from frozen liveness state.
 
+## Hub map liveness
+
+The authenticated Postmaster map lists the registered CLI installations and their routing counts. An
+owner or admin can see every spoke for operational oversight; a member can see only spokes owned by
+their user account. The page never exposes another member's spokes or inboxes.
+
+Displayed liveness combines polling recency with the independent probe outcome:
+
+- **Green:** the spoke polled within the staleness window and its probe state is `green`.
+- **Red:** the spoke has not polled within the window, has never polled, or its probe state is `red`.
+- **Pending:** the spoke polled within the window but its probe state remains `unknown`.
+
+`CAPSTAN_POSTMASTER_MAP_STALE_AFTER_SECONDS` configures the staleness window and defaults to 300
+seconds, allowing five missed polls at the expected once-a-minute cadence. A poll exactly at the
+cutoff remains current; only an earlier poll is stale.
+
+Pending is intentional: a newly registered, actively polling spoke has not proved that it can process
+a challenge, but presenting it as failed would be misleading. This means the first successful poll
+makes a spoke pending, not green as PR5's original acceptance wording states. It becomes green only
+after its first probe passes.
+
 ### Deployment requirements
 
 Postmaster requires `app.timezone` to be `UTC` (the value shipped in `config/app.php`; do not change it

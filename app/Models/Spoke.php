@@ -20,6 +20,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property CarbonImmutable|null $probe_failed_at
  * @property CarbonImmutable $created_at
  * @property CarbonImmutable $updated_at
+ * @property-read int|null $inboxes_count
  */
 class Spoke extends Model
 {

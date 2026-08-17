@@ -21,6 +21,11 @@ return [
             // batch remain eligible for a later poll in deterministic order.
             'max_inbound' => env('CAPSTAN_POSTMASTER_MAX_INBOUND', 50),
         ],
+        'map' => [
+            // A spoke becomes stale after this long without a successful poll.
+            // The default allows five missed polls at the once-a-minute cadence.
+            'stale_after_seconds' => env('CAPSTAN_POSTMASTER_MAP_STALE_AFTER_SECONDS', 300),
+        ],
         'probe' => [
             // Probes ride normal polls. Interval limits healthy cadence, timeout
             // drives the sweep, and backoff avoids hammering a failed spoke.
