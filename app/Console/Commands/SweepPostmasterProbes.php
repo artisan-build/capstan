@@ -3,12 +3,16 @@
 namespace App\Console\Commands;
 
 use App\Enums\ProbeStatus;
+use App\Features\Postmaster;
 use App\Models\Spoke;
 use App\Models\SpokeProbe;
 use App\Postmaster\ProbeFailureNotifier;
 use App\Postmaster\ProbeManager;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Laravel\Pennant\Feature;
+use Throwable;
 
 class SweepPostmasterProbes extends Command
 {
@@ -18,8 +22,11 @@ class SweepPostmasterProbes extends Command
 
     public function handle(ProbeManager $manager, ProbeFailureNotifier $notifier): int
     {
-        if (! config('capstan.features.postmaster')) {
-            $this->info('Failed 0 overdue probe(s).');
+        if (! Feature::active(Postmaster::class)) {
+            $voided = SpokeProbe::query()
+                ->whereIn('status', [ProbeStatus::Issued->value, ProbeStatus::Awaiting->value])
+                ->delete();
+            $this->info("Postmaster disabled; voided {$voided} outstanding probe(s).");
 
             return self::SUCCESS;
         }
@@ -45,14 +52,38 @@ class SweepPostmasterProbes extends Command
                             return null;
                         }
 
-                        $manager->fail($spoke, $probe, $now, responded: false);
+                        $newerPassed = SpokeProbe::query()
+                            ->where('spoke_id', $spoke->id)
+                            ->where('status', ProbeStatus::Passed->value)
+                            ->where('issued_at', '>', $probe->issued_at)
+                            ->exists();
 
-                        return [$spoke, $probe];
+                        if ($newerPassed) {
+                            $manager->recordFailure($probe, $now, responded: false);
+
+                            return [$spoke, $probe, false];
+                        }
+
+                        $notify = $manager->fail($spoke, $probe, $now, responded: false);
+
+                        return [$spoke, $probe, $notify];
                     });
 
                     if ($transition !== null) {
-                        [$spoke, $probe] = $transition;
-                        $notifier->notify($spoke, $probe);
+                        [$spoke, $probe, $notify] = $transition;
+
+                        if ($notify) {
+                            try {
+                                $notifier->notify($spoke, $probe);
+                            } catch (Throwable $exception) {
+                                Log::error('Postmaster probe failure notification failed.', [
+                                    'spoke_id' => $spoke->id,
+                                    'probe_id' => $probe->probe_id,
+                                    'exception' => $exception,
+                                ]);
+                            }
+                        }
+
                         $failed++;
                     }
                 }

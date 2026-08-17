@@ -4,7 +4,6 @@ namespace App\Postmaster;
 
 use App\Enums\ProbeStatus;
 use App\Enums\SpokeLiveness;
-use App\Http\ApiErrorException;
 use App\Models\Spoke;
 use App\Models\SpokeProbe;
 use Carbon\CarbonImmutable;
@@ -12,6 +11,8 @@ use Illuminate\Support\Str;
 
 class ProbeManager
 {
+    public const int MIN_TIMEOUT_SECONDS = 60;
+
     /**
      * @param  array{probe_id: string, digest: string}|null  $response
      */
@@ -23,18 +24,14 @@ class ProbeManager
 
         $probe = SpokeProbe::query()
             ->where('probe_id', $response['probe_id'])
+            ->where('spoke_id', $spoke->id)
             ->lockForUpdate()
             ->first();
 
         if (! $probe instanceof SpokeProbe
-            || $probe->spoke_id !== $spoke->id
             || $probe->status !== ProbeStatus::Awaiting
             || $probe->expires_at->lessThanOrEqualTo($now)) {
-            throw new ApiErrorException(
-                422,
-                'invalid_probe_response',
-                'The probe response does not match an active challenge.',
-            );
+            return null;
         }
 
         if (hash_equals(hash('sha256', $probe->nonce), $response['digest'])) {
@@ -50,9 +47,9 @@ class ProbeManager
             return null;
         }
 
-        $this->fail($spoke, $probe, $now, responded: true);
+        $enteredRed = $this->fail($spoke, $probe, $now, responded: true);
 
-        return $probe;
+        return $enteredRed ? $probe : null;
     }
 
     /**
@@ -64,10 +61,15 @@ class ProbeManager
             ->where('spoke_id', $spoke->id)
             ->whereIn('status', [ProbeStatus::Issued->value, ProbeStatus::Awaiting->value])
             ->where('expires_at', '>', $now)
-            ->exists();
+            ->latest('issued_at')
+            ->first();
 
-        if ($outstanding) {
-            return null;
+        if ($outstanding instanceof SpokeProbe) {
+            if ($outstanding->status === ProbeStatus::Issued) {
+                $outstanding->forceFill(['status' => ProbeStatus::Awaiting])->save();
+            }
+
+            return $this->wireChallenge($outstanding);
         }
 
         $lastIssuedAt = SpokeProbe::query()
@@ -93,28 +95,43 @@ class ProbeManager
             'nonce' => $nonce,
             'status' => ProbeStatus::Issued,
             'issued_at' => $now,
-            'expires_at' => $now->addSeconds(max(0, (int) config('capstan.postmaster.probe.timeout_seconds', 900))),
+            'expires_at' => $now->addSeconds(max(self::MIN_TIMEOUT_SECONDS, (int) config('capstan.postmaster.probe.timeout_seconds', 900))),
         ]);
 
         // This transport creates and hands off the challenge in one transaction.
         $probe->forceFill(['status' => ProbeStatus::Awaiting])->save();
 
-        return [
-            'probe_id' => $probe->probe_id,
-            'nonce' => $probe->nonce,
-            'algorithm' => 'sha256',
-        ];
+        return $this->wireChallenge($probe);
     }
 
-    public function fail(Spoke $spoke, SpokeProbe $probe, CarbonImmutable $now, bool $responded): void
+    public function fail(Spoke $spoke, SpokeProbe $probe, CarbonImmutable $now, bool $responded): bool
+    {
+        $enteredRed = $spoke->probe_status !== SpokeLiveness::Red;
+
+        $this->recordFailure($probe, $now, $responded);
+        $spoke->forceFill([
+            'probe_status' => SpokeLiveness::Red,
+            'probe_failed_at' => $now,
+        ])->save();
+
+        return $enteredRed;
+    }
+
+    public function recordFailure(SpokeProbe $probe, CarbonImmutable $now, bool $responded): void
     {
         $probe->forceFill([
             'status' => ProbeStatus::Failed,
             'responded_at' => $responded ? $now : null,
         ])->save();
-        $spoke->forceFill([
-            'probe_status' => SpokeLiveness::Red,
-            'probe_failed_at' => $now,
-        ])->save();
+    }
+
+    /** @return array{probe_id: string, nonce: string, algorithm: string} */
+    private function wireChallenge(SpokeProbe $probe): array
+    {
+        return [
+            'probe_id' => $probe->probe_id,
+            'nonce' => $probe->nonce,
+            'algorithm' => 'sha256',
+        ];
     }
 }

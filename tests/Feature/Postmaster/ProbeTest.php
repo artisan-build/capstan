@@ -12,6 +12,7 @@ use App\Postmaster\ProbeFailureNotifier;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Laravel\Pennant\Feature;
 
@@ -129,7 +130,7 @@ test('a wrong digest fails immediately and notifies exactly once', function (): 
             'probe_id' => $challenge['probe_id'],
             'digest' => str_repeat('0', 64),
         ],
-    ])->assertUnprocessable()->assertJsonPath('error.code', 'invalid_probe_response');
+    ])->assertOk();
 
     expect($this->notifier->notifications)->toHaveCount(1);
 });
@@ -161,7 +162,7 @@ test('malformed probe responses return the api validation envelope without chang
         ->and($this->notifier->notifications)->toBe([]);
 });
 
-test('unknown and foreign probe responses cannot change another spoke', function (): void {
+test('unknown and foreign probe responses are ignored without changing another spoke', function (): void {
     $alice = User::factory()->create();
     $bob = User::factory()->create();
     $aliceToken = probeToken($alice);
@@ -169,9 +170,9 @@ test('unknown and foreign probe responses cannot change another spoke', function
     $aliceChallenge = $this->withToken($aliceToken)->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
     ])->assertOk()->json('probe_challenge');
-    $this->withToken($bobToken)->postJson('/api/v1/poll', [
+    $bobChallenge = $this->withToken($bobToken)->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
-    ])->assertOk();
+    ])->assertOk()->json('probe_challenge');
 
     $this->withToken($bobToken)->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
@@ -179,7 +180,7 @@ test('unknown and foreign probe responses cannot change another spoke', function
             'probe_id' => $aliceChallenge['probe_id'],
             'digest' => hash('sha256', $aliceChallenge['nonce']),
         ],
-    ])->assertUnprocessable()->assertJsonPath('error.code', 'invalid_probe_response');
+    ])->assertOk()->assertJsonPath('probe_challenge', $bobChallenge);
 
     $this->withToken($bobToken)->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
@@ -187,7 +188,7 @@ test('unknown and foreign probe responses cannot change another spoke', function
             'probe_id' => (string) Str::ulid(),
             'digest' => str_repeat('0', 64),
         ],
-    ])->assertUnprocessable()->assertJsonPath('error.code', 'invalid_probe_response');
+    ])->assertOk()->assertJsonPath('probe_challenge', $bobChallenge);
 
     expect(SpokeProbe::query()->where('status', ProbeStatus::Awaiting->value)->count())->toBe(2)
         ->and(Spoke::query()->where('probe_status', SpokeLiveness::Unknown->value)->count())->toBe(2)
@@ -221,7 +222,7 @@ test('the scheduled sweep detects a spoke that stopped polling and is idempotent
     expect($this->notifier->notifications)->toHaveCount(1);
 });
 
-test('outstanding probes and the healthy interval suppress excess challenges', function (): void {
+test('a lost response is recovered by replaying the same challenge until it passes in window', function (): void {
     Date::setTestNow('2026-08-17 12:00:00');
     $user = User::factory()->create();
     $token = probeToken($user);
@@ -229,10 +230,13 @@ test('outstanding probes and the healthy interval suppress excess challenges', f
         'presence' => ['ready_inboxes' => []],
     ])->assertOk()->json('probe_challenge');
 
-    Date::setTestNow('2026-08-17 12:01:00');
-    $this->withToken($token)->postJson('/api/v1/poll', [
-        'presence' => ['ready_inboxes' => []],
-    ])->assertOk()->assertJsonMissingPath('probe_challenge');
+    foreach (['12:01:00', '12:05:00', '12:10:00', '12:14:59'] as $time) {
+        Date::setTestNow("2026-08-17 {$time}");
+        $this->withToken($token)->postJson('/api/v1/poll', [
+            'presence' => ['ready_inboxes' => []],
+        ])->assertOk()->assertJsonPath('probe_challenge', $challenge);
+    }
+
     expect(SpokeProbe::query()->count())->toBe(1);
 
     $this->withToken($token)->postJson('/api/v1/poll', [
@@ -241,17 +245,10 @@ test('outstanding probes and the healthy interval suppress excess challenges', f
             'probe_id' => $challenge['probe_id'],
             'digest' => hash('sha256', $challenge['nonce']),
         ],
-    ])->assertOk()->assertJsonMissingPath('probe_challenge');
+    ])->assertOk();
 
-    Date::setTestNow('2026-08-17 12:04:59');
-    $this->withToken($token)->postJson('/api/v1/poll', [
-        'presence' => ['ready_inboxes' => []],
-    ])->assertOk()->assertJsonMissingPath('probe_challenge');
-
-    Date::setTestNow('2026-08-17 12:05:00');
-    $this->withToken($token)->postJson('/api/v1/poll', [
-        'presence' => ['ready_inboxes' => []],
-    ])->assertOk()->assertJsonPath('probe_challenge.algorithm', 'sha256');
+    expect(SpokeProbe::query()->where('probe_id', $challenge['probe_id'])->firstOrFail()->status)->toBe(ProbeStatus::Passed)
+        ->and(Spoke::query()->firstOrFail()->probe_status)->toBe(SpokeLiveness::Green);
 
     expect(SpokeProbe::query()->count())->toBe(2);
 });
@@ -280,9 +277,20 @@ test('a failed spoke observes backoff before another challenge', function (): vo
     ])->assertOk()->assertJsonMissingPath('probe_challenge');
 
     Date::setTestNow('2026-08-17 12:30:01');
+    $next = $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+    ])->assertOk()->assertJsonPath('probe_challenge.algorithm', 'sha256')->json('probe_challenge');
+
+    Date::setTestNow('2026-08-17 12:30:02');
     $this->withToken($token)->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
-    ])->assertOk()->assertJsonPath('probe_challenge.algorithm', 'sha256');
+        'probe_response' => [
+            'probe_id' => $next['probe_id'],
+            'digest' => str_repeat('0', 64),
+        ],
+    ])->assertOk();
+
+    expect($this->notifier->notifications)->toHaveCount(1);
 });
 
 test('an expired challenge does not block a later challenge and only the sweep fails it', function (): void {
@@ -313,6 +321,72 @@ test('an expired challenge does not block a later challenge and only the sweep f
         ->and($this->notifier->notifications)->toHaveCount(1);
 });
 
+test('sweeping a stale probe cannot overwrite a newer successful probe', function (): void {
+    Date::setTestNow('2026-08-17 12:00:00');
+    $user = User::factory()->create();
+    $token = probeToken($user);
+    $staleId = $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+    ])->assertOk()->json('probe_challenge.probe_id');
+
+    Date::setTestNow('2026-08-17 12:15:00');
+    $newer = $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+    ])->assertOk()->json('probe_challenge');
+
+    Date::setTestNow('2026-08-17 12:15:05');
+    $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+        'probe_response' => [
+            'probe_id' => $newer['probe_id'],
+            'digest' => hash('sha256', $newer['nonce']),
+        ],
+    ])->assertOk();
+
+    Date::setTestNow('2026-08-17 12:15:30');
+    $this->artisan('postmaster:probe-sweep')
+        ->expectsOutput('Failed 1 overdue probe(s).')
+        ->assertSuccessful();
+
+    expect(SpokeProbe::query()->where('probe_id', $staleId)->firstOrFail()->status)->toBe(ProbeStatus::Failed)
+        ->and(SpokeProbe::query()->where('probe_id', $newer['probe_id'])->firstOrFail()->status)->toBe(ProbeStatus::Passed)
+        ->and(Spoke::query()->firstOrFail()->probe_status)->toBe(SpokeLiveness::Green)
+        ->and(Spoke::query()->firstOrFail()->probe_failed_at)->toBeNull()
+        ->and($this->notifier->notifications)->toBe([]);
+
+    Date::setTestNow('2026-08-17 12:20:00');
+    $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+    ])->assertOk()->assertJsonPath('probe_challenge.algorithm', 'sha256');
+});
+
+test('a throwing notifier does not stop the sweep or lose failed records', function (): void {
+    $this->app->instance(ProbeFailureNotifier::class, new class implements ProbeFailureNotifier
+    {
+        public function notify(Spoke $spoke, SpokeProbe $probe): void
+        {
+            throw new RuntimeException('Notifier unavailable.');
+        }
+    });
+    Log::spy();
+    Date::setTestNow('2026-08-17 12:00:00');
+
+    foreach ([User::factory()->create(), User::factory()->create()] as $user) {
+        $this->withToken(probeToken($user))->postJson('/api/v1/poll', [
+            'presence' => ['ready_inboxes' => []],
+        ])->assertOk();
+    }
+
+    Date::setTestNow('2026-08-17 12:15:00');
+    $this->artisan('postmaster:probe-sweep')
+        ->expectsOutput('Failed 2 overdue probe(s).')
+        ->assertSuccessful();
+
+    expect(SpokeProbe::query()->where('status', ProbeStatus::Failed->value)->count())->toBe(2)
+        ->and(Spoke::query()->where('probe_status', SpokeLiveness::Red->value)->count())->toBe(2);
+    Log::shouldHaveReceived('error')->twice();
+});
+
 test('probe ids are protected by a database unique constraint', function (): void {
     $user = User::factory()->create();
     $this->withToken(probeToken($user))->postJson('/api/v1/poll', [
@@ -337,10 +411,47 @@ test('probe ids are protected by a database unique constraint', function (): voi
 test('the overdue probe sweep is scheduled every minute', function (): void {
     $scheduled = collect(app(Schedule::class)->events())->contains(function ($event): bool {
         return str_contains($event->command, 'postmaster:probe-sweep')
-            && $event->expression === '* * * * *';
+            && $event->expression === '* * * * *'
+            && $event->expiresAt === 5;
     });
 
     expect($scheduled)->toBeTrue();
+});
+
+test('disabling Postmaster voids outstanding probes before re-enable', function (): void {
+    $user = User::factory()->create();
+    $token = probeToken($user);
+    $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+    ])->assertOk();
+
+    config(['capstan.features.postmaster' => false]);
+    Feature::flushCache();
+    $this->artisan('postmaster:probe-sweep')
+        ->expectsOutput('Postmaster disabled; voided 1 outstanding probe(s).')
+        ->assertSuccessful();
+
+    expect(SpokeProbe::query()->count())->toBe(0)
+        ->and(Spoke::query()->firstOrFail()->probe_status)->toBe(SpokeLiveness::Unknown)
+        ->and($this->notifier->notifications)->toBe([]);
+
+    config(['capstan.features.postmaster' => true]);
+    Feature::flushCache();
+    $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+    ])->assertOk()->assertJsonPath('probe_challenge.algorithm', 'sha256');
+});
+
+test('probe timeouts are clamped to the sweep cadence', function (): void {
+    config(['capstan.postmaster.probe.timeout_seconds' => 0]);
+    Date::setTestNow('2026-08-17 12:00:00');
+    $user = User::factory()->create();
+    $this->withToken(probeToken($user))->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+    ])->assertOk();
+
+    $probe = SpokeProbe::query()->firstOrFail();
+    expect($probe->expires_at->diffInSeconds($probe->issued_at, true))->toBe(60.0);
 });
 
 test('a disabled feature never issues a probe or creates a spoke', function (): void {

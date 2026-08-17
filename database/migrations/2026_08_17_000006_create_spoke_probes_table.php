@@ -25,6 +25,7 @@ return new class extends Migration
             $table->timestamps();
 
             $table->index(['spoke_id', 'status']);
+            $table->index(['spoke_id', 'issued_at']);
         });
     }
 

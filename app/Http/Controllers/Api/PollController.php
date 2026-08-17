@@ -25,6 +25,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use InvalidArgumentException;
@@ -32,6 +33,7 @@ use JsonException;
 use Laravel\Pennant\Feature;
 use RuntimeException;
 use stdClass;
+use Throwable;
 
 class PollController extends Controller
 {
@@ -142,7 +144,15 @@ class PollController extends Controller
         }
 
         if ($result['failure'] !== null) {
-            $probeFailureNotifier->notify(...$result['failure']);
+            try {
+                $probeFailureNotifier->notify(...$result['failure']);
+            } catch (Throwable $exception) {
+                Log::error('Postmaster probe failure notification failed.', [
+                    'spoke_id' => $result['failure'][0]->id,
+                    'probe_id' => $result['failure'][1]->probe_id,
+                    'exception' => $exception,
+                ]);
+            }
         }
 
         return new JsonResponse($result['payload']);

@@ -97,8 +97,7 @@ delivery.
 
 ### Synthetic liveness probes
 
-Most poll responses contain only `inbound` and `cursor`. When a spoke is due for a liveness check, the
-response also contains a challenge:
+When a spoke is due for a liveness check, its poll response contains a challenge:
 
 ```json
 {
@@ -124,22 +123,29 @@ poll:
 
 A digest, rather than a verbatim echo, demonstrates that the client executed code on the received
 challenge. The server compares it with `hash_equals`. A correct response marks the spoke green; a
-wrong response marks it red. Malformed responses receive a 422 `validation_failed`, while unknown,
-expired, already answered, or another spoke's probe receives a 422 `invalid_probe_response` without
-changing probe state.
+wrong response marks it red. Malformed responses receive a 422 `validation_failed`. Well-formed
+responses for unknown, expired, already answered, or another spoke's probe are ignored so the
+auxiliary probe can never reject that poll's postal exchange.
+
+Until its original deadline, an unanswered challenge is included unchanged in every poll response.
+This at-least-once delivery lets a spoke recover from a lost HTTP response without changing the nonce
+or extending the time available to compute its digest.
 
 `CAPSTAN_POSTMASTER_PROBE_INTERVAL_SECONDS` (default 300 seconds) is the minimum gap between challenges
-for one spoke. `CAPSTAN_POSTMASTER_PROBE_TIMEOUT_SECONDS` (default 900 seconds) is the response deadline,
-and `CAPSTAN_POSTMASTER_PROBE_BACKOFF_SECONDS` (default 1800 seconds) delays the next challenge after a failure.
-An unexpired outstanding challenge suppresses new challenges. Expiry makes another challenge eligible,
-but only the sweep transitions the overdue record to failed.
+for one spoke. `CAPSTAN_POSTMASTER_PROBE_TIMEOUT_SECONDS` (default 900 seconds, minimum 60) is the
+response deadline, and `CAPSTAN_POSTMASTER_PROBE_BACKOFF_SECONDS` (default 1800 seconds) delays the next
+challenge after a failure. An unexpired outstanding challenge suppresses new challenges. Expiry makes
+another challenge eligible, but only the sweep transitions the overdue record to failed.
 
 The scheduler runs `php artisan postmaster:probe-sweep` every minute. It fails overdue unanswered
 probes even when a spoke has stopped polling entirely; checking lazily on the next poll would never
-detect that failure mode. Each failure transition invokes the rebindable
-`App\Postmaster\ProbeFailureNotifier` exactly once. Its default implementation logs a warning, and forks
-may bind it to email or Slack. Implementations must remain out-of-band: never send failure notices over
-the spoke poll channel whose failure they report.
+detect that failure mode. A stale failure is retained in probe history but cannot overwrite a newer
+successful probe. Each transition into red invokes the rebindable `App\Postmaster\ProbeFailureNotifier`
+exactly once. Its default implementation logs a warning, and forks may bind it to email or Slack.
+Notifier exceptions are logged without rolling back probe state or stopping the sweep. Implementations
+must remain out-of-band: never send failure notices over the spoke poll channel whose failure they
+report. While Postmaster is disabled, the sweep voids outstanding challenges so re-enabling cannot
+produce alerts from frozen liveness state.
 
 ### Deployment requirements
 
