@@ -26,7 +26,7 @@ final readonly class Address
 
     public static function make(string $localPart, string $serverId): self
     {
-        if (strlen($localPart) > 64 || preg_match(self::LOCAL_PART_PATTERN, $localPart) !== 1) {
+        if (! self::isValidLocalPart($localPart)) {
             throw new InvalidArgumentException('The postmaster address local part is malformed.');
         }
 
@@ -35,6 +35,11 @@ final readonly class Address
         }
 
         return new self($localPart, $serverId);
+    }
+
+    public static function isValidLocalPart(string $localPart): bool
+    {
+        return strlen($localPart) <= 64 && preg_match(self::LOCAL_PART_PATTERN, $localPart) === 1;
     }
 
     public function format(): string

@@ -105,6 +105,14 @@ class User extends Authenticatable implements PasskeyUser
         return $this->hasMany(Artifact::class, 'author_id');
     }
 
+    /**
+     * @return HasMany<Spoke, $this>
+     */
+    public function spokes(): HasMany
+    {
+        return $this->hasMany(Spoke::class);
+    }
+
     public function canChangeOrgRoleTo(User $target, OrgRole $role): bool
     {
         if ($this->org_role === OrgRole::Owner) {

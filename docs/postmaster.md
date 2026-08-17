@@ -18,3 +18,37 @@ invalidate signatures.
 
 The `refs` list is reserved and must remain empty in version 1. Blob bytes never enter an envelope;
 future references will identify data served through Capstan's existing private artifact path.
+
+## Layer 1 polling
+
+An authenticated spoke calls `POST /api/v1/poll` with a JSON object containing:
+
+```json
+{
+  "presence": { "ready_inboxes": ["inbox-a", "inbox-b"] },
+  "outbound": [],
+  "acks": [],
+  "cursor": null
+}
+```
+
+`presence.ready_inboxes` is required and replaces that spoke's routing set on every successful poll.
+`outbound`, `acks`, and `cursor` may be omitted. Each outbound envelope contains `id`, `type`,
+`version`, `from`, `to`, `created_at`, `message_id`, `body`, `refs`, and `signature`. Version 1 requires
+an empty `refs` array. Unsupported versions are rejected with `error.known_version` naming the version
+this server speaks. Local messages are delivered to spokes advertising the destination local part;
+foreign messages are parked for a future relay transport.
+
+The response contains `inbound` and `cursor`. Pending and previously delivered messages are returned in
+ascending `created_at`, then `id`, order until acknowledged or the configured batch limit is reached.
+An ack is effective only for a message addressed to one of the same spoke's currently advertised
+inboxes. Unknown and repeated acks are no-ops.
+
+The cursor is an opaque resumption and observability marker, not a deduplication mechanism. A response
+cursor is the id of the last envelope in that batch, or null for an empty batch. The request cursor is
+recorded on the spoke, but it never suppresses an unacknowledged message; acknowledgements are the
+authoritative deduplication state. Stale, unknown, and malformed marker values have no effect on
+delivery.
+
+`probe_response` in requests and `probe_challenge` in responses are reserved for the Layer 2 probe
+protocol. Layer 1 accepts and ignores `probe_response`, and does not emit `probe_challenge`.
