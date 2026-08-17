@@ -164,9 +164,8 @@ seconds, allowing five missed polls at the expected once-a-minute cadence. A pol
 cutoff remains current; only an earlier poll is stale.
 
 Pending is intentional: a newly registered, actively polling spoke has not proved that it can process
-a challenge, but presenting it as failed would be misleading. This means the first successful poll
-makes a spoke pending, not green as PR5's original acceptance wording states. It becomes green only
-after its first probe passes.
+a challenge, but presenting it as failed would be misleading. The first successful poll makes a spoke
+pending, not green; it becomes green only after its first probe passes.
 
 ### Deployment requirements
 

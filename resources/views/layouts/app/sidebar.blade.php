@@ -17,7 +17,7 @@
                     </flux:sidebar.item>
 
                     @if (\Laravel\Pennant\Feature::active(\App\Features\Postmaster::class))
-                        <flux:sidebar.item :href="route('postmaster.map')" :current="request()->routeIs('postmaster.map')" wire:navigate>
+                        <flux:sidebar.item icon="signal" :href="route('postmaster.map')" :current="request()->routeIs('postmaster.map')" wire:navigate>
                             {{ __('Postmaster') }}
                         </flux:sidebar.item>
                     @endif

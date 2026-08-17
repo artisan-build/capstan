@@ -1,4 +1,4 @@
-<section class="w-full space-y-6">
+<section class="w-full space-y-6" wire:poll.30s>
     <div>
         <flux:heading size="xl">{{ __('Postmaster map') }}</flux:heading>
         <flux:subheading>{{ __('Registered CLI installations and their current routing health.') }}</flux:subheading>
@@ -23,16 +23,10 @@
                             <span
                                 @class([
                                     'mt-1.5 size-2.5 shrink-0 rounded-full ring-4',
-                                    'bg-green-500 ring-green-100 dark:bg-green-400 dark:ring-green-950' => $spoke['status'] === \App\Enums\SpokeMapStatus::Green,
-                                    'bg-red-500 ring-red-100 dark:bg-red-400 dark:ring-red-950' => $spoke['status'] === \App\Enums\SpokeMapStatus::Red,
-                                    'bg-zinc-400 ring-zinc-100 dark:bg-zinc-500 dark:ring-zinc-800' => $spoke['status'] === \App\Enums\SpokeMapStatus::Pending,
+                                    $spoke['status']->dotClasses(),
                                 ])
                                 role="img"
-                                aria-label="{{ match ($spoke['status']) {
-                                    \App\Enums\SpokeMapStatus::Green => __('Online'),
-                                    \App\Enums\SpokeMapStatus::Red => __('Offline'),
-                                    \App\Enums\SpokeMapStatus::Pending => __('Pending first probe'),
-                                } }}"
+                                aria-label="{{ $spoke['status']->label() }}"
                             ></span>
 
                             <div class="min-w-0">
@@ -53,11 +47,7 @@
                                 {{ __('Inboxes: :count', ['count' => $spoke['inboxes_count']]) }}
                                 <span aria-hidden="true">&middot;</span>
                                 {{ __('Probe: :state', [
-                                    'state' => match ($spoke['probe_status']) {
-                                        \App\Enums\SpokeLiveness::Green => __('Passing'),
-                                        \App\Enums\SpokeLiveness::Red => __('Failing'),
-                                        \App\Enums\SpokeLiveness::Unknown => __('Pending'),
-                                    },
+                                    'state' => $spoke['probe_status']->label(),
                                 ]) }}
                             </flux:text>
                         </div>

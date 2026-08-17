@@ -26,6 +26,8 @@ class SpokeMap extends Component
 
     public function render(): View
     {
+        abort_unless(Feature::active(Postmaster::class), 404);
+
         return view('livewire.postmaster.spoke-map', [
             'spokes' => collect($this->spokes()),
         ]);
@@ -55,7 +57,8 @@ class SpokeMap extends Component
             $query->where('user_id', $user->id);
         }
 
-        $staleBefore = now()->subSeconds((int) config('capstan.postmaster.map.stale_after_seconds'));
+        $staleAfter = max(60, (int) config('capstan.postmaster.map.stale_after_seconds', 300));
+        $staleBefore = now()->subSeconds($staleAfter);
 
         return array_values($query->get()
             ->sort(function (Spoke $first, Spoke $second) use ($staleBefore): int {

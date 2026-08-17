@@ -60,6 +60,7 @@ test('the authenticated map page renders registered spoke data', function (): vo
         ->get(route('postmaster.map'))
         ->assertOk()
         ->assertSee($spoke->name)
+        ->assertSeeHtml('wire:poll.30s')
         ->assertSeeHtml('data-status="green"')
         ->assertSeeHtml('data-inbox-count="2"');
 });
@@ -103,6 +104,24 @@ test('the configured staleness boundary is honored', function (): void {
         ->and($states[$atCutoff->id])->toBe(SpokeMapStatus::Green)
         ->and($states[$outside->id])->toBe(SpokeMapStatus::Red);
 });
+
+test('the staleness window has a safe default and minimum', function (array $mapConfig, int $insideAge, int $outsideAge): void {
+    config(['capstan.postmaster.map' => $mapConfig]);
+    $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+    $inside = createMapSpoke($owner, 'safe-window-inside', now()->subSeconds($insideAge), SpokeLiveness::Green);
+    $outside = createMapSpoke($owner, 'safe-window-outside', now()->subSeconds($outsideAge), SpokeLiveness::Green);
+
+    $states = Livewire::actingAs($owner)
+        ->test(SpokeMap::class)
+        ->viewData('spokes')
+        ->mapWithKeys(fn (array $spoke): array => [$spoke['id'] => $spoke['status']]);
+
+    expect($states[$inside->id])->toBe(SpokeMapStatus::Green)
+        ->and($states[$outside->id])->toBe(SpokeMapStatus::Red);
+})->with([
+    'zero is clamped to sixty seconds' => [['stale_after_seconds' => 0], 59, 61],
+    'missing uses the default' => [[], 299, 301],
+]);
 
 test('a member sees only their own spokes', function (): void {
     $member = User::factory()->create();
@@ -157,6 +176,32 @@ test('a disabled postmaster map returns 404 without changing routing state', fun
         DB::table('spoke_inboxes')->count(),
     ])->toBe($before)
         ->and($spoke->fresh())->not->toBeNull();
+});
+
+test('disabling postmaster rejects an existing Livewire snapshot', function (): void {
+    $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+    $spoke = createMapSpoke($owner, 'snapshot-guarded-spoke', now(), SpokeLiveness::Green, 2);
+    $page = $this->actingAs($owner)
+        ->get(route('postmaster.map'))
+        ->assertOk()
+        ->assertSee($spoke->name);
+    $snapshot = htmlspecialchars_decode(
+        (string) str($page->getContent())->betweenFirst('wire:snapshot="', '"'),
+        ENT_QUOTES | ENT_SUBSTITUTE,
+    );
+    config(['capstan.features.postmaster' => false]);
+    Feature::flushCache();
+
+    $this->withHeader('X-Livewire', '1')
+        ->postJson(route('default-livewire.update'), [
+            'components' => [[
+                'snapshot' => $snapshot,
+                'updates' => [],
+                'calls' => [],
+            ]],
+        ])
+        ->assertNotFound()
+        ->assertDontSee($spoke->name);
 });
 
 test('an unauthenticated map request redirects to login', function (): void {
