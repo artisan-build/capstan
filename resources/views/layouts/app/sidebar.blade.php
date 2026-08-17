@@ -16,6 +16,12 @@
                         {{ __('Dashboard') }}
                     </flux:sidebar.item>
 
+                    @if (\Laravel\Pennant\Feature::active(\App\Features\Postmaster::class))
+                        <flux:sidebar.item icon="signal" :href="route('postmaster.map')" :current="request()->routeIs('postmaster.map')" wire:navigate>
+                            {{ __('Postmaster') }}
+                        </flux:sidebar.item>
+                    @endif
+
                     @if (auth()->user()->canIssueInvitations())
                         <flux:sidebar.item icon="layout-grid" :href="route('team.index')" :current="request()->routeIs('team.index')" wire:navigate>
                             {{ __('Team') }}

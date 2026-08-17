@@ -8,6 +8,15 @@ enum SpokeLiveness: string
     case Green = 'green';
     case Red = 'red';
 
+    public function label(): string
+    {
+        return match ($this) {
+            self::Unknown => __('Pending'),
+            self::Green => __('Passing'),
+            self::Red => __('Failing'),
+        };
+    }
+
     /** @return list<string> */
     public static function values(): array
     {
