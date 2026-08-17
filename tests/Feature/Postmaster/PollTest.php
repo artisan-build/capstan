@@ -376,13 +376,38 @@ test('malformed ready inboxes leave the existing routing table unchanged', funct
     expect(Spoke::query()->firstOrFail()->inboxes()->pluck('local_part')->all())->toBe(['valid-inbox']);
 });
 
-test('probe responses are ignored and challenges remain reserved', function (): void {
+test('a poll without a probe response remains compatible', function (): void {
     $user = User::factory()->create();
 
     $this->withToken(spokeToken($user))->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
-        'probe_response' => ['future' => true],
-    ])->assertOk()->assertJsonMissingPath('probe_challenge');
+    ])->assertOk()
+        ->assertJsonPath('inbound', [])
+        ->assertJsonPath('cursor', null);
+});
+
+test('an unknown probe response cannot reject outbound mail or acknowledgements', function (): void {
+    $user = User::factory()->create();
+    $token = spokeToken($user);
+    $challenge = $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => ['sender']],
+    ])->assertOk()->json('probe_challenge');
+    $wireEnvelope = pollWireEnvelope('receiver@'.POLL_SERVER_ID);
+
+    $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => ['sender', 'receiver']],
+        'outbound' => [$wireEnvelope],
+        'acks' => [$wireEnvelope['message_id']],
+        'probe_response' => [
+            'probe_id' => (string) Str::ulid(),
+            'digest' => str_repeat('0', 64),
+        ],
+    ])->assertOk()
+        ->assertJsonPath('inbound', [])
+        ->assertJsonPath('probe_challenge', $challenge);
+
+    expect(Envelope::query()->where('message_id', $wireEnvelope['message_id'])->firstOrFail()->status)->toBe(MessageStatus::Acked)
+        ->and(Spoke::query()->firstOrFail()->inboxes()->orderBy('local_part')->pluck('local_part')->all())->toBe(['receiver', 'sender']);
 });
 
 test('another user advertising a claimed inbox is rejected atomically and receives nothing', function (): void {

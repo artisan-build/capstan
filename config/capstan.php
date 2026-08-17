@@ -21,6 +21,13 @@ return [
             // batch remain eligible for a later poll in deterministic order.
             'max_inbound' => env('CAPSTAN_POSTMASTER_MAX_INBOUND', 50),
         ],
+        'probe' => [
+            // Probes ride normal polls. Interval limits healthy cadence, timeout
+            // drives the sweep, and backoff avoids hammering a failed spoke.
+            'interval_seconds' => env('CAPSTAN_POSTMASTER_PROBE_INTERVAL_SECONDS', 300),
+            'timeout_seconds' => env('CAPSTAN_POSTMASTER_PROBE_TIMEOUT_SECONDS', 900),
+            'backoff_seconds' => env('CAPSTAN_POSTMASTER_PROBE_BACKOFF_SECONDS', 1800),
+        ],
     ],
 
     'artifacts' => [

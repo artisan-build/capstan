@@ -33,7 +33,7 @@ An authenticated spoke calls `POST /api/v1/poll` with a JSON object containing:
 ```
 
 `presence.ready_inboxes` is required and replaces that spoke's routing set on every successful poll.
-`outbound`, `acks`, and `cursor` may be omitted. Each outbound envelope contains `id`, `type`,
+`outbound`, `acks`, `cursor`, and `probe_response` may be omitted. Each outbound envelope contains `id`, `type`,
 `version`, `from`, `to`, `created_at`, `message_id`, `body`, `refs`, and `signature`. Version 1 requires
 an empty `refs` array. Unsupported versions are rejected with `error.known_version` naming the version
 this server speaks. Local messages are delivered to spokes routing for the destination local part;
@@ -95,12 +95,61 @@ recorded on the spoke, but it never suppresses an unacknowledged message; acknow
 authoritative deduplication state. Stale, unknown, and malformed marker values have no effect on
 delivery.
 
+### Synthetic liveness probes
+
+When a spoke is due for a liveness check, its poll response contains a challenge:
+
+```json
+{
+  "probe_challenge": {
+    "probe_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    "nonce": "JqNfS1VK5GQTzJ1VQYjHeYxjJ0X79EmgmMyYaLB6w1A",
+    "algorithm": "sha256"
+  }
+}
+```
+
+The spoke computes the lowercase hexadecimal SHA-256 digest of the nonce and includes it in a later
+poll:
+
+```json
+{
+  "probe_response": {
+    "probe_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    "digest": "70b0c590af60d9a18b18b12f16100a8b52ca83bbf5931da66875dc821f67bb3a"
+  }
+}
+```
+
+A digest, rather than a verbatim echo, demonstrates that the client executed code on the received
+challenge. The server compares it with `hash_equals`. A correct response marks the spoke green; a
+wrong response marks it red. Malformed responses receive a 422 `validation_failed`. Well-formed
+responses for unknown, expired, already answered, or another spoke's probe are ignored so the
+auxiliary probe can never reject that poll's postal exchange.
+
+Until its original deadline, an unanswered challenge is included unchanged in every poll response.
+This at-least-once delivery lets a spoke recover from a lost HTTP response without changing the nonce
+or extending the time available to compute its digest.
+
+`CAPSTAN_POSTMASTER_PROBE_INTERVAL_SECONDS` (default 300 seconds) is the minimum gap between challenges
+for one spoke. `CAPSTAN_POSTMASTER_PROBE_TIMEOUT_SECONDS` (default 900 seconds, minimum 60) is the
+response deadline, and `CAPSTAN_POSTMASTER_PROBE_BACKOFF_SECONDS` (default 1800 seconds) delays the next
+challenge after a failure. An unexpired outstanding challenge suppresses new challenges. Expiry makes
+another challenge eligible, but only the sweep transitions the overdue record to failed.
+
+The scheduler runs `php artisan postmaster:probe-sweep` every minute. It fails overdue unanswered
+probes even when a spoke has stopped polling entirely; checking lazily on the next poll would never
+detect that failure mode. A stale failure is retained in probe history but cannot overwrite a newer
+successful probe. Each transition into red invokes the rebindable `App\Postmaster\ProbeFailureNotifier`
+exactly once. Its default implementation logs a warning, and forks may bind it to email or Slack.
+Notifier exceptions are logged without rolling back probe state or stopping the sweep. Implementations
+must remain out-of-band: never send failure notices over the spoke poll channel whose failure they
+report. While Postmaster is disabled, the sweep voids outstanding challenges so re-enabling cannot
+produce alerts from frozen liveness state.
+
 ### Deployment requirements
 
 Postmaster requires `app.timezone` to be `UTC` (the value shipped in `config/app.php`; do not change it
 in a fork). Envelope timestamps are signed as UTC and stored naively; any other application timezone
 would silently invalidate every signature, so the application refuses to boot with the feature enabled
 under a non-UTC timezone, and the signer refuses to sign or verify.
-
-`probe_response` in requests and `probe_challenge` in responses are reserved for the Layer 2 probe
-protocol. Layer 1 accepts and ignores `probe_response`, and does not emit `probe_challenge`.
