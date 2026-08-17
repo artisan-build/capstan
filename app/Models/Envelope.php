@@ -26,6 +26,7 @@ use stdClass;
  * @property MessageStatus $status
  * @property CarbonImmutable|null $delivered_at
  * @property CarbonImmutable|null $acked_at
+ * @property CarbonImmutable|null $received_at
  * @property CarbonImmutable $created_at
  * @property CarbonImmutable $updated_at
  */
@@ -73,11 +74,17 @@ class Envelope extends Model
             'status' => MessageStatus::class,
             'delivered_at' => 'datetime',
             'acked_at' => 'datetime',
+            'received_at' => 'datetime',
         ];
     }
 
     protected static function booted(): void
     {
+        static::creating(function (Envelope $envelope): void {
+            // Server-assigned delivery priority key; never taken from the wire.
+            $envelope->received_at ??= now();
+        });
+
         static::saving(function (Envelope $envelope): void {
             Address::parse($envelope->from_address);
             $to = Address::parse($envelope->to_address);

@@ -35,6 +35,8 @@ final class EnvelopeSigner
 
     private function key(): string
     {
+        PostmasterClock::assertUtc();
+
         $key = config('capstan.postmaster.signing_key');
 
         if (! is_string($key) || $key === '') {
