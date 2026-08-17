@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Support\EnvelopeSigner;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Laravel\Pennant\Feature;
 
@@ -289,6 +290,7 @@ test('a disabled feature returns not found without postmaster state changes', fu
     ])->assertNotFound()->assertJsonPath('error.code', 'not_found');
 
     expect(Spoke::query()->count())->toBe(0)
+        ->and(Inbox::query()->count())->toBe(0)
         ->and(Envelope::query()->count())->toBe(0)
         ->and(Feature::active(Postmaster::class))->toBeFalse();
 });
@@ -682,4 +684,84 @@ test('revoking a token removes its spoke and routing but not inbox ownership', f
     expect(Spoke::query()->count())->toBe(0)
         ->and(DB::table('spoke_inboxes')->count())->toBe(0)
         ->and(Inbox::query()->where('local_part', 'alice')->value('user_id'))->toBe($user->id);
+});
+
+test('malformed envelope addresses are rejected as validation errors', function (string $field, string $address): void {
+    $user = User::factory()->create();
+    $wireEnvelope = pollWireEnvelope('receiver@'.POLL_SERVER_ID);
+    $wireEnvelope[$field] = $address;
+
+    $this->withToken(spokeToken($user))->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => ['sender']],
+        'outbound' => [$wireEnvelope],
+    ])->assertUnprocessable()
+        ->assertJsonPath('error.code', 'validation_failed')
+        ->assertJsonValidationErrors("outbound.0.$field", 'error.errors');
+
+    expect(Envelope::query()->count())->toBe(0)
+        ->and(Spoke::query()->count())->toBe(0);
+})->with([
+    'from without separator' => ['from', 'sender'],
+    'from with malformed server id' => ['from', 'sender@not-a-server-id'],
+    'from with malformed local part' => ['from', 'Sender!@'.POLL_SERVER_ID],
+    'to without separator' => ['to', 'receiver'],
+    'to with malformed server id' => ['to', 'receiver@not-a-server-id'],
+    'to with malformed local part' => ['to', '-receiver@'.POLL_SERVER_ID],
+]);
+
+test('an outbound entry that is a JSON list is rejected by index', function (): void {
+    $user = User::factory()->create();
+
+    $this->withToken(spokeToken($user))->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => ['sender']],
+        'outbound' => [pollWireEnvelope('receiver@'.POLL_SERVER_ID), ['not', 'an', 'envelope']],
+    ])->assertUnprocessable()
+        ->assertJsonPath('error.code', 'validation_failed')
+        ->assertJsonValidationErrors('outbound.1', 'error.errors');
+
+    expect(Envelope::query()->count())->toBe(0);
+});
+
+test('a parked message for the same local part on another server is neither delivered nor ackable', function (): void {
+    $alice = User::factory()->create();
+    $token = spokeToken($alice);
+    $foreign = pollWireEnvelope('alice@'.POLL_FOREIGN_SERVER_ID, ['from_address' => 'alice@'.POLL_SERVER_ID]);
+    $local = pollWireEnvelope('alice@'.POLL_SERVER_ID, ['from_address' => 'alice@'.POLL_SERVER_ID]);
+
+    $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => ['alice']],
+        'outbound' => [$foreign, $local],
+    ])->assertOk()->assertJsonPath('inbound.*.message_id', [$local['message_id']]);
+
+    $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => ['alice']],
+        'acks' => [$foreign['message_id'], $local['message_id']],
+    ])->assertOk()->assertJsonCount(0, 'inbound');
+
+    $parked = Envelope::query()->where('message_id', $foreign['message_id'])->firstOrFail();
+    expect($parked->status)->toBe(MessageStatus::PendingRelay)
+        ->and($parked->delivered_at)->toBeNull()
+        ->and($parked->acked_at)->toBeNull()
+        ->and(Envelope::query()->where('message_id', $local['message_id'])->firstOrFail()->status)->toBe(MessageStatus::Acked);
+
+    // Even a foreign-addressed message that is somehow pending (a state relay may one day
+    // produce) must stay out of a local inbox: the server-id guard, not just status, holds.
+    $parked->forceFill(['status' => MessageStatus::Pending])->save();
+
+    $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => ['alice']],
+    ])->assertOk()->assertJsonCount(0, 'inbound');
+
+    expect($parked->fresh()?->delivered_at)->toBeNull();
+});
+
+test('over-cap arrays are refused before any per-element validation runs', function (): void {
+    $user = User::factory()->create();
+    Validator::spy();
+
+    $this->withToken(spokeToken($user))->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => array_map(fn (int $i): string => "inbox-$i", range(1, PollController::MAX_READY_INBOXES + 1))],
+    ])->assertUnprocessable()->assertJsonPath('error.code', 'validation_failed');
+
+    Validator::shouldNotHaveReceived('make');
 });

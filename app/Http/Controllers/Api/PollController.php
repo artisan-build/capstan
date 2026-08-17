@@ -189,25 +189,14 @@ class PollController extends Controller
             'cursor' => ['nullable', 'string', 'max:255'],
         ]);
 
-        $validator->after(function ($validator) use ($presence, $rawOutbound, $input): void {
-            if ($presence instanceof stdClass) {
-                $readyInboxes = $presence->ready_inboxes ?? null;
-
-                if (is_array($readyInboxes) && ! array_is_list($readyInboxes)) {
-                    $validator->errors()->add('presence.ready_inboxes', 'The presence.ready_inboxes field must be a JSON array.');
-                }
-            }
-
+        $validator->after(function ($validator) use ($rawOutbound): void {
+            // A JSON list decodes to a PHP array and passes the `array` rule; only objects are envelopes.
             if (is_array($rawOutbound)) {
                 foreach ($rawOutbound as $index => $item) {
                     if (! $item instanceof stdClass) {
                         $validator->errors()->add("outbound.$index", "The outbound.$index field must be a JSON object.");
                     }
                 }
-            }
-
-            if (is_array($input['acks']) && ! array_is_list($input['acks'])) {
-                $validator->errors()->add('acks', 'The acks field must be a JSON array.');
             }
         });
 
