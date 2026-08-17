@@ -10,6 +10,12 @@ return [
     // New hat pattern: add a feature class, a config key here, and a matching .env line.
     'features' => [
         'artifacts' => env('CAPSTAN_FEATURE_ARTIFACTS', false),
+        'postmaster' => env('CAPSTAN_FEATURE_POSTMASTER', false),
+    ],
+
+    'postmaster' => [
+        'server_id' => env('CAPSTAN_SERVER_ID'),
+        'signing_key' => env('CAPSTAN_POSTMASTER_SIGNING_KEY'),
     ],
 
     'artifacts' => [
