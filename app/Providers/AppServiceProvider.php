@@ -3,6 +3,7 @@
 namespace App\Providers;
 
 use App\Http\Middleware\ResolveApiActor;
+use App\Support\ServerIdentity;
 use Carbon\CarbonImmutable;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
@@ -19,7 +20,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->singleton(ServerIdentity::class);
     }
 
     /**
