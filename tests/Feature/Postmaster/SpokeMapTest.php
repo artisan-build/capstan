@@ -228,7 +228,8 @@ test('rendering several routed spokes uses a bounded query count', function (): 
 
     expect($spokes)->toHaveCount(6)
         ->and($spokes->every(fn (array $spoke): bool => $spoke['inboxes_count'] === 2))->toBeTrue()
-        ->and($queryCount)->toBeLessThanOrEqual(3);
+        // Operator onboarding adds one bounded uniqueness read and one device-code insert.
+        ->and($queryCount)->toBeLessThanOrEqual(5);
 });
 
 test('map ordering is deterministic with red spokes first', function (): void {

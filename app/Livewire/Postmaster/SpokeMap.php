@@ -8,6 +8,7 @@ use App\Enums\SpokeMapStatus;
 use App\Features\Postmaster;
 use App\Models\Spoke;
 use App\Models\User;
+use App\Postmaster\OnboardingSnippet;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Contracts\View\View;
@@ -17,19 +18,36 @@ use Livewire\Component;
 
 class SpokeMap extends Component
 {
-    public function mount(): void
+    public ?string $onboardingSnippet = null;
+
+    public function mount(OnboardingSnippet $onboarding): void
     {
-        if (! Feature::active(Postmaster::class)) {
-            abort(404);
+        $this->guardFeature();
+
+        if ($this->canOnboard()) {
+            $this->onboardingSnippet = $onboarding->generate();
         }
+    }
+
+    public function refreshOnboardingSnippet(OnboardingSnippet $onboarding): void
+    {
+        $this->guardFeature();
+        abort_unless($this->canOnboard(), 403);
+
+        $this->onboardingSnippet = $onboarding->generate();
     }
 
     public function render(): View
     {
-        abort_unless(Feature::active(Postmaster::class), 404);
+        $this->guardFeature();
+
+        if (! $this->canOnboard()) {
+            $this->onboardingSnippet = null;
+        }
 
         return view('livewire.postmaster.spoke-map', [
             'spokes' => collect($this->spokes()),
+            'canOnboard' => $this->canOnboard(),
         ]);
     }
 
@@ -107,5 +125,18 @@ class SpokeMap extends Component
     private function statusOrder(SpokeMapStatus $status): int
     {
         return $status === SpokeMapStatus::Red ? 0 : 1;
+    }
+
+    private function canOnboard(): bool
+    {
+        $user = Auth::user();
+
+        return $user instanceof User
+            && in_array($user->org_role, [OrgRole::Owner, OrgRole::Admin], true);
+    }
+
+    private function guardFeature(): void
+    {
+        abort_unless(Feature::active(Postmaster::class), 404);
     }
 }

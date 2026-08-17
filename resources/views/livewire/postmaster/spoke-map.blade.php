@@ -4,6 +4,38 @@
         <flux:subheading>{{ __('Registered CLI installations and their current routing health.') }}</flux:subheading>
     </div>
 
+    @if ($canOnboard && $onboardingSnippet !== null)
+        <div class="space-y-4 rounded-xl border border-zinc-200 bg-zinc-50 p-5 dark:border-zinc-700 dark:bg-zinc-900" data-onboarding-panel>
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                    <flux:heading size="lg">{{ __('Connect a local agent') }}</flux:heading>
+                    <flux:text class="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+                        {{ __('Paste this into a shell within ten minutes. It installs a once-a-minute poll and asks you to authorize the device in your browser.') }}
+                    </flux:text>
+                </div>
+
+                <div class="flex shrink-0 gap-2">
+                    <flux:button
+                        type="button"
+                        size="sm"
+                        x-on:click="navigator.clipboard?.writeText($refs.snippet.textContent)"
+                    >
+                        {{ __('Copy') }}
+                    </flux:button>
+                    <flux:button type="button" size="sm" variant="ghost" wire:click="refreshOnboardingSnippet">
+                        {{ __('New code') }}
+                    </flux:button>
+                </div>
+            </div>
+
+            <pre x-ref="snippet" class="max-h-80 overflow-auto rounded-lg bg-zinc-950 p-4 text-xs leading-5 text-zinc-100" data-onboarding-snippet><code>{{ $onboardingSnippet }}</code></pre>
+
+            <flux:text class="text-sm text-zinc-500 dark:text-zinc-400">
+                {{ __('The pasted code expires after one use. The resulting token is written only to your local Capstan config directory.') }}
+            </flux:text>
+        </div>
+    @endif
+
     @if ($spokes->isEmpty())
         <div class="rounded-xl border border-zinc-200 bg-zinc-50 px-5 py-8 text-center dark:border-zinc-700 dark:bg-zinc-900">
             <flux:text class="text-zinc-500 dark:text-zinc-400">{{ __('No spokes have registered yet.') }}</flux:text>
