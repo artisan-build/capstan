@@ -10,6 +10,8 @@ use App\Models\User;
 use App\Postmaster\OnboardingSnippet;
 use App\Support\ServerIdentity;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\RateLimiter;
 use Laravel\Pennant\Feature;
 use Livewire\Livewire;
 use Symfony\Component\Process\Process;
@@ -19,16 +21,22 @@ const OTHER_ONBOARDING_SERVER_ID = '01ARZ3NDEKTSV4RRFFQ69G5FAW';
 
 beforeEach(function (): void {
     config([
+        'app.key' => 'base64:'.base64_encode(str_repeat('k', 32)),
         'app.name' => 'Capstan',
         'app.url' => 'https://capstan.example',
         'capstan.features.postmaster' => true,
         'capstan.postmaster.server_id' => ONBOARDING_SERVER_ID,
+        'capstan.postmaster.signing_key' => 'onboarding-signing-key-material',
     ]);
     Feature::flushCache();
+    RateLimiter::clear('postmaster-onboarding:127.0.0.1');
     app()->forgetInstance(ServerIdentity::class);
 });
 
 test('the snippet is install specific and contains only an expiring device grant', function (): void {
+    $operator = User::factory()->create(['org_role' => OrgRole::Owner]);
+    $existingToken = $operator->createToken('capstan-cli')->plainTextToken;
+    $existingSecret = explode('|', $existingToken, 2)[1];
     $snippet = app(OnboardingSnippet::class)->generate();
     $device = DeviceCode::query()->sole();
 
@@ -37,7 +45,11 @@ test('the snippet is install specific and contains only an expiring device grant
         ->toContain(escapeshellarg('https://capstan.example/api/v1/poll'))
         ->toContain(escapeshellarg('https://capstan.example/cli/device?user_code='.$device->user_code))
         ->not->toMatch('/\b\d+\|[A-Za-z0-9]{40,}\b/')
-        ->and(DB::table('personal_access_tokens')->count())->toBe(0)
+        ->not->toContain($existingToken)
+        ->not->toContain($existingSecret)
+        ->not->toContain((string) config('app.key'))
+        ->not->toContain((string) config('capstan.postmaster.signing_key'))
+        ->and(DB::table('personal_access_tokens')->count())->toBe(1)
         ->and($device->expires_at->diffInSeconds(now()))->toBeLessThanOrEqual(DeviceCode::LIFETIME_SECONDS)
         ->and($device->expires_at->isFuture())->toBeTrue();
 
@@ -94,7 +106,119 @@ test('the snippet is valid shell with quoted install values and a minute cron', 
     unlink($pollScriptPath);
 });
 
-test('owners and admins can generate the onboarding panel', function (OrgRole $role): void {
+test('dash and zsh send the device exchange as valid JSON to an HTTP endpoint', function (string $shell): void {
+    $directory = sys_get_temp_dir().'/capstan-exchange-'.bin2hex(random_bytes(8));
+    File::makeDirectory($directory);
+    $capture = $directory.'/request.json';
+    $router = $directory.'/router.php';
+    File::put($router, <<<'PHP'
+<?php
+file_put_contents((string) getenv('CAPSTAN_CAPTURE'), file_get_contents('php://input'));
+header('Content-Type: application/json');
+echo '{"token":"fake-token"}';
+PHP);
+    $socket = stream_socket_server('tcp://127.0.0.1:0', $errorCode, $errorMessage);
+    expect($socket)->toBeResource();
+    $address = stream_socket_get_name($socket, false);
+    fclose($socket);
+    expect($address)->toBeString();
+
+    $server = new Process([PHP_BINARY, '-S', $address, $router], $directory, [
+        'CAPSTAN_CAPTURE' => $capture,
+    ]);
+
+    try {
+        $server->start();
+        expect($server->waitUntil(
+            fn (string $type, string $output): bool => str_contains($output, 'Development Server'),
+        ))->toBeTrue();
+        config(['app.url' => 'http://'.$address]);
+        $snippet = app(OnboardingSnippet::class)->generate();
+        $exchange = implode("\n", [
+            onboardingSnippetLine($snippet, 'CAPSTAN_TOKEN_URL='),
+            onboardingSnippetLine($snippet, 'CAPSTAN_DEVICE_CODE='),
+            onboardingSnippetLine($snippet, 'CAPSTAN_BODY='),
+            onboardingSnippetLine($snippet, 'CAPSTAN_TOKEN_RESPONSE='),
+        ]);
+        $process = new Process([$shell, '-c', $exchange]);
+        $process->run();
+
+        expect($process->isSuccessful())->toBeTrue($process->getErrorOutput())
+            ->and(File::exists($capture))->toBeTrue();
+        $body = json_decode(File::get($capture), true, flags: JSON_THROW_ON_ERROR);
+        expect($body)->toHaveKey('device_code')
+            ->and($body['device_code'])->toBeString()
+            ->and(DeviceCode::hash($body['device_code']))->toBe(DeviceCode::query()->sole()->device_code_hash);
+    } finally {
+        $server->stop();
+        File::deleteDirectory($directory);
+    }
+})->with([
+    'dash' => '/bin/dash',
+    'zsh' => '/bin/zsh',
+]);
+
+test('installer failures stay inside the snippet subshell', function (string $shell): void {
+    $snippet = app(OnboardingSnippet::class)->generate();
+    $process = new Process([$shell, '-c', $snippet."\nprintf '%s' caller-survived"], null, [
+        'PATH' => '/capstan-test-no-commands',
+    ]);
+    $process->run();
+
+    expect($process->isSuccessful())->toBeTrue($process->getErrorOutput())
+        ->and($process->getOutput())->toBe('caller-survived');
+})->with([
+    'dash' => '/bin/dash',
+    'zsh' => '/bin/zsh',
+]);
+
+test('an immediate poll failure remains successful for cron retry', function (): void {
+    $snippet = app(OnboardingSnippet::class)->generate();
+    $pollLine = onboardingSnippetLine($snippet, '"$CAPSTAN_POLL_SCRIPT" ||');
+    $process = new Process(['/bin/sh', '-c', implode("\n", [
+        'set -eu',
+        'CAPSTAN_POLL_SCRIPT=/bin/false',
+        $pollLine,
+        "printf '%s' install-continued",
+    ])]);
+    $process->run();
+
+    expect($process->isSuccessful())->toBeTrue($process->getErrorOutput())
+        ->and($process->getOutput())->toBe('install-continued');
+});
+
+test('the cron installer preserves unrelated jobs and replaces its own tagged line once', function (): void {
+    $existing = "MAILTO=ops@example.test\n0 3 * * * /precious-backup.sh\n* * * * * /old-capstan # capstan-postmaster:".ONBOARDING_SERVER_ID."\n";
+    $result = runOnboardingCronInstaller(app(OnboardingSnippet::class)->generate(), 'existing', $existing);
+
+    expect($result['successful'])->toBeTrue($result['error'])
+        ->and($result['state'])->toContain('MAILTO=ops@example.test', '0 3 * * * /precious-backup.sh')
+        ->and(substr_count($result['state'], '# capstan-postmaster:'.ONBOARDING_SERVER_ID))->toBe(1)
+        ->and($result['backup'])->toBe($existing)
+        ->and($result['write_calls'])->toBe(1);
+});
+
+test('the cron installer treats an explicit no-crontab response as an empty crontab', function (): void {
+    $result = runOnboardingCronInstaller(app(OnboardingSnippet::class)->generate(), 'none');
+
+    expect($result['successful'])->toBeTrue($result['error'])
+        ->and($result['state'])->toContain('* * * * *')
+        ->and(substr_count($result['state'], '# capstan-postmaster:'.ONBOARDING_SERVER_ID))->toBe(1)
+        ->and($result['backup'])->toBe('')
+        ->and($result['write_calls'])->toBe(1);
+});
+
+test('the cron installer refuses an unrelated read failure without rewriting', function (): void {
+    $existing = "MAILTO=ops@example.test\n0 3 * * * /precious-backup.sh\n";
+    $result = runOnboardingCronInstaller(app(OnboardingSnippet::class)->generate(), 'failure', $existing);
+
+    expect($result['successful'])->toBeFalse()
+        ->and($result['state'])->toBe($existing)
+        ->and($result['backup'])->toBeNull()
+        ->and($result['write_calls'])->toBe(0);
+});
+
+test('owners and admins can generate the onboarding panel on demand', function (OrgRole $role): void {
     $operator = User::factory()->create(['org_role' => $role]);
 
     $component = Livewire::actingAs($operator)->test(SpokeMap::class);
@@ -102,8 +226,13 @@ test('owners and admins can generate the onboarding panel', function (OrgRole $r
     $component->assertOk()
         ->assertViewHas('canOnboard', true)
         ->assertSeeHtml('data-onboarding-panel')
-        ->assertSeeHtml('data-onboarding-snippet');
+        ->assertDontSeeHtml('data-onboarding-snippet')
+        ->assertSet('onboardingSnippet', null)
+        ->call('generateOnboardingSnippet')
+        ->assertSeeHtml('data-onboarding-snippet')
+        ->assertSeeHtml('data-onboarding-expires-at');
     expect($component->get('onboardingSnippet'))->toBeString()
+        ->and($component->get('onboardingExpiresAt'))->toBeGreaterThan(now()->timestamp)
         ->and(DeviceCode::query()->count())->toBe(1)
         ->and(DB::table('personal_access_tokens')->count())->toBe(0);
 })->with([
@@ -120,7 +249,7 @@ test('members cannot retrieve or generate a snippet', function (): void {
         ->assertViewHas('canOnboard', false)
         ->assertDontSeeHtml('data-onboarding-panel')
         ->assertSet('onboardingSnippet', null)
-        ->call('refreshOnboardingSnippet')
+        ->call('generateOnboardingSnippet')
         ->assertForbidden();
     expect(DeviceCode::query()->count())->toBe(0);
 });
@@ -143,11 +272,13 @@ test('a disabled feature rejects initial and existing component requests without
     config(['capstan.features.postmaster' => true]);
     Feature::flushCache();
     $component = Livewire::actingAs($owner)->test(SpokeMap::class);
+    expect(DeviceCode::query()->count())->toBe(0);
+    $component->call('generateOnboardingSnippet');
     expect(DeviceCode::query()->count())->toBe(1);
 
     config(['capstan.features.postmaster' => false]);
     Feature::flushCache();
-    $component->call('refreshOnboardingSnippet')->assertNotFound();
+    $component->call('generateOnboardingSnippet')->assertNotFound();
     expect(DeviceCode::query()->count())->toBe(1);
 });
 
@@ -156,9 +287,21 @@ test('a role change is enforced before regenerating a snippet', function (): voi
     $component = Livewire::actingAs($admin)->test(SpokeMap::class);
     $admin->forceFill(['org_role' => OrgRole::Member])->save();
 
-    $component->call('refreshOnboardingSnippet')->assertForbidden();
+    $component->call('generateOnboardingSnippet')->assertForbidden();
 
-    expect(DeviceCode::query()->count())->toBe(1);
+    expect(DeviceCode::query()->count())->toBe(0);
+});
+
+test('onboarding generation is limited to fifteen attempts per minute per ip', function (): void {
+    $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+    $component = Livewire::actingAs($owner)->test(SpokeMap::class);
+
+    foreach (range(1, 15) as $attempt) {
+        $component->call('generateOnboardingSnippet')->assertOk();
+    }
+
+    $component->call('generateOnboardingSnippet')->assertStatus(429);
+    expect(DeviceCode::query()->count())->toBe(15);
 });
 
 test('the first poll is pending and the first passing probe turns the same spoke green', function (): void {
@@ -190,3 +333,97 @@ test('the first poll is pending and the first passing probe turns the same spoke
     expect($green->viewData('spokes')->sole()['status'])->toBe(SpokeMapStatus::Green);
     $green->assertSeeHtml('data-status="green"');
 });
+
+function onboardingSnippetLine(string $snippet, string $prefix): string
+{
+    $line = collect(explode("\n", $snippet))
+        ->first(fn (string $line): bool => str_starts_with(ltrim($line), $prefix));
+
+    expect($line)->toBeString();
+
+    return ltrim($line);
+}
+
+function onboardingSnippetSection(string $snippet, string $start, string $end): string
+{
+    $startAt = strpos($snippet, $start);
+    $endAt = strpos($snippet, $end);
+    expect($startAt)->toBeInt()
+        ->and($endAt)->toBeInt();
+
+    return substr($snippet, $startAt, $endAt + strlen($end) - $startAt);
+}
+
+/**
+ * @return array{successful: bool, error: string, state: string, backup: string|null, write_calls: int}
+ */
+function runOnboardingCronInstaller(string $snippet, string $mode, ?string $initial = null): array
+{
+    $directory = sys_get_temp_dir().'/capstan-cron-'.bin2hex(random_bytes(8));
+    $bin = $directory.'/bin';
+    $home = $directory.'/home';
+    $state = $directory.'/crontab';
+    $calls = $directory.'/write-calls';
+    File::makeDirectory($bin, 0700, true);
+    File::makeDirectory($home, 0700, true);
+
+    if ($initial !== null) {
+        File::put($state, $initial);
+    }
+
+    $shim = $bin.'/crontab';
+    File::put($shim, <<<'SH'
+#!/bin/sh
+set -eu
+if [ "${1:-}" = "-l" ]; then
+    case "$CRONTAB_MODE" in
+        existing) [ ! -e "$CRONTAB_STATE" ] || cat "$CRONTAB_STATE"; exit 0 ;;
+        none) printf '%s\n' 'no crontab for test-user' >&2; exit 1 ;;
+        failure) printf '%s\n' 'Operation not permitted' >&2; exit 1 ;;
+    esac
+fi
+printf '%s\n' "$*" >> "$CRONTAB_CALLS"
+if [ "$1" = "-" ]; then
+    cat > "$CRONTAB_STATE"
+else
+    cp "$1" "$CRONTAB_STATE"
+fi
+SH);
+    chmod($shim, 0700);
+
+    $script = implode("\n", [
+        'set -eu',
+        onboardingSnippetLine($snippet, 'CAPSTAN_SERVER_ID='),
+        onboardingSnippetLine($snippet, 'CAPSTAN_HOME='),
+        onboardingSnippetLine($snippet, 'CAPSTAN_CRON_TAG='),
+        onboardingSnippetLine($snippet, 'CAPSTAN_CRON_LINE='),
+        onboardingSnippetLine($snippet, 'CAPSTAN_CRON_READ='),
+        onboardingSnippetLine($snippet, 'CAPSTAN_CRON_ERR='),
+        onboardingSnippetLine($snippet, 'CAPSTAN_CRON_BACKUP='),
+        onboardingSnippetLine($snippet, 'CAPSTAN_CRON_NEW='),
+        'umask 077',
+        'mkdir -p "$CAPSTAN_HOME"',
+        onboardingSnippetSection($snippet, '# CAPSTAN_CRON_INSTALL_BEGIN', '# CAPSTAN_CRON_INSTALL_END'),
+    ]);
+    $process = new Process(['/bin/sh', '-c', $script], null, [
+        'CRONTAB_CALLS' => $calls,
+        'CRONTAB_MODE' => $mode,
+        'CRONTAB_STATE' => $state,
+        'HOME' => $home,
+        'PATH' => $bin.':'.(string) getenv('PATH'),
+    ]);
+    $process->run();
+    $backup = $home.'/.config/capstan/'.ONBOARDING_SERVER_ID.'/crontab.before-capstan';
+    $result = [
+        'successful' => $process->isSuccessful(),
+        'error' => $process->getErrorOutput(),
+        'state' => File::exists($state) ? File::get($state) : '',
+        'backup' => File::exists($backup) ? File::get($backup) : null,
+        'write_calls' => File::exists($calls)
+            ? File::lines($calls)->filter(fn (string $line): bool => trim($line) !== '')->count()
+            : 0,
+    ];
+    File::deleteDirectory($directory);
+
+    return $result;
+}

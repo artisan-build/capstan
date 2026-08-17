@@ -6,6 +6,7 @@ use App\Enums\OrgRole;
 use App\Enums\SpokeLiveness;
 use App\Enums\SpokeMapStatus;
 use App\Features\Postmaster;
+use App\Models\DeviceCode;
 use App\Models\Spoke;
 use App\Models\User;
 use App\Postmaster\OnboardingSnippet;
@@ -13,6 +14,7 @@ use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Contracts\View\View;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\RateLimiter;
 use Laravel\Pennant\Feature;
 use Livewire\Component;
 
@@ -20,21 +22,26 @@ class SpokeMap extends Component
 {
     public ?string $onboardingSnippet = null;
 
-    public function mount(OnboardingSnippet $onboarding): void
+    public ?int $onboardingExpiresAt = null;
+
+    public function mount(): void
     {
         $this->guardFeature();
-
-        if ($this->canOnboard()) {
-            $this->onboardingSnippet = $onboarding->generate();
-        }
     }
 
-    public function refreshOnboardingSnippet(OnboardingSnippet $onboarding): void
+    public function generateOnboardingSnippet(OnboardingSnippet $onboarding): void
     {
         $this->guardFeature();
         abort_unless($this->canOnboard(), 403);
+        abort_unless(RateLimiter::attempt(
+            $this->onboardingRateLimitKey(),
+            15,
+            static fn (): bool => true,
+            60,
+        ), 429);
 
         $this->onboardingSnippet = $onboarding->generate();
+        $this->onboardingExpiresAt = now()->addSeconds(DeviceCode::LIFETIME_SECONDS)->getTimestamp();
     }
 
     public function render(): View
@@ -43,6 +50,7 @@ class SpokeMap extends Component
 
         if (! $this->canOnboard()) {
             $this->onboardingSnippet = null;
+            $this->onboardingExpiresAt = null;
         }
 
         return view('livewire.postmaster.spoke-map', [
@@ -138,5 +146,10 @@ class SpokeMap extends Component
     private function guardFeature(): void
     {
         abort_unless(Feature::active(Postmaster::class), 404);
+    }
+
+    private function onboardingRateLimitKey(): string
+    {
+        return 'postmaster-onboarding:'.(request()->ip() ?: 'unknown');
     }
 }
