@@ -28,6 +28,29 @@ and `brain/ideas/ecosystem/deterministic-server.md` (the slice-1 build spec).
 - command: `composer install --no-interaction`
 - post-install: copy `.env.example` → `.env`; `php artisan key:generate`; touch
   `database/database.sqlite` (SQLite for tests). Confirm during scaffolding.
+- **PHP 8.5 shim (REQUIRED):** the default `php` on PATH is 8.4, but capstan requires `^8.5`. Herd ships
+  8.5.7 at `~/Library/Application Support/Herd/bin/php85` (a.k.a. `Herd/bin/php85`). Create a shim dir with
+  a `php` → `php85` symlink and **prepend it to PATH** in every agent's environment, or `composer install`
+  fails with a misleading "requires php ^8.5". Fold this into each spawned agent's shell setup.
+
+## Process lessons (from the postmaster poll slice, 2026-08-17 — apply on every build)
+- **Gate on BOTH drivers.** `composer ready` is SQLite-only; CI also runs Postgres 16. A Postgres-only bug
+  (`SQLSTATE[25P02]`) turned CI red once and would have again. Run the PG container in the coordinator's own
+  gate check from the outset, not just SQLite.
+- **CI env ≠ dev env.** `/bin/zsh` is absent on `ubuntu-latest`; a shell-portability test that executes
+  under zsh must install it in CI *and* skip gracefully when a shell is genuinely absent (don't delete the
+  coverage). `sh -n` is a *syntax* check and cannot validate runtime shell semantics.
+- **Stage agent briefs INSIDE the worktree.** OpenCode prompts per external directory; a brief living
+  elsewhere costs a permission stall (its TUI never registers idle, so the idle-timer can't detect it).
+- **Mutation testing:** print the mutated line AND confirm the mutation can actually trip the assertion —
+  both a silently-unapplied mutation (green ⇒ false bail) and a mutation that survives for the wrong reason
+  (⇒ false blocking finding) occurred here. Restore `vendor/` after any `pest --mutate` shim (it's
+  gitignored, so `git status` looks clean regardless).
+- **Never merge on a red board, even when you know the cause** (e.g. a GitHub 429 codeload outage) — re-run,
+  don't merge past. Re-verify the gate after rebasing onto a squash-merged base (content merges clean while
+  history diverges — where a silent semantic conflict hides).
+- **Trust the independent implementer's pushback** — it corrected the coordinator's brief twice here and was
+  right both times.
 
 ## Harness map (role -> runtime; decorrelate model lineages)
 - implementer: OpenCode (Solo agent tool — resolve id at spawn via list_agent_tools)
