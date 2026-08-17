@@ -143,6 +143,10 @@ test('an empty app url cannot generate a snippet', function (): void {
 });
 
 test('dash and zsh send the device exchange as valid JSON to an HTTP endpoint', function (string $shell): void {
+    if (! is_executable($shell)) {
+        $this->markTestSkipped("Shell is not installed: {$shell}");
+    }
+
     $directory = sys_get_temp_dir().'/capstan-exchange-'.bin2hex(random_bytes(8));
     File::makeDirectory($directory);
     $capture = $directory.'/request.json';
@@ -195,6 +199,10 @@ PHP);
 ]);
 
 test('installer failures stay inside the snippet subshell', function (string $shell): void {
+    if (! is_executable($shell)) {
+        $this->markTestSkipped("Shell is not installed: {$shell}");
+    }
+
     $snippet = app(OnboardingSnippet::class)->generate();
     $process = new Process([$shell, '-c', $snippet."\nprintf '%s' caller-survived"], null, [
         'PATH' => '/capstan-test-no-commands',
