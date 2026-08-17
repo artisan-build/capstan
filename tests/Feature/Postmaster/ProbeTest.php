@@ -293,6 +293,80 @@ test('a failed spoke observes backoff before another challenge', function (): vo
     expect($this->notifier->notifications)->toHaveCount(1);
 });
 
+test('an expired probe cannot be redeemed with a correct digest', function (): void {
+    config(['capstan.postmaster.probe.timeout_seconds' => 60]);
+    Date::setTestNow('2026-08-17 12:00:00');
+    $user = User::factory()->create();
+    $token = probeToken($user);
+    $challenge = $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+    ])->assertOk()->json('probe_challenge');
+
+    Date::setTestNow('2026-08-17 12:01:01');
+    $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+        'probe_response' => [
+            'probe_id' => $challenge['probe_id'],
+            'digest' => hash('sha256', $challenge['nonce']),
+        ],
+    ])->assertOk();
+
+    $probe = SpokeProbe::query()->firstOrFail();
+    $spoke = Spoke::query()->firstOrFail();
+    expect($probe->status)->toBe(ProbeStatus::Awaiting)
+        ->and($probe->responded_at)->toBeNull()
+        ->and($spoke->probe_status)->toBe(SpokeLiveness::Unknown)
+        ->and($spoke->probe_failed_at)->toBeNull();
+});
+
+test('a red spoke recovers to green after passing a new probe', function (): void {
+    Date::setTestNow('2026-08-17 12:00:00');
+    $user = User::factory()->create();
+    $token = probeToken($user);
+    $failed = $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+    ])->assertOk()->json('probe_challenge');
+
+    Date::setTestNow('2026-08-17 12:00:01');
+    $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+        'probe_response' => [
+            'probe_id' => $failed['probe_id'],
+            'digest' => str_repeat('0', 64),
+        ],
+    ])->assertOk();
+
+    $spoke = Spoke::query()->firstOrFail();
+    expect($spoke->probe_status)->toBe(SpokeLiveness::Red)
+        ->and($spoke->probe_failed_at)->not->toBeNull();
+
+    Date::setTestNow('2026-08-17 12:30:01');
+    $recovery = $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+    ])->assertOk()->json('probe_challenge');
+
+    Date::setTestNow('2026-08-17 12:30:02');
+    $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+        'probe_response' => [
+            'probe_id' => $recovery['probe_id'],
+            'digest' => hash('sha256', $recovery['nonce']),
+        ],
+    ])->assertOk();
+
+    $recoveredProbe = SpokeProbe::query()->where('probe_id', $recovery['probe_id'])->firstOrFail();
+    $spoke->refresh();
+    expect($recoveredProbe->status)->toBe(ProbeStatus::Passed)
+        ->and($recoveredProbe->responded_at?->toDateTimeString())->toBe('2026-08-17 12:30:02')
+        ->and($spoke->probe_status)->toBe(SpokeLiveness::Green)
+        ->and($spoke->probe_failed_at)->toBeNull();
+
+    Date::setTestNow('2026-08-17 12:35:01');
+    $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+    ])->assertOk()->assertJsonPath('probe_challenge.algorithm', 'sha256');
+});
+
 test('an expired challenge does not block a later challenge and only the sweep fails it', function (): void {
     config(['capstan.postmaster.probe.timeout_seconds' => 60]);
     Date::setTestNow('2026-08-17 12:00:00');
