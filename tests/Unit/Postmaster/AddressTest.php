@@ -12,13 +12,16 @@ test('an address round trips exactly and compares its server id case sensitively
         ->and($parsed->format())->toBe($address)
         ->and((string) $parsed)->toBe($address)
         ->and($parsed->isLocal($serverId))->toBeTrue()
+        ->and($parsed->isLocal(strtolower($serverId)))->toBeFalse()
         ->and($parsed->isLocal('01ARZ3NDEKTSV4RRFFQ69G5FAW'))->toBeFalse();
 });
 
 test('make applies the same locked grammar as parse', function (): void {
     $address = Address::make('kb_pool', '01ARZ3NDEKTSV4RRFFQ69G5FAV');
+    $maximumLocalPart = str_repeat('a', 64);
 
-    expect($address->format())->toBe('kb_pool@01ARZ3NDEKTSV4RRFFQ69G5FAV');
+    expect($address->format())->toBe('kb_pool@01ARZ3NDEKTSV4RRFFQ69G5FAV')
+        ->and(Address::parse($maximumLocalPart.'@01ARZ3NDEKTSV4RRFFQ69G5FAV')->localPart)->toBe($maximumLocalPart);
 });
 
 test('malformed addresses are rejected without normalization', function (string $address): void {

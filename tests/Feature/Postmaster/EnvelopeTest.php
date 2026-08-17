@@ -5,6 +5,7 @@ use App\Enums\MessageType;
 use App\Models\Envelope;
 use App\Support\EnvelopeSigner;
 use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 beforeEach(function (): void {
@@ -216,12 +217,22 @@ test('a missing signature is rejected before signing key resolution', function (
 
 test('created at normalization survives database precision loss', function (): void {
     $envelope = postmasterTestEnvelope();
-    $envelope->created_at = now()->utc()->setMicrosecond(654321);
+    $envelope->created_at = '2026-08-17 11:44:44';
     $envelope->signature = app(EnvelopeSigner::class)->sign($envelope);
     $envelope->save();
+
+    if (DB::getDriverName() === 'pgsql') {
+        // Laravel's current timestamps are precision-zero on Postgres. Widen
+        // this transactional test column to exercise the driver's real precision.
+        DB::statement('alter table messages alter column created_at type timestamp(6) without time zone');
+    }
+
+    DB::table('messages')->where('id', $envelope->id)
+        ->update(['created_at' => '2026-08-17 11:44:44.654321']);
+
     $stored = Envelope::query()->findOrFail($envelope->id);
 
-    expect($stored->created_at->micro)->toBe(0)
+    expect($stored->created_at->micro)->toBe(654321)
         ->and(app(EnvelopeSigner::class)->verify($stored))->toBeTrue()
         ->and($stored->signablePayload()['created_at'])->toMatch('/Z$/');
 });
