@@ -376,13 +376,14 @@ test('malformed ready inboxes leave the existing routing table unchanged', funct
     expect(Spoke::query()->firstOrFail()->inboxes()->pluck('local_part')->all())->toBe(['valid-inbox']);
 });
 
-test('probe responses are ignored and challenges remain reserved', function (): void {
+test('a poll without a probe response remains compatible', function (): void {
     $user = User::factory()->create();
 
     $this->withToken(spokeToken($user))->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
-        'probe_response' => ['future' => true],
-    ])->assertOk()->assertJsonMissingPath('probe_challenge');
+    ])->assertOk()
+        ->assertJsonPath('inbound', [])
+        ->assertJsonPath('cursor', null);
 });
 
 test('another user advertising a claimed inbox is rejected atomically and receives nothing', function (): void {

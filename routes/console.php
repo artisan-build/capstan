@@ -9,3 +9,4 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 Schedule::command('capstan:prune-device-codes')->hourly();
+Schedule::command('postmaster:probe-sweep')->everyMinute()->withoutOverlapping();

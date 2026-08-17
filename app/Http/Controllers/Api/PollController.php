@@ -11,7 +11,10 @@ use App\Http\Controllers\Controller;
 use App\Models\Envelope;
 use App\Models\Inbox;
 use App\Models\Spoke;
+use App\Models\SpokeProbe;
 use App\Models\User;
+use App\Postmaster\ProbeFailureNotifier;
+use App\Postmaster\ProbeManager;
 use App\Support\Address;
 use App\Support\EnvelopeSigner;
 use App\Support\ServerIdentity;
@@ -42,8 +45,13 @@ class PollController extends Controller
     /** Bind-parameter defence in depth: never let one statement carry an unbounded IN list. */
     private const int QUERY_CHUNK = 500;
 
-    public function __invoke(Request $request, EnvelopeSigner $signer, ServerIdentity $identity): JsonResponse
-    {
+    public function __invoke(
+        Request $request,
+        EnvelopeSigner $signer,
+        ServerIdentity $identity,
+        ProbeManager $probeManager,
+        ProbeFailureNotifier $probeFailureNotifier,
+    ): JsonResponse {
         if (! Feature::active(Postmaster::class)) {
             return ApiError::notFound();
         }
@@ -96,11 +104,12 @@ class PollController extends Controller
         $serverId = $identity->id();
 
         try {
-            /** @var array{inbound: list<array<string, mixed>>, cursor: string|null} $response */
-            $response = DB::transaction(function () use ($user, $token, $validation, $envelopes, $serverId): array {
+            /** @var array{payload: array{inbound: list<array<string, mixed>>, cursor: string|null, probe_challenge?: array{probe_id: string, nonce: string, algorithm: string}}, failure: array{Spoke, SpokeProbe}|null} $result */
+            $result = DB::transaction(function () use ($user, $token, $validation, $envelopes, $serverId, $probeManager): array {
                 $now = now();
                 $spoke = $this->resolveSpoke($user->id, (int) $token->getKey(), $now);
                 $readyInboxes = array_values(array_unique($validation['ready_inboxes']));
+                $failedProbe = $probeManager->respond($spoke, $validation['probe_response'], $now);
 
                 $this->refreshRouting($spoke, $user->id, $readyInboxes, $validation['cursor'], $now);
                 $this->assertSendersOwned($user->id, $envelopes, $serverId);
@@ -112,26 +121,42 @@ class PollController extends Controller
                 $this->processAcks($user->id, $validation['acks'], $serverId, $now);
                 $inbound = $this->inbound($spoke, $user->id, $serverId);
                 $this->markDelivered($inbound, $now);
+                $challenge = $probeManager->issue($spoke, $now);
 
-                return [
+                $payload = [
                     'inbound' => $inbound->map(fn (Envelope $envelope): array => $this->wireEnvelope($envelope))->values()->all(),
                     'cursor' => $inbound->last()?->id,
+                ];
+
+                if ($challenge !== null) {
+                    $payload['probe_challenge'] = $challenge;
+                }
+
+                return [
+                    'payload' => $payload,
+                    'failure' => $failedProbe === null ? null : [$spoke, $failedProbe],
                 ];
             });
         } catch (ApiErrorException $rejection) {
             return $rejection->toResponse($request);
         }
 
-        return new JsonResponse($response);
+        if ($result['failure'] !== null) {
+            $probeFailureNotifier->notify(...$result['failure']);
+        }
+
+        return new JsonResponse($result['payload']);
     }
 
     /**
-     * @return array{ready_inboxes: list<string>, outbound: list<array<string, mixed>>, acks: list<string>, cursor: string|null}|JsonResponse
+     * @return array{ready_inboxes: list<string>, outbound: list<array<string, mixed>>, acks: list<string>, cursor: string|null, probe_response: array{probe_id: string, digest: string}|null}|JsonResponse
      */
     private function validatePayload(stdClass $payload): array|JsonResponse
     {
         $presence = $payload->presence ?? null;
         $rawOutbound = $payload->outbound ?? [];
+        $hasProbeResponse = property_exists($payload, 'probe_response');
+        $rawProbeResponse = $hasProbeResponse ? $payload->probe_response : null;
         $input = [
             'presence' => $presence instanceof stdClass ? get_object_vars($presence) : $presence,
             'outbound' => is_array($rawOutbound)
@@ -140,6 +165,12 @@ class PollController extends Controller
             'acks' => $payload->acks ?? [],
             'cursor' => $payload->cursor ?? null,
         ];
+
+        if ($hasProbeResponse) {
+            $input['probe_response'] = $rawProbeResponse instanceof stdClass
+                ? get_object_vars($rawProbeResponse)
+                : $rawProbeResponse;
+        }
 
         // Enforce the caps before the wildcard rules below are expanded: per-element
         // validation of an over-sized array is itself a CPU sink worth tens of seconds.
@@ -187,9 +218,12 @@ class PollController extends Controller
             'acks' => ['array', 'max:'.self::MAX_ACKS],
             'acks.*' => ['string', 'max:255'],
             'cursor' => ['nullable', 'string', 'max:255'],
+            'probe_response' => ['sometimes', 'required', 'array'],
+            'probe_response.probe_id' => ['required_with:probe_response', 'string', 'regex:/^[0-9A-HJKMNP-TV-Z]{26}$/'],
+            'probe_response.digest' => ['required_with:probe_response', 'string', 'regex:/^[0-9a-f]{64}$/'],
         ]);
 
-        $validator->after(function ($validator) use ($rawOutbound): void {
+        $validator->after(function ($validator) use ($rawOutbound, $hasProbeResponse, $rawProbeResponse): void {
             // A JSON list decodes to a PHP array and passes the `array` rule; only objects are envelopes.
             if (is_array($rawOutbound)) {
                 foreach ($rawOutbound as $index => $item) {
@@ -198,13 +232,17 @@ class PollController extends Controller
                     }
                 }
             }
+
+            if ($hasProbeResponse && ! $rawProbeResponse instanceof stdClass) {
+                $validator->errors()->add('probe_response', 'The probe_response field must be a JSON object.');
+            }
         });
 
         if ($validator->fails()) {
             return $this->validationError($validator->errors()->toArray());
         }
 
-        /** @var array{presence: array{ready_inboxes: list<string>}, outbound: list<array<string, mixed>>, acks: list<string>, cursor: string|null} $validated */
+        /** @var array{presence: array{ready_inboxes: list<string>}, outbound: list<array<string, mixed>>, acks: list<string>, cursor: string|null, probe_response?: array{probe_id: string, digest: string}} $validated */
         $validated = $validator->validated();
 
         return [
@@ -212,6 +250,7 @@ class PollController extends Controller
             'outbound' => $validated['outbound'],
             'acks' => $validated['acks'],
             'cursor' => $validated['cursor'],
+            'probe_response' => $validated['probe_response'] ?? null,
         ];
     }
 
