@@ -41,6 +41,9 @@ jobs:
           # database: no invitations collision, no stray users.is_admin column.
           php artisan migrate:fresh --force
 
+      - name: Install zsh
+        run: sudo apt-get update && sudo apt-get install -y zsh
+
       - name: Run Pest
         run: php artisan test
 
@@ -97,6 +100,9 @@ jobs:
           DB_DATABASE: testing
           DB_USERNAME: postgres
           DB_PASSWORD: postgres
+
+      - name: Install zsh
+        run: sudo apt-get update && sudo apt-get install -y zsh
 
       - name: Run Pest
         run: php artisan test

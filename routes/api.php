@@ -9,9 +9,11 @@ use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->middleware('throttle:api')->group(function (): void {
     Route::post('cli/device', [DeviceCodeController::class, 'create'])
-        ->middleware('throttle:cli-device');
+        ->middleware('throttle:cli-device')
+        ->name('api.cli.device');
 
-    Route::post('cli/device/token', [DeviceCodeController::class, 'token']);
+    Route::post('cli/device/token', [DeviceCodeController::class, 'token'])
+        ->name('api.cli.device.token');
 
     Route::post('cli/authorize/token', [AuthorizationCodeController::class, 'token'])
         ->middleware('throttle:cli-device');
@@ -20,5 +22,7 @@ Route::prefix('v1')->middleware('throttle:api')->group(function (): void {
 
     Route::post('artifacts', [ArtifactController::class, 'store'])->middleware('capstan.auth');
 
-    Route::post('poll', PollController::class)->middleware('capstan.auth');
+    Route::post('poll', PollController::class)
+        ->middleware('capstan.auth')
+        ->name('api.postmaster.poll');
 });

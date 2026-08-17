@@ -4,6 +4,71 @@
         <flux:subheading>{{ __('Registered CLI installations and their current routing health.') }}</flux:subheading>
     </div>
 
+    @if ($canOnboard)
+        <div class="space-y-4 rounded-xl border border-zinc-200 bg-zinc-50 p-5 dark:border-zinc-700 dark:bg-zinc-900" data-onboarding-panel>
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                    <flux:heading size="lg">{{ __('Connect a local agent') }}</flux:heading>
+                    <flux:text class="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+                        {{ __('Generate a short-lived installer for this server, then paste it into a shell.') }}
+                    </flux:text>
+                </div>
+
+                @if ($onboardingSnippet === null)
+                    <flux:button type="button" size="sm" wire:click="generateOnboardingSnippet" wire:loading.attr="disabled">
+                        {{ __('Generate snippet') }}
+                    </flux:button>
+                @endif
+            </div>
+
+            @if ($onboardingSnippet !== null && $onboardingExpiresAt !== null)
+                <div
+                    class="space-y-4"
+                    data-onboarding-expires-at="{{ $onboardingExpiresAt }}"
+                    x-data="{
+                        copyState: 'idle',
+                        remaining: Math.max(0, {{ $onboardingExpiresAt }} - Math.floor(Date.now() / 1000)),
+                        copySnippet() {
+                            if (! navigator.clipboard) {
+                                this.copyState = 'failed';
+                                return;
+                            }
+
+                            navigator.clipboard.writeText(this.$refs.snippet.textContent)
+                                .then(() => this.copyState = 'copied')
+                                .catch(() => this.copyState = 'failed');
+                        },
+                    }"
+                    x-init="setInterval(() => remaining = Math.max(0, remaining - 1), 1000)"
+                >
+                    <div class="flex flex-wrap items-center gap-2">
+                        <flux:button type="button" size="sm" x-on:click="copySnippet">
+                            {{ __('Copy') }}
+                        </flux:button>
+                        <flux:button type="button" size="sm" variant="ghost" wire:click="generateOnboardingSnippet" wire:loading.attr="disabled">
+                            {{ __('New code') }}
+                        </flux:button>
+                        <flux:text x-show="copyState === 'copied'" x-cloak class="text-sm text-green-600 dark:text-green-400">
+                            {{ __('Copied.') }}
+                        </flux:text>
+                        <flux:text x-show="copyState === 'failed'" x-cloak class="text-sm text-red-600 dark:text-red-400">
+                            {{ __('Copy failed. Select the snippet and copy it manually.') }}
+                        </flux:text>
+                    </div>
+
+                    <pre x-ref="snippet" class="max-h-80 overflow-auto rounded-lg bg-zinc-950 p-4 text-xs leading-5 text-zinc-100" data-onboarding-snippet><code>{{ $onboardingSnippet }}</code></pre>
+
+                    <flux:text class="text-sm text-zinc-500 dark:text-zinc-400">
+                        <span x-show="remaining > 0">{{ __('Expires in') }} <span x-text="remaining"></span> {{ __('seconds.') }}</span>
+                        <span x-show="remaining === 0" x-cloak>{{ __('This code has expired. Generate a new snippet.') }}</span>
+                        {{ __('The resulting token is written only to your local Capstan config directory.') }}
+                    </flux:text>
+                </div>
+            @endif
+
+        </div>
+    @endif
+
     @if ($spokes->isEmpty())
         <div class="rounded-xl border border-zinc-200 bg-zinc-50 px-5 py-8 text-center dark:border-zinc-700 dark:bg-zinc-900">
             <flux:text class="text-zinc-500 dark:text-zinc-400">{{ __('No spokes have registered yet.') }}</flux:text>

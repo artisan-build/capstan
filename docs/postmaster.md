@@ -167,6 +167,47 @@ Pending is intentional: a newly registered, actively polling spoke has not prove
 a challenge, but presenting it as failed would be misleading. The first successful poll makes a spoke
 pending, not green; it becomes green only after its first probe passes.
 
+### Onboarding a spoke
+
+Owners and admins can generate the **Connect a local agent** snippet on demand from the Postmaster map.
+Opening or polling the page does not mint a grant, and generation is limited to 15 attempts per minute
+per source IP. Members can view their own spokes but cannot generate or retrieve onboarding snippets.
+Postmaster's feature flag is checked on the initial page request and every Livewire round-trip;
+disabling it makes both the map and snippet generation return 404 without issuing a device grant.
+
+The snippet contains this install's configured application name, immutable server id, absolute poll and
+device-token URLs, verification URL and user code, a random device code, and the literal once-a-minute
+cron entry. The device and user codes belong to the existing CLI device flow. They expire after ten
+minutes, and the device code can be exchanged only once after a signed-in operator approves the request
+at the verification URL. The snippet never contains a personal access token or any other durable bearer
+credential.
+
+Pasting the snippet requires `curl`, `php`, and `crontab`. It opens the verification URL, waits for
+approval, exchanges the one-time device code, and writes the resulting personal access token to
+`~/.config/capstan/{server-id}/token` with mode 600. It writes a mode-700 poll script beside that file
+and installs a tagged cron entry that runs it every minute. The installer runs in a subshell, so its
+error handling and exits cannot change or close the interactive shell into which it was pasted. Before
+changing cron it saves the readable prior crontab to `crontab.before-capstan`; an unexpected read error
+aborts without rewriting cron. Both the device exchange body and bearer header are supplied to `curl`
+through stdin rather than exposed in the process argument list.
+
+The poll script initially advertises no inboxes. To receive mail, edit
+`~/.config/capstan/{server-id}/inboxes.json` and replace `[]` with a JSON list of local parts, for example
+`["build-agent"]`. The next poll claims those inboxes for the approving user and advertises them on every
+subsequent poll. The poller persists a pending probe response beside the token when needed and returns
+that response without dropping the configured inbox list. The server stores only the SHA-256 hash of a
+pending device code plus its visible user code, status, expiry, and eventual approving user. A
+successful exchange consumes that row and stores the normal Sanctum token metadata and hash; plaintext
+token material is not retained by the server.
+
+The initial poll makes the spoke visible as **Pending**. The next poll returns the first challenge's
+correct digest and makes it **Green**. A stale poller or a failed probe is **Red**.
+
+Treat a copied snippet as sensitive until its ten-minute device grant expires or is consumed. If it
+leaks before approval, do not approve it; generate a new snippet and let the old code expire. If it
+leaks after approval or may have been exchanged, revoke the resulting `capstan-cli` token under token
+settings, remove the local token file and cron entry, then generate a fresh snippet.
+
 ### Deployment requirements
 
 Postmaster requires `app.timezone` to be `UTC` (the value shipped in `config/app.php`; do not change it
