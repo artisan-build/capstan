@@ -106,6 +106,42 @@ test('the snippet is valid shell with quoted install values and a minute cron', 
     unlink($pollScriptPath);
 });
 
+test('the snippet pins local secret permissions and keeps the bearer out of curl argv', function (): void {
+    $snippet = app(OnboardingSnippet::class)->generate();
+    $pollScript = onboardingPollScript($snippet);
+    $bearerLine = onboardingSnippetLine($pollScript, 'CAPSTAN_RESPONSE=');
+    [$curlConfig, $curlArguments] = explode('| curl ', $bearerLine, 2);
+
+    expect($snippet)
+        ->toContain("\nset -eu\n")
+        ->toContain("\numask 077\n")
+        ->toContain('chmod 600 "$CAPSTAN_TOKEN_FILE"')
+        ->toContain('chmod 700 "$CAPSTAN_POLL_SCRIPT"')
+        ->toContain('chmod 600 "$CAPSTAN_INBOX_FILE"')
+        ->toContain('unset CAPSTAN_TOKEN CAPSTAN_TOKEN_RESPONSE CAPSTAN_DEVICE_CODE CAPSTAN_BODY')
+        ->and($curlConfig)->toContain('Authorization: Bearer')
+        ->and($curlArguments)->toContain('--config -')
+        ->not->toContain('Authorization: Bearer');
+});
+
+test('a trailing slash in the app url does not duplicate the route separator', function (): void {
+    config(['app.url' => 'https://capstan.example/']);
+
+    $snippet = app(OnboardingSnippet::class)->generate();
+
+    expect($snippet)
+        ->toContain(escapeshellarg('https://capstan.example/api/v1/poll'))
+        ->not->toContain('https://capstan.example//api/v1/poll');
+});
+
+test('an empty app url cannot generate a snippet', function (): void {
+    config(['app.url' => '']);
+
+    expect(fn (): string => app(OnboardingSnippet::class)->generate())
+        ->toThrow(RuntimeException::class);
+    expect(DeviceCode::query()->count())->toBe(0);
+});
+
 test('dash and zsh send the device exchange as valid JSON to an HTTP endpoint', function (string $shell): void {
     $directory = sys_get_temp_dir().'/capstan-exchange-'.bin2hex(random_bytes(8));
     File::makeDirectory($directory);
@@ -292,6 +328,22 @@ test('a role change is enforced before regenerating a snippet', function (): voi
     expect(DeviceCode::query()->count())->toBe(0);
 });
 
+test('demoting an admin clears a live snippet from the next snapshot', function (): void {
+    $admin = User::factory()->create(['org_role' => OrgRole::Admin]);
+    $component = Livewire::actingAs($admin)
+        ->test(SpokeMap::class)
+        ->call('generateOnboardingSnippet');
+
+    expect($component->get('onboardingSnippet'))->toBeString()
+        ->and($component->get('onboardingExpiresAt'))->toBeInt();
+
+    $admin->forceFill(['org_role' => OrgRole::Member])->save();
+
+    $component->call('$refresh')
+        ->assertSet('onboardingSnippet', null)
+        ->assertSet('onboardingExpiresAt', null);
+});
+
 test('onboarding generation is limited to fifteen attempts per minute per ip', function (): void {
     $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
     $component = Livewire::actingAs($owner)->test(SpokeMap::class);
@@ -352,6 +404,27 @@ function onboardingSnippetSection(string $snippet, string $start, string $end): 
         ->and($endAt)->toBeInt();
 
     return substr($snippet, $startAt, $endAt + strlen($end) - $startAt);
+}
+
+function onboardingPollScript(string $snippet): string
+{
+    $path = tempnam(sys_get_temp_dir(), 'capstan-poll-');
+    expect($path)->toBeString();
+    $writerNeedle = "\nprintf '%s\\n' '#!/bin/sh'";
+    $writerStart = strpos($snippet, $writerNeedle);
+    $writerSuffix = ' > "$CAPSTAN_POLL_SCRIPT"';
+    expect($writerStart)->toBeInt();
+    $writerStart++;
+    $writerEnd = strpos($snippet, $writerSuffix, $writerStart);
+    expect($writerEnd)->toBeInt();
+    $writer = substr($snippet, $writerStart, $writerEnd + strlen($writerSuffix) - $writerStart);
+    $process = new Process(['/bin/sh', '-c', $writer], null, ['CAPSTAN_POLL_SCRIPT' => $path]);
+    $process->run();
+    expect($process->isSuccessful())->toBeTrue($process->getErrorOutput());
+    $pollScript = File::get($path);
+    unlink($path);
+
+    return $pollScript;
 }
 
 /**
