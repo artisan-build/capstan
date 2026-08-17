@@ -9,7 +9,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create('server_identity', function (Blueprint $table): void {
-            $table->id();
+            $table->unsignedTinyInteger('id')->primary();
             $table->string('server_id', 26)->unique();
             $table->timestamps();
         });

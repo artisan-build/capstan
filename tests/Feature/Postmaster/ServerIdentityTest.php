@@ -14,7 +14,7 @@ test('server identity is minted once and memoized through the container', functi
     $second = app(ServerIdentity::class)->id();
 
     expect($first)->toBe($second)
-        ->toMatch('/^[0-9A-HJKMNP-TV-Z]{26}$/')
+        ->toMatch('/^[0-9A-HJKMNP-TV-Z]{26}\z/')
         ->and(app(ServerIdentity::class))->toBe($resolver)
         ->and(DB::table('server_identity')->count())->toBe(1)
         ->and(DB::table('server_identity')->value('server_id'))->toBe($first);
@@ -74,4 +74,5 @@ test('malformed configured identities fail closed', function (string $serverId):
     'too short' => '01ARZ3NDEKTSV4RRFFQ69G5FA',
     'forbidden Crockford character' => '01ARZ3NDEKTSV4RRFFQ69G5FAI',
     'surrounding whitespace' => ' 01ARZ3NDEKTSV4RRFFQ69G5FAV',
+    'trailing newline' => "01ARZ3NDEKTSV4RRFFQ69G5FAV\n",
 ]);

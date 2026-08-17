@@ -43,7 +43,8 @@ test('an envelope round trips with enum and JSON casts and synchronized routing 
         ->and($stored->to_address)->toBe($envelope->to_address)
         ->and($stored->to_local_part)->toBe('inbox.primary')
         ->and($stored->to_server_id)->toBe('01ARZ3NDEKTSV4RRFFQ69G5FAV')
-        ->and($stored->body)->toBe($envelope->body)
+        ->and($stored->body)->toEqual($envelope->body)
+        ->and($stored->body)->toBeInstanceOf(stdClass::class)
         ->and($stored->refs)->toBe([])
         ->and($stored->message_id)->toBe($envelope->message_id)
         ->and($stored->signature)->toBe($envelope->signature)
@@ -99,6 +100,16 @@ test('version one refuses nonempty reserved refs', function (): void {
     expect(fn (): bool => $envelope->save())->toThrow(InvalidArgumentException::class);
 });
 
+test('saving rejects malformed envelope addresses', function (array $overrides): void {
+    $envelope = postmasterTestEnvelope($overrides);
+
+    expect(fn (): bool => $envelope->save())->toThrow(InvalidArgumentException::class);
+})->with([
+    'malformed from address' => [['from_address' => 'sender-without-server']],
+    'malformed to address' => [['to_address' => 'inbox-without-server']],
+    'newline-tainted address' => [['to_address' => "inbox@01ARZ3NDEKTSV4RRFFQ69G5FAV\n"]],
+]);
+
 test('a correct lowercase hexadecimal HMAC verifies', function (): void {
     $envelope = postmasterTestEnvelope();
 
@@ -131,7 +142,12 @@ test('mutating any signable envelope field invalidates its HMAC', function (): v
         },
         'nested body' => function (Envelope $envelope): void {
             $body = $envelope->body;
-            $body['nested']['count'] = 2;
+
+            if (! $body instanceof stdClass || ! $body->nested instanceof stdClass) {
+                throw new LogicException('The test envelope body did not retain its object shape.');
+            }
+
+            $body->nested->count = 2;
             $envelope->body = $body;
         },
         'refs' => function (Envelope $envelope): void {
@@ -156,6 +172,17 @@ test('reordering equivalent nested body keys does not invalidate its HMAC', func
     expect(app(EnvelopeSigner::class)->verify($envelope))->toBeTrue();
 });
 
+test('list and numeric-keyed object bodies cannot collide', function (): void {
+    $list = postmasterTestEnvelope(['body' => ['x', 'y']]);
+    $object = postmasterTestEnvelope(['body' => ['1' => 'y', '0' => 'x']]);
+
+    expect($list->signature)->not->toBe($object->signature);
+
+    $object->signature = $list->signature;
+
+    expect(app(EnvelopeSigner::class)->verify($object))->toBeFalse();
+});
+
 test('signing and verification fail closed without a key', function (?string $key): void {
     $envelope = postmasterTestEnvelope();
     config(['capstan.postmaster.signing_key' => $key]);
@@ -167,13 +194,22 @@ test('signing and verification fail closed without a key', function (?string $ke
     'empty' => '',
 ]);
 
-test('wrong signatures of equal or different length fail without error', function (): void {
+test('wrong or missing signatures fail without error', function (mixed $signature): void {
     $envelope = postmasterTestEnvelope();
-    $envelope->signature = str_repeat('0', 64);
+    $envelope->signature = $signature;
 
     expect(app(EnvelopeSigner::class)->verify($envelope))->toBeFalse();
+})->with([
+    'wrong signature of equal length' => str_repeat('0', 64),
+    'wrong signature of different length' => 'short',
+    'empty signature' => '',
+    'null signature' => null,
+]);
 
-    $envelope->signature = 'short';
+test('a missing signature is rejected before signing key resolution', function (): void {
+    $envelope = postmasterTestEnvelope();
+    $envelope->signature = null;
+    config(['capstan.postmaster.signing_key' => null]);
 
     expect(app(EnvelopeSigner::class)->verify($envelope))->toBeFalse();
 });

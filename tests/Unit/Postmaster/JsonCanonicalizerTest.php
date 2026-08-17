@@ -44,6 +44,18 @@ test('object keys sort by UTF-16 code units rather than UTF-8 bytes', function (
     ]))->toBe('{"'.$astral.'":1,"'.$replacement.'":2}');
 });
 
+test('JSON objects and arrays remain distinct including empty and numeric-keyed values', function (): void {
+    $numericObject = new stdClass;
+    $numericObject->{'0'} = 'x';
+
+    expect(JsonCanonicalizer::encode(['body' => $numericObject]))
+        ->not->toBe(JsonCanonicalizer::encode(['body' => ['x']]))
+        ->and(JsonCanonicalizer::encode(['body' => new stdClass]))->toBe('{"body":{}}')
+        ->and(JsonCanonicalizer::encode(['body' => []]))->toBe('{"body":[]}')
+        ->and(JsonCanonicalizer::encode(['body' => ['1' => 'y', '0' => 'x']]))
+        ->toBe('{"body":{"0":"x","1":"y"}}');
+});
+
 test('floating-point values are rejected at every nesting depth', function (): void {
     expect(fn (): string => JsonCanonicalizer::encode([
         'outer' => ['list' => [1, 1.5]],

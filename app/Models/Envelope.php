@@ -9,6 +9,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Model;
 use InvalidArgumentException;
 use LogicException;
+use stdClass;
 
 /**
  * @property string $id
@@ -18,7 +19,7 @@ use LogicException;
  * @property string $to_address
  * @property string $to_local_part
  * @property string $to_server_id
- * @property array<array-key, mixed> $body
+ * @property array<int, mixed>|stdClass $body
  * @property array<array-key, mixed> $refs
  * @property string $message_id
  * @property string $signature
@@ -67,7 +68,7 @@ class Envelope extends Model
         return [
             'type' => MessageType::class,
             'version' => 'integer',
-            'body' => 'array',
+            'body' => 'object',
             'refs' => 'array',
             'status' => MessageStatus::class,
             'delivered_at' => 'datetime',
@@ -109,13 +110,14 @@ class Envelope extends Model
      *     to: string,
      *     created_at: string,
      *     message_id: string,
-     *     body: array<array-key, mixed>,
-     *     refs: array<array-key, mixed>
+     *     body: array<int, mixed>|stdClass,
+     *     refs: list<mixed>
      * }
      */
     public function signablePayload(): array
     {
         $createdAt = $this->getAttribute('created_at');
+        $body = $this->body;
 
         if (! $createdAt instanceof \DateTimeInterface) {
             throw new LogicException('An envelope must have a creation time before it can be signed.');
@@ -129,8 +131,8 @@ class Envelope extends Model
             'to' => $this->to_address,
             'created_at' => CarbonImmutable::instance($createdAt)->utc()->format('Y-m-d\TH:i:s\Z'),
             'message_id' => $this->message_id,
-            'body' => $this->body,
-            'refs' => $this->refs,
+            'body' => $body === [] ? new stdClass : $body,
+            'refs' => array_values($this->refs),
         ];
     }
 }

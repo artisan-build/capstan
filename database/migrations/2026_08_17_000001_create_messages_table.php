@@ -17,7 +17,7 @@ return new class extends Migration
             $table->string('to_local_part', 64);
             $table->string('to_server_id', 26);
             $table->json('body');
-            $table->json('refs')->default('[]');
+            $table->json('refs');
             $table->string('message_id')->unique();
             $table->string('signature', 64);
             $table->string('status')->default('pending');

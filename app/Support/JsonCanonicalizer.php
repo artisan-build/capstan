@@ -4,56 +4,74 @@ namespace App\Support;
 
 use InvalidArgumentException;
 use JsonException;
+use stdClass;
 
 /**
  * RFC 8785 canonical JSON restricted to values without floating-point numbers.
  */
 final class JsonCanonicalizer
 {
+    private const int JSON_FLAGS = JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE;
+
     /**
-     * @param  array<array-key, mixed>  $value
+     * @param  array<array-key, mixed>|stdClass  $value
      *
      * @throws JsonException
      */
-    public static function encode(array $value): string
+    public static function encode(array|stdClass $value): string
     {
-        return json_encode(
-            self::canonicalize($value),
-            JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE,
-        );
+        return self::encodeValue($value);
     }
 
-    private static function canonicalize(mixed $value): mixed
+    private static function encodeValue(mixed $value): string
     {
         if (is_float($value)) {
             throw new InvalidArgumentException('Canonical postmaster JSON does not support floating-point numbers.');
         }
 
-        if (! is_array($value)) {
-            if ($value === null || is_string($value) || is_int($value) || is_bool($value)) {
-                return $value;
+        if ($value instanceof stdClass) {
+            return self::encodeObject(get_object_vars($value));
+        }
+
+        if (is_array($value)) {
+            if (array_is_list($value)) {
+                return '['.implode(',', array_map(self::encodeValue(...), $value)).']';
             }
 
-            throw new InvalidArgumentException('Canonical postmaster JSON contains an unsupported value.');
+            return self::encodeObject($value);
         }
 
-        if (array_is_list($value)) {
-            return array_map(self::canonicalize(...), $value);
+        if ($value === null || is_string($value) || is_int($value) || is_bool($value)) {
+            return json_encode($value, self::JSON_FLAGS);
         }
 
-        $canonical = [];
+        throw new InvalidArgumentException('Canonical postmaster JSON contains an unsupported value.');
+    }
+
+    /**
+     * @param  array<array-key, mixed>  $value
+     */
+    private static function encodeObject(array $value): string
+    {
+        /** @var list<array{key: string, value: mixed}> $properties */
+        $properties = [];
 
         foreach ($value as $key => $item) {
-            $canonical[(string) $key] = self::canonicalize($item);
+            $properties[] = ['key' => (string) $key, 'value' => $item];
         }
 
-        uksort($canonical, static function (int|string $left, int|string $right): int {
-            $leftUtf16 = mb_convert_encoding((string) $left, 'UTF-16BE', 'UTF-8');
-            $rightUtf16 = mb_convert_encoding((string) $right, 'UTF-16BE', 'UTF-8');
+        usort($properties, static function (array $left, array $right): int {
+            $leftUtf16 = mb_convert_encoding($left['key'], 'UTF-16BE', 'UTF-8');
+            $rightUtf16 = mb_convert_encoding($right['key'], 'UTF-16BE', 'UTF-8');
 
             return strcmp($leftUtf16, $rightUtf16);
         });
 
-        return $canonical;
+        $encoded = array_map(
+            static fn (array $property): string => json_encode($property['key'], self::JSON_FLAGS).':'.self::encodeValue($property['value']),
+            $properties,
+        );
+
+        return '{'.implode(',', $encoded).'}';
     }
 }

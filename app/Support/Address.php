@@ -6,7 +6,7 @@ use InvalidArgumentException;
 
 final readonly class Address
 {
-    private const string LOCAL_PART_PATTERN = '/^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$/';
+    private const string LOCAL_PART_PATTERN = '/^[a-z0-9]([a-z0-9._-]*[a-z0-9])?\z/';
 
     private function __construct(
         public string $localPart,

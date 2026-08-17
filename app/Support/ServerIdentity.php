@@ -2,7 +2,6 @@
 
 namespace App\Support;
 
-use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
@@ -10,7 +9,7 @@ use RuntimeException;
 
 class ServerIdentity
 {
-    private const string SERVER_ID_PATTERN = '/^[0-9A-HJKMNP-TV-Z]{26}$/';
+    private const string SERVER_ID_PATTERN = '/^[0-9A-HJKMNP-TV-Z]{26}\z/';
 
     private ?string $resolvedId = null;
 
@@ -39,24 +38,20 @@ class ServerIdentity
         $candidate = (string) Str::ulid();
         $now = now();
 
-        try {
-            DB::table('server_identity')->insert([
-                'id' => 1,
-                'server_id' => $candidate,
-                'created_at' => $now,
-                'updated_at' => $now,
-            ]);
+        DB::table('server_identity')->insertOrIgnore([
+            'id' => 1,
+            'server_id' => $candidate,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
 
-            return $this->resolvedId = $candidate;
-        } catch (UniqueConstraintViolationException $exception) {
-            $stored = $this->existingId();
+        $stored = $this->existingId();
 
-            if ($stored === null) {
-                throw $exception;
-            }
-
-            return $this->resolvedId = $stored;
+        if ($stored === null) {
+            throw new RuntimeException('The Capstan server id could not be minted.');
         }
+
+        return $this->resolvedId = $stored;
     }
 
     public static function isValidId(string $serverId): bool

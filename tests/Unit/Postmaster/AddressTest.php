@@ -39,5 +39,7 @@ test('malformed addresses are rejected without normalization', function (string 
     'trailing underscore' => 'inbox_@01ARZ3NDEKTSV4RRFFQ69G5FAV',
     'leading whitespace' => ' inbox@01ARZ3NDEKTSV4RRFFQ69G5FAV',
     'trailing whitespace' => 'inbox@01ARZ3NDEKTSV4RRFFQ69G5FAV ',
+    'newline in local part' => "inbox\n@01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    'newline after server' => "inbox@01ARZ3NDEKTSV4RRFFQ69G5FAV\n",
     'lowercase server' => 'inbox@01arz3ndektsv4rrffq69g5fav',
 ]);
