@@ -8,16 +8,16 @@
     "packages": [
         {
             "name": "artisan-build/built-for-cloud",
-            "version": "v0.3.1",
+            "version": "v0.3.2",
             "source": {
                 "type": "git",
                 "url": "https://github.com/artisan-build/built-for-cloud.git",
-                "reference": "be58e4bf798cd3735eb8c9786b3346f25a624bcc"
+                "reference": "64b12080721277b75713a27f232a23403f4b5c22"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/artisan-build/built-for-cloud/zipball/be58e4bf798cd3735eb8c9786b3346f25a624bcc",
-                "reference": "be58e4bf798cd3735eb8c9786b3346f25a624bcc",
+                "url": "https://api.github.com/repos/artisan-build/built-for-cloud/zipball/64b12080721277b75713a27f232a23403f4b5c22",
+                "reference": "64b12080721277b75713a27f232a23403f4b5c22",
                 "shasum": ""
             },
             "require": {
@@ -62,9 +62,9 @@
             ],
             "support": {
                 "issues": "https://github.com/artisan-build/built-for-cloud/issues",
-                "source": "https://github.com/artisan-build/built-for-cloud/tree/v0.3.1"
+                "source": "https://github.com/artisan-build/built-for-cloud/tree/v0.3.2"
             },
-            "time": "2026-08-13T11:53:54+00:00"
+            "time": "2026-08-21T10:15:21+00:00"
         },
         {
             "name": "aws/aws-crt-php",
