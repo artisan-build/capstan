@@ -6,7 +6,7 @@ artifact sharing, primitive handoffs, an org knowledge base, cadence-driven post
 role-addressed collaboration.
 
 **Status:** pre-launch, greenfield. First slice = the **gated-artifact host** (safe sharing of rich,
-AI-generated HTML). Private source repo.
+AI-generated HTML). Public source, MIT licensed.
 
 ## Design of record
 
@@ -28,3 +28,7 @@ The architecture and every ratified decision live in the **brain** metaproject:
 ## Workflow
 
 Feature builds: see `.solo/workflow.md` and the `multi-agent-build` skill.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
