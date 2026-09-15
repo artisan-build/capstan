@@ -12,7 +12,7 @@ return new class extends Migration
         // stops advertising it so pending mail can never be captured by a later claimant.
         Schema::create('inboxes', function (Blueprint $table): void {
             $table->id();
-            $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+            $table->string('actor_id', 64)->index();
             $table->string('local_part', 64)->unique();
             $table->timestamps();
         });

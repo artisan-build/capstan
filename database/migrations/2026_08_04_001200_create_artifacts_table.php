@@ -13,7 +13,7 @@ return new class extends Migration
     {
         Schema::create('artifacts', function (Blueprint $table) {
             $table->uuid('id')->primary();
-            $table->foreignId('author_id')->nullable()->constrained('users')->nullOnDelete();
+            $table->string('actor_id', 64);
             $table->string('visibility');
             $table->timestamp('expires_at')->nullable();
             $table->string('content_type');
@@ -22,7 +22,7 @@ return new class extends Migration
             $table->string('storage_key');
             $table->timestamps();
 
-            $table->index(['author_id', 'created_at']);
+            $table->index(['actor_id', 'created_at']);
             $table->index(['visibility', 'expires_at']);
             $table->index('content_hash');
         });

@@ -36,14 +36,6 @@ class Team extends Model
     }
 
     /**
-     * @return BelongsToMany<User, $this>
-     */
-    public function users(): BelongsToMany
-    {
-        return $this->belongsToMany(User::class)->withTimestamps();
-    }
-
-    /**
      * @return BelongsToMany<Artifact, $this>
      */
     public function artifacts(): BelongsToMany

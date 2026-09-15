@@ -2,11 +2,13 @@
 
 namespace App\Providers;
 
-use App\Http\Middleware\ResolveApiActor;
 use App\Postmaster\LogProbeFailureNotifier;
 use App\Postmaster\ProbeFailureNotifier;
 use App\Support\PostmasterClock;
-use App\Support\ServerIdentity;
+use ArtisanBuild\BuiltForCloud\Contracts\IdentityContext;
+use ArtisanBuild\BuiltForCloud\DomainIdentityContext;
+use ArtisanBuild\BuiltForCloud\InstallationAuthority;
+use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
@@ -23,8 +25,14 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        $this->app->singleton(ServerIdentity::class);
         $this->app->bind(ProbeFailureNotifier::class, LogProbeFailureNotifier::class);
+        $this->app->bind(IdentityContext::class, function (): DomainIdentityContext {
+            $user = auth()->user();
+
+            abort_unless($user instanceof User, 401);
+
+            return DomainIdentityContext::forUser($user, InstallationAuthority::current());
+        });
     }
 
     /**
@@ -62,18 +70,8 @@ class AppServiceProvider extends ServiceProvider
             : null,
         );
 
-        RateLimiter::for('cli-device', fn (Request $request): Limit => Limit::perMinute(15)->by($request->ip() ?: 'unknown'));
-
-        RateLimiter::for('cli-verify', function (Request $request): Limit {
-            $user = $request->user();
-
-            return Limit::perMinute(10)->by($user?->getAuthIdentifier() ?? $request->ip() ?? 'unknown');
-        });
-
         RateLimiter::for('api', function (Request $request): Limit {
-            $actor = ResolveApiActor::actor($request);
-
-            return Limit::perMinute(60)->by($actor?->userId !== null ? 'user:'.$actor->userId : 'ip:'.($request->ip() ?: 'unknown'));
+            return Limit::perMinute(60)->by($request->ip() ?: 'unknown');
         });
     }
 }

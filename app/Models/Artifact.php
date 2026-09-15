@@ -8,14 +8,13 @@ use Illuminate\Database\Eloquent\Attributes\UseFactory;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Storage;
 
 /**
  * @property string $id
- * @property int|null $author_id
+ * @property string $actor_id
  * @property ArtifactVisibility $visibility
  * @property Carbon|null $expires_at
  * @property string $content_type
@@ -32,7 +31,7 @@ class Artifact extends Model
     use HasUuids;
 
     protected $fillable = [
-        'author_id',
+        'actor_id',
         'visibility',
         'expires_at',
         'content_type',
@@ -69,14 +68,6 @@ class Artifact extends Model
         }
 
         return [$contentHash, $storageKey];
-    }
-
-    /**
-     * @return BelongsTo<User, $this>
-     */
-    public function author(): BelongsTo
-    {
-        return $this->belongsTo(User::class, 'author_id');
     }
 
     /**

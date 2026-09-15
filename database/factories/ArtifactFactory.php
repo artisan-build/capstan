@@ -4,7 +4,6 @@ namespace Database\Factories;
 
 use App\Enums\ArtifactVisibility;
 use App\Models\Artifact;
-use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 /**
@@ -18,7 +17,7 @@ class ArtifactFactory extends Factory
         $contentHash = hash('sha256', $content);
 
         return [
-            'author_id' => User::factory(),
+            'actor_id' => (string) fake()->uuid(),
             'visibility' => ArtifactVisibility::OrgAuth,
             'expires_at' => null,
             'content_type' => 'text/html',

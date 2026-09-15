@@ -22,11 +22,9 @@
                         </flux:sidebar.item>
                     @endif
 
-                    @if (auth()->user()->canIssueInvitations())
-                        <flux:sidebar.item icon="layout-grid" :href="route('team.index')" :current="request()->routeIs('team.index')" wire:navigate>
-                            {{ __('Team') }}
-                        </flux:sidebar.item>
-                    @endif
+                    <flux:sidebar.item icon="layout-grid" href="/bfc/ui">
+                        {{ __('Account') }}
+                    </flux:sidebar.item>
                 </flux:sidebar.group>
             </flux:sidebar.nav>
 
@@ -53,7 +51,7 @@
 
             <flux:dropdown position="top" align="end">
                 <flux:profile
-                    :initials="auth()->user()->initials()"
+                    :initials="str(auth()->user()->name)->substr(0, 2)->upper()"
                     icon-trailing="chevron-down"
                 />
 
@@ -63,7 +61,7 @@
                             <div class="flex items-center gap-2 px-1 py-1.5 text-start text-sm">
                                 <flux:avatar
                                     :name="auth()->user()->name"
-                                    :initials="auth()->user()->initials()"
+                                    :initials="str(auth()->user()->name)->substr(0, 2)->upper()"
                                 />
 
                                 <div class="grid flex-1 text-start text-sm leading-tight">
@@ -77,21 +75,21 @@
                     <flux:menu.separator />
 
                     <flux:menu.radio.group>
-                        <flux:menu.item :href="route('profile.edit')" icon="cog" wire:navigate>
+                        <flux:menu.item href="/bfc/ui" icon="cog">
                             {{ __('Settings') }}
                         </flux:menu.item>
                     </flux:menu.radio.group>
 
                     <flux:menu.separator />
 
-                    <form method="POST" action="{{ route('logout') }}" class="w-full">
+                    <form method="POST" action="/bfc/ui/logout" class="w-full">
                         @csrf
                         <flux:menu.item
                             as="button"
                             type="submit"
                             icon="arrow-right-start-on-rectangle"
                             class="w-full cursor-pointer"
-                            data-test="logout-button"
+                            data-testid="account-logout"
                         >
                             {{ __('Log out') }}
                         </flux:menu.item>

@@ -5,8 +5,8 @@ namespace App\Http\Controllers;
 use App\Enums\ArtifactVisibility;
 use App\Features\Artifacts as ArtifactsFeature;
 use App\Models\Artifact;
-use App\Models\User;
 use App\Support\ArtifactRenderOrigin;
+use ArtisanBuild\BuiltForCloud\Contracts\IdentityContext;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Storage;
@@ -85,16 +85,9 @@ class ArtifactShareController extends Controller
 
     private function authorizeOrgArtifact(Request $request, Artifact $artifact): void
     {
-        /** @var User|null $user */
-        $user = $request->user();
+        $identity = app(IdentityContext::class);
 
-        abort_unless($user instanceof User, 403);
-
-        $hasGrant = $artifact->teams()
-            ->whereIn('teams.id', $user->teams()->select('teams.id'))
-            ->exists();
-
-        abort_unless($hasGrant, 403);
+        abort_unless($identity->canUseProduct(), 403);
     }
 
     private function abortIfExpired(Artifact $artifact): void

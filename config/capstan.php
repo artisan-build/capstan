@@ -15,7 +15,6 @@ return [
 
     'postmaster' => [
         'server_id' => env('CAPSTAN_SERVER_ID'),
-        'signing_key' => env('CAPSTAN_POSTMASTER_SIGNING_KEY'),
         'poll' => [
             // Caps work and response size per poll. Unacked messages beyond this
             // batch remain eligible for a later poll in deterministic order.
