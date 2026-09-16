@@ -5,6 +5,7 @@ namespace App\Providers;
 use App\Postmaster\LogProbeFailureNotifier;
 use App\Postmaster\ProbeFailureNotifier;
 use App\Support\PostmasterClock;
+use App\Support\ServerIdentity;
 use ArtisanBuild\BuiltForCloud\Contracts\IdentityContext;
 use ArtisanBuild\BuiltForCloud\DomainIdentityContext;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
@@ -25,6 +26,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
+        $this->app->singleton(ServerIdentity::class);
         $this->app->bind(ProbeFailureNotifier::class, LogProbeFailureNotifier::class);
         $this->app->bind(IdentityContext::class, function (): DomainIdentityContext {
             $user = auth()->user();

@@ -23,8 +23,7 @@ class ArtifactController extends Controller
     public function store(
         Request $request,
         BoundBearerCredentialAuthenticator $credentials,
-    ): JsonResponse
-    {
+    ): JsonResponse {
         $credential = $credentials->authenticate($request, CapstanCredentialDeclaration::ARTIFACT_INGEST);
 
         if ($credential === null || $credential->userId === null) {

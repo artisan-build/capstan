@@ -77,7 +77,7 @@ test('signed content on the render host streams with strict headers and zero coo
 test('render host responses never set cookies even on refusals', function (): void {
     $artifact = isolationArtifact('<html><body>refused</body></html>', ArtifactVisibility::OrgAuth);
 
-    $refused = $this->get("https://render.test/artifacts/{$artifact->id}/content")->assertForbidden();
+    $refused = $this->get("https://render.test/artifacts/{$artifact->id}/content")->assertUnauthorized();
     $blocked = $this->get('https://render.test/dashboard')->assertNotFound();
 
     expect($refused->headers->getCookies())->toBe([])
@@ -94,7 +94,7 @@ test('org auth content on the render host is signature-only with no session fall
     // render stack has no EncryptCookies/StartSession, so user() stays null.
     $this->withCookie(config('session.cookie'), 'smuggled-session-id')
         ->get("https://render.test/artifacts/{$artifact->id}/content")
-        ->assertForbidden();
+        ->assertUnauthorized();
 
     $this->get(app(ArtifactRenderOrigin::class)->signedContentUrl($artifact))->assertOk();
 });
@@ -123,9 +123,12 @@ test('the app origin stays fully intact', function (): void {
     $this->get("https://app.test/artifacts/{$artifact->id}/content")->assertNotFound();
 });
 
-test('app host responses still set the session cookie', function (): void {
-    $response = $this->get('https://app.test/')->assertOk();
-    $cookieNames = array_map(fn ($cookie) => $cookie->getName(), $response->headers->getCookies());
+test('the sessionless package landing stays cookieless while package login starts a session', function (): void {
+    $landing = $this->get('https://app.test/')->assertOk();
+    $login = $this->get('https://app.test/bfc/login')->assertOk();
+    $cookieNames = array_map(fn ($cookie) => $cookie->getName(), $login->headers->getCookies());
 
-    expect($cookieNames)->toContain(config('session.cookie'));
+    expect($landing->headers->getCookies())->toBe([])
+        ->and($landing->headers->has('Set-Cookie'))->toBeFalse()
+        ->and($cookieNames)->toContain(config('session.cookie'));
 });

@@ -30,7 +30,6 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use InvalidArgumentException;
-use JsonException;
 use Laravel\Pennant\Feature;
 use RuntimeException;
 use stdClass;
