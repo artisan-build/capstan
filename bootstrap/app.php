@@ -1,11 +1,14 @@
 <?php
 
+use App\Http\Middleware\AuthenticateBoundCredential;
 use App\Http\Middleware\NoIndexArtifactPaths;
 use App\Http\Middleware\RenderOriginIsolation;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Middleware\ThrottleRequests;
+use Illuminate\Routing\Middleware\ThrottleRequestsWithRedis;
 use Illuminate\Support\Facades\Route;
 use Symfony\Component\HttpFoundation\Request as SymfonyRequest;
 
@@ -29,8 +32,14 @@ return Application::configure(basePath: dirname(__DIR__))
         );
 
         $middleware->alias([
+            'capstan.bound_credential' => AuthenticateBoundCredential::class,
             'capstan.noindex_artifacts' => NoIndexArtifactPaths::class,
         ]);
+
+        $middleware->prependToPriorityList(
+            [ThrottleRequests::class, ThrottleRequestsWithRedis::class],
+            AuthenticateBoundCredential::class,
+        );
 
         $middleware->append(RenderOriginIsolation::class);
 

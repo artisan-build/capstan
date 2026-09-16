@@ -2,13 +2,13 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Auth\CapstanCredentialDeclaration;
 use App\Enums\MessageStatus;
 use App\Enums\MessageType;
 use App\Features\Postmaster;
 use App\Http\ApiError;
 use App\Http\ApiErrorException;
 use App\Http\Controllers\Controller;
+use App\Http\Middleware\AuthenticateBoundCredential;
 use App\Models\Envelope;
 use App\Models\Inbox;
 use App\Models\Spoke;
@@ -18,7 +18,6 @@ use App\Postmaster\ProbeManager;
 use App\Support\Address;
 use App\Support\JsonCanonicalizer;
 use App\Support\ServerIdentity;
-use ArtisanBuild\BuiltForCloud\BoundBearerCredentialAuthenticator;
 use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Database\Query\Builder as QueryBuilder;
@@ -53,13 +52,9 @@ class PollController extends Controller
         ServerIdentity $identity,
         ProbeManager $probeManager,
         ProbeFailureNotifier $probeFailureNotifier,
-        BoundBearerCredentialAuthenticator $credentials,
     ): JsonResponse {
-        $credential = $credentials->authenticate($request, CapstanCredentialDeclaration::POSTMASTER_POLL);
-
-        if ($credential === null || $credential->userId === null) {
-            return ApiError::response(401, 'unauthenticated', 'Unauthenticated.');
-        }
+        $credential = AuthenticateBoundCredential::credential($request);
+        $actorId = AuthenticateBoundCredential::actorId($request);
 
         if (! Feature::active(Postmaster::class)) {
             return ApiError::notFound();
@@ -96,14 +91,14 @@ class PollController extends Controller
 
         try {
             /** @var array{payload: array{inbound: list<array<string, mixed>>, cursor: string|null, probe_challenge?: array{probe_id: string, nonce: string, algorithm: string}}, failure: array{Spoke, SpokeProbe}|null} $result */
-            $result = DB::transaction(function () use ($credential, $validation, $envelopes, $serverId, $probeManager, $signer): array {
+            $result = DB::transaction(function () use ($credential, $actorId, $validation, $envelopes, $serverId, $probeManager, $signer): array {
                 $now = now();
-                $spoke = $this->resolveSpoke($credential->userId, $credential->id, $now);
+                $spoke = $this->resolveSpoke($actorId, $credential->id, $now);
                 $readyInboxes = array_values(array_unique($validation['ready_inboxes']));
                 $failedProbe = $probeManager->respond($spoke, $validation['probe_response'], $now);
 
-                $this->refreshRouting($spoke, $credential->userId, $readyInboxes, $validation['cursor'], $now);
-                $this->assertSendersOwned($credential->userId, $envelopes, $serverId);
+                $this->refreshRouting($spoke, $actorId, $readyInboxes, $validation['cursor'], $now);
+                $this->assertSendersOwned($actorId, $envelopes, $serverId);
 
                 foreach ($envelopes as $envelope) {
                     $mac = $signer->mac(JsonCanonicalizer::encode($envelope->signablePayload()));
@@ -112,8 +107,8 @@ class PollController extends Controller
                     $this->storeEnvelope($envelope, $serverId, $now);
                 }
 
-                $this->processAcks($credential->userId, $validation['acks'], $serverId, $now);
-                $inbound = $this->inbound($spoke, $credential->userId, $serverId);
+                $this->processAcks($actorId, $validation['acks'], $serverId, $now);
+                $inbound = $this->inbound($spoke, $actorId, $serverId);
                 $this->markDelivered($inbound, $now);
                 $challenge = $probeManager->issue($spoke, $now);
 

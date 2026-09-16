@@ -2,15 +2,14 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Auth\CapstanCredentialDeclaration;
 use App\Enums\ArtifactVisibility;
 use App\Features\Artifacts;
 use App\Http\ApiError;
 use App\Http\Controllers\Controller;
+use App\Http\Middleware\AuthenticateBoundCredential;
 use App\Models\Artifact;
 use App\Models\Team;
 use App\Support\ArtifactRenderOrigin;
-use ArtisanBuild\BuiltForCloud\BoundBearerCredentialAuthenticator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -22,13 +21,8 @@ class ArtifactController extends Controller
 {
     public function store(
         Request $request,
-        BoundBearerCredentialAuthenticator $credentials,
     ): JsonResponse {
-        $credential = $credentials->authenticate($request, CapstanCredentialDeclaration::ARTIFACT_INGEST);
-
-        if ($credential === null || $credential->userId === null) {
-            return ApiError::response(401, 'unauthenticated', 'Unauthenticated.');
-        }
+        $actorId = AuthenticateBoundCredential::actorId($request);
 
         if (! Feature::active(Artifacts::class)) {
             return ApiError::notFound();
@@ -60,9 +54,9 @@ class ArtifactController extends Controller
 
         [$contentHash, $storageKey] = Artifact::storeBlob($validated['content']);
 
-        $artifact = DB::transaction(function () use ($validated, $credential, $defaultTeam, $contentHash, $storageKey): Artifact {
+        $artifact = DB::transaction(function () use ($validated, $actorId, $defaultTeam, $contentHash, $storageKey): Artifact {
             $artifact = Artifact::query()->create([
-                'actor_id' => $credential->userId,
+                'actor_id' => $actorId,
                 'visibility' => ArtifactVisibility::from($validated['visibility'] ?? ArtifactVisibility::OrgAuth->value),
                 'expires_at' => $validated['expires_at'] ?? null,
                 'content_type' => $validated['content_type'],

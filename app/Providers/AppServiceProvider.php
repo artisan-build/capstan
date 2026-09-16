@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Http\Middleware\AuthenticateBoundCredential;
 use App\Postmaster\LogProbeFailureNotifier;
 use App\Postmaster\ProbeFailureNotifier;
 use App\Support\PostmasterClock;
@@ -73,7 +74,7 @@ class AppServiceProvider extends ServiceProvider
         );
 
         RateLimiter::for('api', function (Request $request): Limit {
-            return Limit::perMinute(60)->by($request->ip() ?: 'unknown');
+            return Limit::perMinute(60)->by('actor:'.AuthenticateBoundCredential::actorId($request));
         });
     }
 }
