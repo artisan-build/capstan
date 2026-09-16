@@ -90,3 +90,91 @@ test('device polling sleeps for the greatest current returned and Retry-After in
     'json interval wins' => [5, 7, 3, 7],
     'Retry-After wins' => [5, 7, 11, 11],
 ]);
+
+test('the generated installer completes approval, installs fake cron, and performs its first probe poll', function (): void {
+    $snippet = installerSnippet($this);
+    $user = User::query()->sole();
+    $directory = sys_get_temp_dir().'/capstan-installer-'.bin2hex(random_bytes(6));
+    $bin = $directory.'/bin';
+    $home = $directory.'/home';
+    $crontab = $directory.'/crontab';
+    File::makeDirectory($bin, 0700, true);
+    File::makeDirectory($home, 0700, true);
+
+    File::put($bin.'/uname', "#!/bin/sh\nprintf '%s\\n' Test\n");
+    File::put($bin.'/crontab', <<<'SH'
+#!/bin/sh
+set -eu
+if [ "${1:-}" = "-l" ]; then
+    printf '%s\n' 'no crontab for test-user' >&2
+    exit 1
+fi
+cp "$1" "$CAPSTAN_TEST_CRONTAB"
+SH);
+    File::put($bin.'/curl', <<<'SH'
+#!/bin/sh
+set -eu
+headers=''
+previous=''
+for argument in "$@"; do
+    if [ "$previous" = '--dump-header' ]; then headers="$argument"; fi
+    previous="$argument"
+done
+cat >/dev/null || true
+if [ -n "$headers" ]; then
+    printf 'HTTP/1.1 200 OK\r\n\r\n' > "$headers"
+    printf '%s' '{"access_token":"approved-test-bearer"}'
+else
+    printf '%s' '{"probe_challenge":{"probe_id":"01ARZ3NDEKTSV4RRFFQ69G5FAA","nonce":"installer-nonce"}}'
+fi
+SH);
+    foreach (['uname', 'crontab', 'curl'] as $command) {
+        chmod($bin.'/'.$command, 0700);
+    }
+
+    $process = new Process(['/bin/sh', '-c', $snippet], null, [
+        'CAPSTAN_TEST_CRONTAB' => $crontab,
+        'HOME' => $home,
+        'PATH' => $bin.':'.dirname(PHP_BINARY).':/usr/bin:/bin',
+    ]);
+
+    try {
+        $process->run();
+        $install = $home.'/.config/capstan/'.INSTALLER_SERVER_ID;
+
+        expect($process->isSuccessful())->toBeTrue($process->getErrorOutput())
+            ->and(File::get($install.'/token'))->toBe('approved-test-bearer')
+            ->and(File::get($install.'/actor-id'))->toBe((string) $user->getKey())
+            ->and(fileperms($install) & 0777)->toBe(0700)
+            ->and(fileperms($install.'/token') & 0777)->toBe(0600)
+            ->and(fileperms($install.'/actor-id') & 0777)->toBe(0600)
+            ->and(fileperms($install.'/poll.sh') & 0777)->toBe(0700)
+            ->and(File::get($crontab))->toContain('# capstan-postmaster:'.INSTALLER_SERVER_ID)
+            ->and(json_decode(File::get($install.'/probe-response.json'), true, flags: JSON_THROW_ON_ERROR))->toBe([
+                'probe_id' => '01ARZ3NDEKTSV4RRFFQ69G5FAA',
+                'digest' => hash('sha256', 'installer-nonce'),
+            ]);
+    } finally {
+        File::deleteDirectory($directory);
+    }
+});
+
+test('the generated installer stops on terminal device outcomes', function (string $error): void {
+    $snippet = installerSnippet($this);
+    $case = installerLine($snippet, 'case "$CAPSTAN_ERROR"');
+    $process = Process::fromShellCommandline(implode("\n", [
+        'set -eu',
+        'CAPSTAN_ERROR='.escapeshellarg($error),
+        $case,
+        "printf '%s' continued",
+    ]));
+    $process->run();
+
+    expect($process->isSuccessful())->toBeFalse()
+        ->and($process->getOutput())->not->toContain('continued')
+        ->and($process->getErrorOutput())->toContain('Authorization failed: '.$error);
+})->with([
+    'denial' => 'access_denied',
+    'expiry' => 'expired_token',
+    'revoked or consumed grant' => 'invalid_grant',
+]);

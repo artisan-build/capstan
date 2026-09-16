@@ -3,7 +3,6 @@
 use App\Enums\MessageType;
 use App\Models\Envelope;
 use App\Providers\AppServiceProvider;
-use App\Support\EnvelopeSigner;
 use App\Support\PostmasterClock;
 
 const CLOCK_SERVER_ID = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
@@ -11,7 +10,6 @@ const CLOCK_SERVER_ID = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
 beforeEach(function (): void {
     config([
         'capstan.postmaster.server_id' => CLOCK_SERVER_ID,
-        'capstan.postmaster.signing_key' => 'clock-test-signing-key',
     ]);
 });
 
@@ -35,20 +33,7 @@ test('utc is accepted', function (): void {
     config(['app.timezone' => 'UTC']);
 
     expect(fn () => PostmasterClock::assertUtc())->not->toThrow(RuntimeException::class);
-    $envelope = clockEnvelope();
-    $envelope->signature = app(EnvelopeSigner::class)->sign($envelope);
-
-    expect(app(EnvelopeSigner::class)->verify($envelope))->toBeTrue();
-});
-
-test('signing and verifying fail loudly when the application timezone is not utc', function (): void {
-    $envelope = clockEnvelope();
-    $envelope->signature = app(EnvelopeSigner::class)->sign($envelope);
-
-    config(['app.timezone' => 'America/New_York']);
-
-    expect(fn () => app(EnvelopeSigner::class)->sign($envelope))->toThrow(RuntimeException::class)
-        ->and(fn () => app(EnvelopeSigner::class)->verify($envelope))->toThrow(RuntimeException::class);
+    expect(clockEnvelope()->signablePayload()['created_at'])->toMatch('/Z$/');
 });
 
 test('booting with the postmaster feature enabled and a non utc timezone fails early', function (): void {

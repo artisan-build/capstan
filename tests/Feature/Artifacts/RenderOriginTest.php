@@ -3,14 +3,15 @@
 use App\Enums\ArtifactVisibility;
 use App\Models\Artifact;
 use App\Models\Team;
-use App\Models\User;
 use App\Support\ArtifactRenderOrigin;
+use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\URL;
 use Laravel\Pennant\Feature;
 
 beforeEach(function (): void {
     config([
+        'app.key' => 'base64:'.base64_encode(str_repeat('a', 32)),
         'app.url' => 'https://app.capstan.test',
         'capstan.features.artifacts' => true,
         'capstan.artifacts.render_origin' => 'https://artifacts.capstan.test',
@@ -93,22 +94,15 @@ test('tampered and expired signed urls are refused without content', function ()
         ->assertDontSee('expired signed artifact');
 });
 
-test('org auth mode requires a granted team and refuses guests or ungranted users', function (): void {
+test('org auth mode refuses guests and grants every active package role', function (UserRole $role): void {
     $content = '<html><body>org gated artifact</body></html>';
     $artifact = storedArtifact($content, ArtifactVisibility::OrgAuth, now()->addHour());
     $team = Team::default();
     $artifact->teams()->sync([$team->id]);
-    $member = User::factory()->create();
-    $outsider = User::factory()->create();
-    $outsider->teams()->detach($team->id);
+    $member = capstanUser(['role' => $role->value]);
 
     $this->get("https://artifacts.capstan.test/artifacts/{$artifact->id}/content")
-        ->assertForbidden()
-        ->assertDontSee('org gated artifact');
-
-    $this->actingAs($outsider)
-        ->get("https://artifacts.capstan.test/artifacts/{$artifact->id}/content")
-        ->assertForbidden()
+        ->assertUnauthorized()
         ->assertDontSee('org gated artifact');
 
     $response = $this->actingAs($member)
@@ -118,7 +112,7 @@ test('org auth mode requires a granted team and refuses guests or ungranted user
 
     expect($response->baseResponse->isRedirection())->toBeFalse()
         ->and($response->streamedContent())->toBe($content);
-});
+})->with(UserRole::cases());
 
 test('org auth signed content url authorizes unauthenticated render origin requests', function (): void {
     $content = '<html><body>signed org render grant</body></html>';
@@ -136,7 +130,7 @@ test('expired org auth artifacts are refused', function (): void {
     $artifact = storedArtifact('<html><body>expired org artifact</body></html>', ArtifactVisibility::OrgAuth, now()->subMinute());
     $artifact->teams()->sync([Team::default()->id]);
 
-    $this->actingAs(User::factory()->create())
+    $this->actingAs(capstanUser())
         ->get("https://artifacts.capstan.test/artifacts/{$artifact->id}/content")
         ->assertNotFound()
         ->assertDontSee('expired org artifact');

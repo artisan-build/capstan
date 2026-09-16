@@ -3,13 +3,17 @@
 use App\Enums\MessageStatus;
 use App\Enums\MessageType;
 use App\Models\Envelope;
-use App\Support\EnvelopeSigner;
+use App\Support\JsonCanonicalizer;
+use ArtisanBuild\BuiltForCloud\Hmac\SigningRootLifecycle;
+use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
 use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 beforeEach(function (): void {
-    config(['capstan.postmaster.signing_key' => 'test-postmaster-signing-key']);
+    config(['app.key' => 'base64:'.base64_encode(str_repeat('e', 32))]);
+    app(SigningRootLifecycle::class)->provision();
 });
 
 /**
@@ -27,9 +31,24 @@ function postmasterTestEnvelope(array $overrides = []): Envelope
         'message_id' => $serverId.':01ARZ3NDEKTSV4RRFFQ69G5FAX',
     ], $overrides));
     $envelope->created_at = now()->utc()->startOfSecond();
-    $envelope->signature = app(EnvelopeSigner::class)->sign($envelope);
+    $mac = app(SigningRootMac::class)->mac(JsonCanonicalizer::encode($envelope->signablePayload()));
+    $envelope->signature = $mac->lowercaseHexMac;
+    $envelope->signing_key_id = $mac->keyId;
 
     return $envelope;
+}
+
+function verifyPostmasterEnvelope(Envelope $envelope): bool
+{
+    if (! is_string($envelope->signature) || ! is_string($envelope->signing_key_id)) {
+        return false;
+    }
+
+    return app(SigningRootMac::class)->verify(
+        $envelope->signing_key_id,
+        JsonCanonicalizer::encode($envelope->signablePayload()),
+        $envelope->signature,
+    );
 }
 
 test('an envelope round trips with enum and JSON casts and synchronized routing columns', function (): void {
@@ -115,7 +134,16 @@ test('a correct lowercase hexadecimal HMAC verifies', function (): void {
     $envelope = postmasterTestEnvelope();
 
     expect($envelope->signature)->toMatch('/^[0-9a-f]{64}$/')
-        ->and(app(EnvelopeSigner::class)->verify($envelope))->toBeTrue();
+        ->and(verifyPostmasterEnvelope($envelope))->toBeTrue();
+});
+
+test('the signing root covers the exact canonical nine-field wire', function (): void {
+    Date::setTestNow('2026-08-17 11:44:44');
+    $envelope = postmasterTestEnvelope();
+    $wire = JsonCanonicalizer::encode($envelope->signablePayload());
+
+    expect($wire)->toBe('{"body":{"nested":{"count":1,"ready":true},"title":"Handoff"},"created_at":"2026-08-17T11:44:44Z","from":"sender@01ARZ3NDEKTSV4RRFFQ69G5FAV","id":"01ARZ3NDEKTSV4RRFFQ69G5FAV:01ARZ3NDEKTSV4RRFFQ69G5FAW","message_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV:01ARZ3NDEKTSV4RRFFQ69G5FAX","refs":[],"to":"inbox.primary@01ARZ3NDEKTSV4RRFFQ69G5FAV","type":"handoff","version":1}')
+        ->and(verifyPostmasterEnvelope($envelope))->toBeTrue();
 });
 
 test('mutating any signable envelope field invalidates its HMAC', function (): void {
@@ -160,7 +188,7 @@ test('mutating any signable envelope field invalidates its HMAC', function (): v
         $envelope = postmasterTestEnvelope();
         $mutate($envelope);
 
-        expect(app(EnvelopeSigner::class)->verify($envelope))->toBeFalse();
+        expect(verifyPostmasterEnvelope($envelope))->toBeFalse();
     }
 });
 
@@ -170,7 +198,7 @@ test('reordering equivalent nested body keys does not invalidate its HMAC', func
     ]);
     $envelope->body = ['a' => true, 'z' => ['a' => 1, 'b' => 2]];
 
-    expect(app(EnvelopeSigner::class)->verify($envelope))->toBeTrue();
+    expect(verifyPostmasterEnvelope($envelope))->toBeTrue();
 });
 
 test('list and numeric-keyed object bodies cannot collide', function (): void {
@@ -181,25 +209,14 @@ test('list and numeric-keyed object bodies cannot collide', function (): void {
 
     $object->signature = $list->signature;
 
-    expect(app(EnvelopeSigner::class)->verify($object))->toBeFalse();
+    expect(verifyPostmasterEnvelope($object))->toBeFalse();
 });
-
-test('signing and verification fail closed without a key', function (?string $key): void {
-    $envelope = postmasterTestEnvelope();
-    config(['capstan.postmaster.signing_key' => $key]);
-
-    expect(fn (): string => app(EnvelopeSigner::class)->sign($envelope))->toThrow(RuntimeException::class)
-        ->and(fn (): bool => app(EnvelopeSigner::class)->verify($envelope))->toThrow(RuntimeException::class);
-})->with([
-    'unset' => null,
-    'empty' => '',
-]);
 
 test('wrong or missing signatures fail without error', function (mixed $signature): void {
     $envelope = postmasterTestEnvelope();
     $envelope->signature = $signature;
 
-    expect(app(EnvelopeSigner::class)->verify($envelope))->toBeFalse();
+    expect(verifyPostmasterEnvelope($envelope))->toBeFalse();
 })->with([
     'wrong signature of equal length' => str_repeat('0', 64),
     'wrong signature of different length' => 'short',
@@ -207,18 +224,12 @@ test('wrong or missing signatures fail without error', function (mixed $signatur
     'null signature' => null,
 ]);
 
-test('a missing signature is rejected before signing key resolution', function (): void {
-    $envelope = postmasterTestEnvelope();
-    $envelope->signature = null;
-    config(['capstan.postmaster.signing_key' => null]);
-
-    expect(app(EnvelopeSigner::class)->verify($envelope))->toBeFalse();
-});
-
 test('created at normalization survives database precision loss', function (): void {
     $envelope = postmasterTestEnvelope();
     $envelope->created_at = '2026-08-17 11:44:44';
-    $envelope->signature = app(EnvelopeSigner::class)->sign($envelope);
+    $mac = app(SigningRootMac::class)->mac(JsonCanonicalizer::encode($envelope->signablePayload()));
+    $envelope->signature = $mac->lowercaseHexMac;
+    $envelope->signing_key_id = $mac->keyId;
     $envelope->save();
 
     if (DB::getDriverName() === 'pgsql') {
@@ -233,6 +244,38 @@ test('created at normalization survives database precision loss', function (): v
     $stored = Envelope::query()->findOrFail($envelope->id);
 
     expect($stored->created_at->micro)->toBe(654321)
-        ->and(app(EnvelopeSigner::class)->verify($stored))->toBeTrue()
+        ->and(verifyPostmasterEnvelope($stored))->toBeTrue()
         ->and($stored->signablePayload()['created_at'])->toMatch('/Z$/');
+});
+
+test('stored envelopes remain verifiable through signing-root rotation', function (): void {
+    $stored = postmasterTestEnvelope();
+    $stored->save();
+    $oldKeyId = $stored->signing_key_id;
+
+    app(SigningRootLifecycle::class)->rotate($oldKeyId, false);
+    $next = postmasterTestEnvelope([
+        'id' => '01ARZ3NDEKTSV4RRFFQ69G5FAV:01ARZ3NDEKTSV4RRFFQ69G5FAY',
+        'message_id' => '01ARZ3NDEKTSV4RRFFQ69G5FAV:01ARZ3NDEKTSV4RRFFQ69G5FAZ',
+    ]);
+
+    expect($next->signing_key_id)->not->toBe($oldKeyId)
+        ->and(verifyPostmasterEnvelope($stored->fresh()))->toBeTrue()
+        ->and(verifyPostmasterEnvelope($next))->toBeTrue();
+});
+
+test('stored envelopes survive a staged APP_KEY rotation and fail without the previous key', function (): void {
+    $envelope = postmasterTestEnvelope();
+    $oldKey = (string) config('app.key');
+
+    config([
+        'app.key' => 'base64:'.base64_encode(str_repeat('n', 32)),
+        'app.previous_keys' => [$oldKey],
+    ]);
+
+    expect(verifyPostmasterEnvelope($envelope))->toBeTrue();
+
+    config(['app.previous_keys' => []]);
+
+    expect(verifyPostmasterEnvelope($envelope))->toBeFalse();
 });

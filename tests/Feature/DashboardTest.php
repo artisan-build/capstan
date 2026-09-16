@@ -1,27 +1,17 @@
 <?php
 
-namespace Tests\Feature;
+use ArtisanBuild\BuiltForCloud\UserRole;
 
-use App\Models\User;
-use Illuminate\Foundation\Testing\RefreshDatabase;
-use Tests\TestCase;
+beforeEach(function (): void {
+    config(['app.key' => 'base64:'.base64_encode(str_repeat('d', 32))]);
+});
 
-class DashboardTest extends TestCase
-{
-    use RefreshDatabase;
+test('guests are redirected to the package login page', function (): void {
+    $this->get(route('dashboard'))->assertRedirect(route('bfc.login'));
+});
 
-    public function test_guests_are_redirected_to_the_login_page(): void
-    {
-        $response = $this->get(route('dashboard'));
-        $response->assertRedirect(route('login'));
-    }
-
-    public function test_authenticated_users_can_visit_the_dashboard(): void
-    {
-        $user = User::factory()->create();
-        $this->actingAs($user);
-
-        $response = $this->get(route('dashboard'));
-        $response->assertOk();
-    }
-}
+test('every active package role can visit the dashboard', function (UserRole $role): void {
+    $this->actingAsVersioned(capstanUser(['role' => $role->value]))
+        ->get(route('dashboard'))
+        ->assertOk();
+})->with(UserRole::cases());
