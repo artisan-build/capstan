@@ -1,6 +1,16 @@
 <?php
 
+use App\Auth\CapstanCredentialDeclaration;
+use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
+use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialAuthorizationProfile;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialStatus;
+use ArtisanBuild\BuiltForCloud\User;
+use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 /*
@@ -47,4 +57,73 @@ expect()->extend('toBeOne', function () {
 function something()
 {
     // ..
+}
+
+/** @param array<string, mixed> $attributes */
+function capstanUser(array $attributes = []): User
+{
+    $suffix = bin2hex(random_bytes(6));
+    $user = new User;
+    $user->forceFill(array_replace([
+        'name' => 'Capstan test user',
+        'email' => "capstan-{$suffix}@example.test",
+        'password' => bcrypt('test-created-password'),
+        'role' => UserRole::Member->value,
+        'status' => 'active',
+    ], $attributes));
+    $user->save();
+
+    return $user;
+}
+
+/**
+ * @return array{token: string, credential: Credential}
+ */
+function capstanBoundBearer(
+    User $user,
+    string $appPurpose,
+): array {
+    $request = Request::create(
+        $appPurpose === CapstanCredentialDeclaration::ARTIFACT_INGEST
+            ? '/api/v1/artifacts'
+            : '/api/v1/poll',
+        'POST',
+        server: ['HTTP_X_CAPSTAN_ACTOR_ID' => (string) $user->getKey()],
+    );
+    $profile = collect(app(CapstanCredentialDeclaration::class)->credentialAuthorizationProfiles($request))
+        ->first(fn (CredentialAuthorizationProfile $profile): bool => $profile->appPurpose === $appPurpose);
+    expect($profile)->toBeInstanceOf(CredentialAuthorizationProfile::class);
+
+    $token = 'capstan-test-'.bin2hex(random_bytes(24));
+    $credential = new Credential;
+    $credential->forceFill([
+        'kind' => CredentialKind::Bearer,
+        'purpose' => app(AppPurposeRegistry::class)->purpose($appPurpose),
+        'subject_type' => $profile->scope->subject->type,
+        'subject_ref' => $profile->scope->subject->ref,
+        'name' => 'Capstan test credential',
+        'abilities' => [],
+        'user_id' => (string) $user->getKey(),
+        'secret_hash' => hash('sha256', $token),
+        'status' => CredentialStatus::Active,
+        'expires_at' => $profile->expiresAt,
+    ]);
+
+    DB::transaction(fn () => $credential->saveWithOriginatorBinding($profile->scope));
+
+    return ['token' => $token, 'credential' => $credential];
+}
+
+/** @return array<string, string> */
+function capstanBearerHeaders(
+    User $user,
+    string $appPurpose,
+    ?string $actorId = null,
+): array {
+    $issued = capstanBoundBearer($user, $appPurpose);
+
+    return [
+        'Authorization' => 'Bearer '.$issued['token'],
+        CapstanCredentialDeclaration::ACTOR_HEADER => $actorId ?? (string) $user->getKey(),
+    ];
 }

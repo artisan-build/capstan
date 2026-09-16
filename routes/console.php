@@ -9,3 +9,4 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 Schedule::command('postmaster:probe-sweep')->everyMinute()->withoutOverlapping(5);
+Schedule::command('postmaster:retire-dead-spokes --local')->everyMinute()->withoutOverlapping(5);

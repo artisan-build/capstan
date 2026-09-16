@@ -2,8 +2,9 @@
 
 namespace Tests;
 
+use App\Auth\CapstanCredentialDeclaration;
+use ArtisanBuild\BuiltForCloud\Credential;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
-use Laravel\Fortify\Features;
 
 abstract class TestCase extends BaseTestCase
 {
@@ -14,10 +15,18 @@ abstract class TestCase extends BaseTestCase
         $this->withoutVite();
     }
 
-    protected function skipUnlessFortifyHas(string $feature, ?string $message = null): void
+    /**
+     * Existing protocol tests call withToken(); bound credentials also require
+     * the independently transported actor header.
+     */
+    public function withToken(#[\SensitiveParameter] string $token, string $type = 'Bearer')
     {
-        if (! Features::enabled($feature)) {
-            $this->markTestSkipped($message ?? "Fortify feature [{$feature}] is not enabled.");
+        $credential = Credential::query()->where('secret_hash', hash('sha256', $token))->first();
+
+        if ($credential?->user_id !== null) {
+            $this->withHeader(CapstanCredentialDeclaration::ACTOR_HEADER, $credential->user_id);
         }
+
+        return parent::withToken($token, $type);
     }
 }

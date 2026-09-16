@@ -9,6 +9,9 @@ use App\Models\Spoke;
 use App\Models\SpokeProbe;
 use App\Models\User;
 use App\Postmaster\ProbeFailureNotifier;
+use App\Postmaster\ProbeManager;
+use ArtisanBuild\BuiltForCloud\SystemAuthorityContext;
+use Carbon\CarbonImmutable;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
@@ -490,6 +493,50 @@ test('the overdue probe sweep is scheduled every minute', function (): void {
     });
 
     expect($scheduled)->toBeTrue();
+});
+
+test('the probe sweep runs with system authority and never synthesizes a human principal', function (): void {
+    $context = app(SystemAuthorityContext::class);
+    $manager = new class($context) extends ProbeManager
+    {
+        public bool $authorityWasActive = false;
+
+        public mixed $principal = 'not-observed';
+
+        public function __construct(private readonly SystemAuthorityContext $context) {}
+
+        public function fail(Spoke $spoke, SpokeProbe $probe, CarbonImmutable $now, bool $responded): bool
+        {
+            $this->authorityWasActive = $this->context->active();
+            $this->principal = auth()->user();
+
+            return parent::fail($spoke, $probe, $now, $responded);
+        }
+    };
+    $this->app->instance(ProbeManager::class, $manager);
+    $spoke = Spoke::query()->create([
+        'actor_id' => 'test-created-actor',
+        'credential_id' => (string) Str::uuid(),
+        'last_polled_at' => now()->subHour(),
+    ]);
+    SpokeProbe::query()->create([
+        'spoke_id' => $spoke->id,
+        'probe_id' => (string) Str::ulid(),
+        'nonce' => str_repeat('a', 43),
+        'status' => ProbeStatus::Awaiting,
+        'issued_at' => now()->subHour(),
+        'expires_at' => now()->subMinute(),
+    ]);
+
+    expect($context->active())->toBeFalse()
+        ->and(auth()->user())->toBeNull();
+
+    $this->artisan('postmaster:probe-sweep')->assertSuccessful();
+
+    expect($manager->authorityWasActive)->toBeTrue()
+        ->and($manager->principal)->toBeNull()
+        ->and($context->active())->toBeFalse()
+        ->and(auth()->user())->toBeNull();
 });
 
 test('disabling Postmaster voids outstanding probes before re-enable', function (): void {

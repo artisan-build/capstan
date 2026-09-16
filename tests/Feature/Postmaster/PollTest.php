@@ -1,5 +1,6 @@
 <?php
 
+use App\Auth\CapstanCredentialDeclaration;
 use App\Enums\MessageStatus;
 use App\Enums\MessageType;
 use App\Features\Postmaster;
@@ -7,8 +8,9 @@ use App\Http\Controllers\Api\PollController;
 use App\Models\Envelope;
 use App\Models\Inbox;
 use App\Models\Spoke;
-use App\Models\User;
-use App\Support\EnvelopeSigner;
+use ArtisanBuild\BuiltForCloud\ClientIdentity;
+use ArtisanBuild\BuiltForCloud\Hmac\SigningRootLifecycle;
+use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
@@ -20,17 +22,19 @@ const POLL_FOREIGN_SERVER_ID = '01ARZ3NDEKTSV4RRFFQ69G5FAW';
 
 beforeEach(function (): void {
     config([
+        'app.key' => 'base64:'.base64_encode(str_repeat('p', 32)),
         'capstan.features.postmaster' => true,
         'capstan.postmaster.server_id' => POLL_SERVER_ID,
         'capstan.postmaster.signing_key' => 'poll-test-signing-key',
         'capstan.postmaster.poll.max_inbound' => 50,
     ]);
     Feature::flushCache();
+    app(SigningRootLifecycle::class)->provision();
 });
 
 function spokeToken(User $user): string
 {
-    return $user->createToken('capstan-cli')->plainTextToken;
+    return capstanBoundBearer($user, CapstanCredentialDeclaration::POSTMASTER_POLL)['token'];
 }
 
 /**
@@ -49,14 +53,13 @@ function pollWireEnvelope(string $to, array $overrides = []): array
         'message_id' => POLL_SERVER_ID.':'.Str::ulid(),
     ], $overrides));
     $envelope->created_at = $overrides['created_at'] ?? now()->utc()->startOfSecond();
-    $envelope->signature = app(EnvelopeSigner::class)->sign($envelope);
 
-    return [...$envelope->signablePayload(), 'signature' => $envelope->signature];
+    return $envelope->signablePayload();
 }
 
 test('a message crosses spokes exactly once in each poll batch and redelivers until acked', function (): void {
-    $sender = User::factory()->create();
-    $receiver = User::factory()->create();
+    $sender = capstanUser();
+    $receiver = capstanUser();
     $senderToken = spokeToken($sender);
     $receiverToken = spokeToken($receiver);
     $wireEnvelope = pollWireEnvelope('receiver@'.POLL_SERVER_ID);
@@ -97,7 +100,7 @@ test('a message crosses spokes exactly once in each poll batch and redelivers un
 });
 
 test('foreign messages park without entering a local inbox', function (): void {
-    $user = User::factory()->create();
+    $user = capstanUser();
     $token = spokeToken($user);
     $wireEnvelope = pollWireEnvelope('receiver@'.POLL_FOREIGN_SERVER_ID);
 
@@ -115,7 +118,7 @@ test('foreign messages park without entering a local inbox', function (): void {
 
 test('presence replaces the routing table and stamps poll state', function (): void {
     Date::setTestNow('2026-08-17 12:00:00');
-    $user = User::factory()->create();
+    $user = capstanUser();
     $token = spokeToken($user);
 
     $this->withToken($token)->postJson('/api/v1/poll', [
@@ -141,11 +144,11 @@ test('presence replaces the routing table and stamps poll state', function (): v
         ->and(Spoke::query()->count())->toBe(1)
         // Ownership outlives presence: "a" is still this user's even though no spoke routes for it.
         ->and(Inbox::query()->orderBy('local_part')->pluck('local_part')->all())->toBe(['a', 'b', 'c'])
-        ->and(Inbox::query()->where('local_part', 'a')->value('user_id'))->toBe($user->id);
+        ->and(Inbox::query()->where('local_part', 'a')->value('actor_id'))->toBe((string) $user->id);
 });
 
 test('sending the same envelope is idempotent', function (): void {
-    $user = User::factory()->create();
+    $user = capstanUser();
     $token = spokeToken($user);
     $wireEnvelope = pollWireEnvelope('receiver@'.POLL_SERVER_ID);
     $payload = [
@@ -159,22 +162,24 @@ test('sending the same envelope is idempotent', function (): void {
     expect(Envelope::query()->count())->toBe(1);
 });
 
-test('an invalid signature rejects the whole batch before state changes', function (): void {
-    $user = User::factory()->create();
+test('a client supplied signature is rejected before state changes', function (): void {
+    $user = capstanUser();
     $wireEnvelope = pollWireEnvelope('receiver@'.POLL_SERVER_ID);
     $wireEnvelope['signature'] = str_repeat('0', 64);
 
     $this->withToken(spokeToken($user))->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => ['sender']],
         'outbound' => [$wireEnvelope],
-    ])->assertUnprocessable()->assertJsonPath('error.code', 'invalid_signature');
+    ])->assertUnprocessable()
+        ->assertJsonPath('error.code', 'validation_failed')
+        ->assertJsonValidationErrors('outbound.0.signature', 'error.errors');
 
     expect(Envelope::query()->count())->toBe(0)
         ->and(Spoke::query()->count())->toBe(0);
 });
 
 test('a malformed envelope names its batch index and prevents partial persistence', function (): void {
-    $user = User::factory()->create();
+    $user = capstanUser();
     $valid = pollWireEnvelope('receiver@'.POLL_SERVER_ID);
     $malformed = pollWireEnvelope('receiver@'.POLL_SERVER_ID);
     $malformed['refs'] = ['reserved-reference'];
@@ -191,7 +196,7 @@ test('a malformed envelope names its batch index and prevents partial persistenc
 });
 
 test('an unknown version is rejected with the version this server speaks', function (): void {
-    $user = User::factory()->create();
+    $user = capstanUser();
     $wireEnvelope = pollWireEnvelope('receiver@'.POLL_SERVER_ID, [
         'version' => Envelope::CURRENT_VERSION + 1,
     ]);
@@ -207,7 +212,7 @@ test('an unknown version is rejected with the version this server speaks', funct
 });
 
 test('numeric keyed objects retain their signed shape and cannot be replaced by lists', function (): void {
-    $user = User::factory()->create();
+    $user = capstanUser();
     $token = spokeToken($user);
     $body = new stdClass;
     $body->{'0'} = 'x';
@@ -232,8 +237,8 @@ test('numeric keyed objects retain their signed shape and cannot be replaced by 
 });
 
 test('acks are scoped to inboxes the polling user owns', function (): void {
-    $sender = User::factory()->create();
-    $receiver = User::factory()->create();
+    $sender = capstanUser();
+    $receiver = capstanUser();
     $senderToken = spokeToken($sender);
     $receiverToken = spokeToken($receiver);
     $wireEnvelope = pollWireEnvelope('receiver@'.POLL_SERVER_ID);
@@ -256,7 +261,7 @@ test('acks are scoped to inboxes the polling user owns', function (): void {
 });
 
 test('repeated and unknown acks are successful no ops', function (): void {
-    $user = User::factory()->create();
+    $user = capstanUser();
     $token = spokeToken($user);
     $wireEnvelope = pollWireEnvelope('receiver@'.POLL_SERVER_ID);
 
@@ -282,7 +287,7 @@ test('repeated and unknown acks are successful no ops', function (): void {
 test('a disabled feature returns not found without postmaster state changes', function (): void {
     config(['capstan.features.postmaster' => false]);
     Feature::flushCache();
-    $user = User::factory()->create();
+    $user = capstanUser();
 
     $this->withToken(spokeToken($user))->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => ['sender']],
@@ -301,11 +306,45 @@ test('poll requires api authentication', function (): void {
     ])->assertUnauthorized()->assertJsonPath('error.code', 'unauthenticated');
 });
 
+test('poll binds the bearer to the independently presented actor before validation recording or effects', function (): void {
+    $owner = capstanUser();
+    $other = capstanUser();
+    $issued = capstanBoundBearer($owner, CapstanCredentialDeclaration::POSTMASTER_POLL);
+    $clientIdentity = 'capstan-test/1.0';
+
+    $this->withHeaders([
+        'Authorization' => 'Bearer '.$issued['token'],
+        CapstanCredentialDeclaration::ACTOR_HEADER => (string) $other->getKey(),
+        ClientIdentity::HEADER => $clientIdentity,
+    ])->postJson('/api/v1/poll', [])
+        ->assertStatus(401)
+        ->assertJsonPath('error.code', 'unauthenticated')
+        ->assertJsonMissingPath('error.errors');
+
+    $credential = $issued['credential']->refresh();
+    expect($credential->last_used_at)->toBeNull()
+        ->and($credential->client_identity)->toBeNull()
+        ->and(Spoke::query()->count())->toBe(0)
+        ->and(Inbox::query()->count())->toBe(0)
+        ->and(Envelope::query()->count())->toBe(0);
+
+    $this->withHeaders([
+        'Authorization' => 'Bearer '.$issued['token'],
+        CapstanCredentialDeclaration::ACTOR_HEADER => (string) $owner->getKey(),
+        ClientIdentity::HEADER => $clientIdentity,
+    ])->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+    ])->assertOk();
+
+    expect($issued['credential']->refresh()->client_identity)->toBe($clientIdentity)
+        ->and(Spoke::query()->where('actor_id', (string) $owner->getKey())->count())->toBe(1);
+});
+
 test('the inbound limit and stable ordering are honored across cursor redelivery', function (): void {
     config(['capstan.postmaster.poll.max_inbound' => 2]);
     Date::setTestNow('2026-08-17 12:00:00');
-    $sender = User::factory()->create();
-    $receiver = User::factory()->create();
+    $sender = capstanUser();
+    $receiver = capstanUser();
     $senderToken = spokeToken($sender);
     $receiverToken = spokeToken($receiver);
     $createdAt = now()->utc()->startOfSecond();
@@ -360,7 +399,7 @@ test('the inbound limit and stable ordering are honored across cursor redelivery
 });
 
 test('malformed ready inboxes leave the existing routing table unchanged', function (): void {
-    $user = User::factory()->create();
+    $user = capstanUser();
     $token = spokeToken($user);
 
     $this->withToken($token)->postJson('/api/v1/poll', [
@@ -377,7 +416,7 @@ test('malformed ready inboxes leave the existing routing table unchanged', funct
 });
 
 test('a poll without a probe response remains compatible', function (): void {
-    $user = User::factory()->create();
+    $user = capstanUser();
 
     $this->withToken(spokeToken($user))->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
@@ -387,7 +426,7 @@ test('a poll without a probe response remains compatible', function (): void {
 });
 
 test('an unknown probe response cannot reject outbound mail or acknowledgements', function (): void {
-    $user = User::factory()->create();
+    $user = capstanUser();
     $token = spokeToken($user);
     $challenge = $this->withToken($token)->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => ['sender']],
@@ -411,8 +450,8 @@ test('an unknown probe response cannot reject outbound mail or acknowledgements'
 });
 
 test('another user advertising a claimed inbox is rejected atomically and receives nothing', function (): void {
-    $alice = User::factory()->create();
-    $mallory = User::factory()->create();
+    $alice = capstanUser();
+    $mallory = capstanUser();
     $aliceToken = spokeToken($alice);
     $malloryToken = spokeToken($mallory);
     $wireEnvelope = pollWireEnvelope('alice@'.POLL_SERVER_ID, ['from_address' => 'alice@'.POLL_SERVER_ID]);
@@ -434,9 +473,9 @@ test('another user advertising a claimed inbox is rejected atomically and receiv
         ->assertJsonPath('error.inboxes', ['alice'])
         ->assertJsonMissingPath('inbound');
 
-    expect(Spoke::query()->where('user_id', $mallory->id)->exists())->toBeFalse()
+    expect(Spoke::query()->where('actor_id', (string) $mallory->id)->exists())->toBeFalse()
         ->and(Inbox::query()->where('local_part', 'mallory')->exists())->toBeFalse()
-        ->and(Inbox::query()->where('local_part', 'alice')->value('user_id'))->toBe($alice->id)
+        ->and(Inbox::query()->where('local_part', 'alice')->value('actor_id'))->toBe((string) $alice->id)
         ->and(Envelope::query()->firstOrFail()->acked_at)->toBeNull();
 
     $this->withToken($aliceToken)->postJson('/api/v1/poll', [
@@ -445,8 +484,8 @@ test('another user advertising a claimed inbox is rejected atomically and receiv
 });
 
 test('another user cannot ack a message addressed to an inbox it does not own', function (): void {
-    $alice = User::factory()->create();
-    $mallory = User::factory()->create();
+    $alice = capstanUser();
+    $mallory = capstanUser();
     $aliceToken = spokeToken($alice);
     $malloryToken = spokeToken($mallory);
     $wireEnvelope = pollWireEnvelope('alice@'.POLL_SERVER_ID, ['from_address' => 'alice@'.POLL_SERVER_ID]);
@@ -476,7 +515,7 @@ test('another user cannot ack a message addressed to an inbox it does not own', 
 });
 
 test('spokes of the same user share an inbox as a pool', function (): void {
-    $alice = User::factory()->create();
+    $alice = capstanUser();
     $laptop = spokeToken($alice);
     $desktop = spokeToken($alice);
     $wireEnvelope = pollWireEnvelope('alice@'.POLL_SERVER_ID, ['from_address' => 'alice@'.POLL_SERVER_ID]);
@@ -491,7 +530,7 @@ test('spokes of the same user share an inbox as a pool', function (): void {
     ])->assertOk()->assertJsonPath('inbound.0.message_id', $wireEnvelope['message_id']);
 
     expect(Inbox::query()->where('local_part', 'alice')->count())->toBe(1)
-        ->and(Spoke::query()->where('user_id', $alice->id)->count())->toBe(2)
+        ->and(Spoke::query()->where('actor_id', (string) $alice->id)->count())->toBe(2)
         ->and(DB::table('spoke_inboxes')->count())->toBe(2);
 
     // Either member of the pool may ack; the other stops receiving it.
@@ -506,7 +545,7 @@ test('spokes of the same user share an inbox as a pool', function (): void {
 });
 
 test('delivery follows persisted routing while acks follow ownership', function (): void {
-    $alice = User::factory()->create();
+    $alice = capstanUser();
     $token = spokeToken($alice);
     $wireEnvelope = pollWireEnvelope('b@'.POLL_SERVER_ID, ['from_address' => 'a@'.POLL_SERVER_ID]);
 
@@ -532,7 +571,7 @@ test('delivery follows persisted routing while acks follow ownership', function 
 });
 
 test('over-cap request arrays are rejected cleanly without touching state', function (): void {
-    $user = User::factory()->create();
+    $user = capstanUser();
     $token = spokeToken($user);
     $wireEnvelope = pollWireEnvelope('receiver@'.POLL_SERVER_ID);
 
@@ -575,7 +614,7 @@ test('over-cap request arrays are rejected cleanly without touching state', func
 });
 
 test('request arrays at the cap are accepted', function (): void {
-    $user = User::factory()->create();
+    $user = capstanUser();
 
     $this->withToken(spokeToken($user))->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => array_map(fn (int $i): string => "inbox-$i", range(1, PollController::MAX_READY_INBOXES))],
@@ -587,8 +626,8 @@ test('request arrays at the cap are accepted', function (): void {
 });
 
 test('a sender must be a local inbox owned by the sending user', function (): void {
-    $alice = User::factory()->create();
-    $bob = User::factory()->create();
+    $alice = capstanUser();
+    $bob = capstanUser();
     $aliceToken = spokeToken($alice);
 
     $this->withToken(spokeToken($bob))->postJson('/api/v1/poll', [
@@ -610,7 +649,7 @@ test('a sender must be a local inbox owned by the sending user', function (): vo
     }
 
     expect(Envelope::query()->count())->toBe(0)
-        ->and(Spoke::query()->where('user_id', $alice->id)->exists())->toBeFalse();
+        ->and(Spoke::query()->where('actor_id', (string) $alice->id)->exists())->toBeFalse();
 
     $this->withToken($aliceToken)->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => ['alice']],
@@ -621,7 +660,7 @@ test('a sender must be a local inbox owned by the sending user', function (): vo
 });
 
 test('a spoke may send from any inbox its user owns even without advertising it', function (): void {
-    $alice = User::factory()->create();
+    $alice = capstanUser();
     $laptop = spokeToken($alice);
     $desktop = spokeToken($alice);
 
@@ -639,8 +678,8 @@ test('a spoke may send from any inbox its user owns even without advertising it'
 
 test('a backdated created_at does not jump the delivery queue', function (): void {
     Date::setTestNow('2026-08-17 12:00:00');
-    $sender = User::factory()->create();
-    $receiver = User::factory()->create();
+    $sender = capstanUser();
+    $receiver = capstanUser();
     $senderToken = spokeToken($sender);
     $receiverToken = spokeToken($receiver);
     $first = pollWireEnvelope('receiver@'.POLL_SERVER_ID, ['message_id' => 'first']);
@@ -673,7 +712,7 @@ test('a backdated created_at does not jump the delivery queue', function (): voi
 
 test('the first delivery time survives redelivery', function (): void {
     Date::setTestNow('2026-08-17 12:00:00');
-    $user = User::factory()->create();
+    $user = capstanUser();
     $token = spokeToken($user);
     $wireEnvelope = pollWireEnvelope('receiver@'.POLL_SERVER_ID);
 
@@ -693,9 +732,10 @@ test('the first delivery time survives redelivery', function (): void {
         ->and($message->status)->toBe(MessageStatus::Delivered);
 });
 
-test('revoking a token removes its spoke and routing but not inbox ownership', function (): void {
-    $user = User::factory()->create();
-    $token = spokeToken($user);
+test('the system-authority sweep retires a revoked credential spoke and routing but preserves attribution', function (): void {
+    $user = capstanUser();
+    $issued = capstanBoundBearer($user, CapstanCredentialDeclaration::POSTMASTER_POLL);
+    $token = $issued['token'];
 
     $this->withToken($token)->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => ['alice']],
@@ -704,15 +744,30 @@ test('revoking a token removes its spoke and routing but not inbox ownership', f
     expect(Spoke::query()->count())->toBe(1)
         ->and(DB::table('spoke_inboxes')->count())->toBe(1);
 
-    $user->tokens()->delete();
+    $issued['credential']->forceFill(['revoked_at' => now()])->save();
+
+    $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+    ])->assertUnauthorized()->assertJsonPath('error.code', 'unauthenticated');
+
+    $this->artisan('postmaster:retire-dead-spokes')
+        ->expectsOutput('This state-changing command is local-only; pass --local.')
+        ->assertFailed();
+
+    expect(Spoke::query()->count())->toBe(1)
+        ->and(DB::table('spoke_inboxes')->count())->toBe(1);
+
+    $this->artisan('postmaster:retire-dead-spokes', ['--local' => true])
+        ->expectsOutput('Retired 1 dead Postmaster spoke(s).')
+        ->assertSuccessful();
 
     expect(Spoke::query()->count())->toBe(0)
         ->and(DB::table('spoke_inboxes')->count())->toBe(0)
-        ->and(Inbox::query()->where('local_part', 'alice')->value('user_id'))->toBe($user->id);
+        ->and(Inbox::query()->where('local_part', 'alice')->value('actor_id'))->toBe((string) $user->id);
 });
 
 test('malformed envelope addresses are rejected as validation errors', function (string $field, string $address): void {
-    $user = User::factory()->create();
+    $user = capstanUser();
     $wireEnvelope = pollWireEnvelope('receiver@'.POLL_SERVER_ID);
     $wireEnvelope[$field] = $address;
 
@@ -735,7 +790,7 @@ test('malformed envelope addresses are rejected as validation errors', function 
 ]);
 
 test('an outbound entry that is a JSON list is rejected by index', function (): void {
-    $user = User::factory()->create();
+    $user = capstanUser();
 
     $this->withToken(spokeToken($user))->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => ['sender']],
@@ -748,7 +803,7 @@ test('an outbound entry that is a JSON list is rejected by index', function (): 
 });
 
 test('a parked message for the same local part on another server is neither delivered nor ackable', function (): void {
-    $alice = User::factory()->create();
+    $alice = capstanUser();
     $token = spokeToken($alice);
     $foreign = pollWireEnvelope('alice@'.POLL_FOREIGN_SERVER_ID, ['from_address' => 'alice@'.POLL_SERVER_ID]);
     $local = pollWireEnvelope('alice@'.POLL_SERVER_ID, ['from_address' => 'alice@'.POLL_SERVER_ID]);
@@ -781,7 +836,7 @@ test('a parked message for the same local part on another server is neither deli
 });
 
 test('over-cap arrays are refused before any per-element validation runs', function (): void {
-    $user = User::factory()->create();
+    $user = capstanUser();
     Validator::spy();
 
     $this->withToken(spokeToken($user))->postJson('/api/v1/poll', [

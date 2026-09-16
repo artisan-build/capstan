@@ -49,7 +49,7 @@ class SpokeMap extends Component
         RateLimiter::hit($key, 60);
 
         $this->onboardingSnippet = $snippet->generate(request(), (string) $user->getKey());
-        $this->onboardingExpiresAt = (int) now()->addSeconds(600)->timestamp;
+        $this->onboardingExpiresAt = now()->addSeconds(600)->getTimestamp();
     }
 
     /**
@@ -124,5 +124,4 @@ class SpokeMap extends Component
     {
         abort_unless(Feature::active(Postmaster::class), 404);
     }
-
 }

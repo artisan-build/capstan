@@ -8,13 +8,13 @@ use App\Models\Spoke;
 use App\Models\SpokeProbe;
 use App\Postmaster\ProbeFailureNotifier;
 use App\Postmaster\ProbeManager;
-use Illuminate\Console\Command;
+use ArtisanBuild\BuiltForCloud\Commands\SystemAuthorityCommand;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Laravel\Pennant\Feature;
 use Throwable;
 
-class SweepPostmasterProbes extends Command
+class SweepPostmasterProbes extends SystemAuthorityCommand
 {
     protected $signature = 'postmaster:probe-sweep';
 
