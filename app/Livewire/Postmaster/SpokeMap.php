@@ -6,14 +6,22 @@ use App\Enums\SpokeLiveness;
 use App\Enums\SpokeMapStatus;
 use App\Features\Postmaster;
 use App\Models\Spoke;
+use App\Postmaster\OnboardingSnippet;
+use ArtisanBuild\BuiltForCloud\Contracts\IdentityContext;
+use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Contracts\View\View;
+use Illuminate\Support\Facades\RateLimiter;
 use Laravel\Pennant\Feature;
 use Livewire\Component;
 
 class SpokeMap extends Component
 {
+    public ?string $onboardingSnippet = null;
+
+    public ?int $onboardingExpiresAt = null;
+
     public function mount(): void
     {
         $this->guardFeature();
@@ -26,6 +34,22 @@ class SpokeMap extends Component
         return view('livewire.postmaster.spoke-map', [
             'spokes' => collect($this->spokes()),
         ]);
+    }
+
+    public function generateOnboardingSnippet(OnboardingSnippet $snippet, IdentityContext $identity): void
+    {
+        $this->guardFeature();
+        abort_unless($identity->canUseProduct(), 403);
+
+        $user = request()->user();
+        abort_unless($user instanceof User, 401);
+
+        $key = 'postmaster-onboarding:'.(request()->ip() ?: 'unknown');
+        abort_if(RateLimiter::tooManyAttempts($key, 15), 429);
+        RateLimiter::hit($key, 60);
+
+        $this->onboardingSnippet = $snippet->generate(request(), (string) $user->getKey());
+        $this->onboardingExpiresAt = (int) now()->addSeconds(600)->timestamp;
     }
 
     /**

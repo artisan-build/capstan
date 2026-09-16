@@ -2,22 +2,25 @@
 
 declare(strict_types=1);
 
+use App\Auth\CapstanCredentialDeclaration;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
+
 return [
     'manifest' => [
         'name' => 'Capstan',
         'slug' => 'capstan',
         'description' => 'Fork-and-deploy AI ecosystem server for the Solo fleet.',
-        'icon' => null,
-        'product_url' => 'https://github.com/artisan-build/capstan',
+        'icon' => 'https://scalpels.app/catalog/capstan/icon.svg',
+        'product_url' => 'https://scalpels.app/catalog/capstan',
     ],
 
     'credentials' => [
         'guard' => env('BUILT_FOR_CLOUD_CREDENTIAL_GUARD', 'bfc'),
-        'declaration' => null,
+        'declaration' => CapstanCredentialDeclaration::class,
         'session_guard' => null,
         'app_purposes' => [
-            'capstan.artifact.ingest' => 'consumption',
-            'capstan.postmaster.poll' => 'mcp',
+            CapstanCredentialDeclaration::ARTIFACT_INGEST => CredentialPurpose::Consumption->value,
+            CapstanCredentialDeclaration::POSTMASTER_POLL => CredentialPurpose::Mcp->value,
         ],
     ],
 
@@ -29,8 +32,8 @@ return [
         'session_management' => true,
         'managed_transitions' => true,
         'credential_purposes' => [
-            'capstan.artifact.ingest',
-            'capstan.postmaster.poll',
+            CapstanCredentialDeclaration::ARTIFACT_INGEST,
+            CapstanCredentialDeclaration::POSTMASTER_POLL,
         ],
     ],
 ];

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Auth\CapstanCredentialDeclaration;
 use App\Enums\MessageStatus;
 use App\Enums\MessageType;
 use App\Features\Postmaster;
@@ -17,18 +18,13 @@ use App\Postmaster\ProbeManager;
 use App\Support\Address;
 use App\Support\JsonCanonicalizer;
 use App\Support\ServerIdentity;
-use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
-use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
-use ArtisanBuild\BuiltForCloud\DomainIdentityContext;
+use ArtisanBuild\BuiltForCloud\BoundBearerCredentialAuthenticator;
 use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
-use ArtisanBuild\BuiltForCloud\InstallationAuthority;
-use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Database\Query\Builder as QueryBuilder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
@@ -58,28 +54,12 @@ class PollController extends Controller
         ServerIdentity $identity,
         ProbeManager $probeManager,
         ProbeFailureNotifier $probeFailureNotifier,
-        AppPurposeRegistry $purposes,
+        BoundBearerCredentialAuthenticator $credentials,
     ): JsonResponse {
-        $guard = Auth::guard((string) config('built-for-cloud.credentials.guard', 'bfc'));
-        $purpose = $purposes->purpose('capstan.postmaster.poll');
-        $credential = $guard instanceof CredentialGuard
-            ? $guard->credentialForPurposes([$purpose])
-            : null;
+        $credential = $credentials->authenticate($request, CapstanCredentialDeclaration::POSTMASTER_POLL);
 
-        if ($credential === null || $credential->purpose !== $purpose || $credential->user_id === null) {
+        if ($credential === null || $credential->userId === null) {
             return ApiError::response(401, 'unauthenticated', 'Unauthenticated.');
-        }
-
-        $user = User::query()->find($credential->user_id);
-
-        if (! $user instanceof User) {
-            return ApiError::response(401, 'unauthenticated', 'Unauthenticated.');
-        }
-
-        $actor = DomainIdentityContext::forUser($user, InstallationAuthority::current());
-
-        if (! $actor->canUseProduct()) {
-            return ApiError::response(403, 'forbidden', 'Forbidden.');
         }
 
         if (! Feature::active(Postmaster::class)) {
@@ -117,14 +97,14 @@ class PollController extends Controller
 
         try {
             /** @var array{payload: array{inbound: list<array<string, mixed>>, cursor: string|null, probe_challenge?: array{probe_id: string, nonce: string, algorithm: string}}, failure: array{Spoke, SpokeProbe}|null} $result */
-            $result = DB::transaction(function () use ($actor, $credential, $validation, $envelopes, $serverId, $probeManager, $signer): array {
+            $result = DB::transaction(function () use ($credential, $validation, $envelopes, $serverId, $probeManager, $signer): array {
                 $now = now();
-                $spoke = $this->resolveSpoke($actor->actorId(), $credential->id, $now);
+                $spoke = $this->resolveSpoke($credential->userId, $credential->id, $now);
                 $readyInboxes = array_values(array_unique($validation['ready_inboxes']));
                 $failedProbe = $probeManager->respond($spoke, $validation['probe_response'], $now);
 
-                $this->refreshRouting($spoke, $actor->actorId(), $readyInboxes, $validation['cursor'], $now);
-                $this->assertSendersOwned($actor->actorId(), $envelopes, $serverId);
+                $this->refreshRouting($spoke, $credential->userId, $readyInboxes, $validation['cursor'], $now);
+                $this->assertSendersOwned($credential->userId, $envelopes, $serverId);
 
                 foreach ($envelopes as $envelope) {
                     $mac = $signer->mac(JsonCanonicalizer::encode($envelope->signablePayload()));
@@ -133,8 +113,8 @@ class PollController extends Controller
                     $this->storeEnvelope($envelope, $serverId, $now);
                 }
 
-                $this->processAcks($actor->actorId(), $validation['acks'], $serverId, $now);
-                $inbound = $this->inbound($spoke, $actor->actorId(), $serverId);
+                $this->processAcks($credential->userId, $validation['acks'], $serverId, $now);
+                $inbound = $this->inbound($spoke, $credential->userId, $serverId);
                 $this->markDelivered($inbound, $now);
                 $challenge = $probeManager->issue($spoke, $now);
 

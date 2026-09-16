@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Auth\CapstanCredentialDeclaration;
 use App\Enums\ArtifactVisibility;
 use App\Features\Artifacts;
 use App\Http\ApiError;
@@ -9,14 +10,9 @@ use App\Http\Controllers\Controller;
 use App\Models\Artifact;
 use App\Models\Team;
 use App\Support\ArtifactRenderOrigin;
-use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
-use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
-use ArtisanBuild\BuiltForCloud\DomainIdentityContext;
-use ArtisanBuild\BuiltForCloud\InstallationAuthority;
-use ArtisanBuild\BuiltForCloud\User;
+use ArtisanBuild\BuiltForCloud\BoundBearerCredentialAuthenticator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
@@ -26,31 +22,13 @@ class ArtifactController extends Controller
 {
     public function store(
         Request $request,
-        AppPurposeRegistry $purposes,
+        BoundBearerCredentialAuthenticator $credentials,
     ): JsonResponse
     {
-        $guard = Auth::guard((string) config('built-for-cloud.credentials.guard', 'bfc'));
-        $purpose = $purposes->purpose('capstan.artifact.ingest');
-        $credential = $guard instanceof CredentialGuard
-            ? $guard->credentialForPurposes([$purpose])
-            : null;
+        $credential = $credentials->authenticate($request, CapstanCredentialDeclaration::ARTIFACT_INGEST);
 
-        if ($credential === null
-            || $credential->purpose !== $purpose
-            || $credential->user_id === null) {
+        if ($credential === null || $credential->userId === null) {
             return ApiError::response(401, 'unauthenticated', 'Unauthenticated.');
-        }
-
-        $user = User::query()->find($credential->user_id);
-
-        if (! $user instanceof User) {
-            return ApiError::response(401, 'unauthenticated', 'Unauthenticated.');
-        }
-
-        $identity = DomainIdentityContext::forUser($user, InstallationAuthority::current());
-
-        if (! $identity->canUseProduct()) {
-            return ApiError::response(403, 'forbidden', 'Forbidden.');
         }
 
         if (! Feature::active(Artifacts::class)) {
@@ -83,9 +61,9 @@ class ArtifactController extends Controller
 
         [$contentHash, $storageKey] = Artifact::storeBlob($validated['content']);
 
-        $artifact = DB::transaction(function () use ($validated, $identity, $defaultTeam, $contentHash, $storageKey): Artifact {
+        $artifact = DB::transaction(function () use ($validated, $credential, $defaultTeam, $contentHash, $storageKey): Artifact {
             $artifact = Artifact::query()->create([
-                'actor_id' => $identity->actorId(),
+                'actor_id' => $credential->userId,
                 'visibility' => ArtifactVisibility::from($validated['visibility'] ?? ArtifactVisibility::OrgAuth->value),
                 'expires_at' => $validated['expires_at'] ?? null,
                 'content_type' => $validated['content_type'],

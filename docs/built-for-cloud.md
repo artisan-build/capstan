@@ -1,86 +1,22 @@
-# Built for Cloud (D30)
+# Built for Cloud
 
-Capstan is a **Built-for-Cloud (BfC) catalog product**. It requires
-[`artisan-build/built-for-cloud`](https://github.com/artisan-build/built-for-cloud), which gives a
-Laravel Cloud console a uniform way to identify, claim, and administer any app in the catalog.
+Capstan uses `artisan-build/built-for-cloud` as its only human, authority, invitation, session, and credential system. The package owns the `/bfc` browser, device, loopback, and credential-management routes.
 
-The package **coexists with** Capstan's own Sanctum auth. Nothing about Capstan's existing login,
-device-code/loopback/one-time-code flows, `ResolveApiActor` middleware, or artifact ingest changed.
+Capstan declares two application purposes:
 
-## Two orthogonal token planes
-
-| | Sanctum personal access tokens | BfC `api_tokens` |
+| Application purpose | Protocol purpose | API |
 | --- | --- | --- |
-| Table | `personal_access_tokens` | `api_tokens` |
-| Owned by | a `User` | nobody — ownerless machine credentials |
-| Scopes | Sanctum abilities | `Scope` enum: `consume` / `admin` / `onboard` |
-| Minted by | Capstan's loopback, device-code, and one-time-code flows | `php artisan token:*` (Cloud CLI) and the BfC onboarding endpoints |
-| Resolved by | `App\Http\Middleware\ResolveApiActor` (alias `capstan.auth`) | the package's own `bfc.token.admin` middleware |
-| Guards | Capstan's routes — artifact authorship and everything a human or their agent does | the package's own `/bfc/*` control-plane routes |
+| `capstan.artifact.ingest` | `consumption` | `POST /api/v1/artifacts` |
+| `capstan.postmaster.poll` | `mcp` | `POST /api/v1/poll` |
 
-These planes do not overlap. Capstan's routes are **not** wired to accept BfC machine tokens, and the
-`/bfc/*` routes are **not** wired to accept Sanctum PATs. Dual-resolution inside `ResolveApiActor`
-(letting a machine token act on Capstan's own endpoints) is deliberately **deferred** — it needs an
-answer for what a `User`-less actor means for artifact authorship first.
+Both APIs accept only an exact-bound package bearer through `BoundBearerCredentialAuthenticator`. Clients also send the non-secret stable package actor id in `X-Capstan-Actor-ID`; Capstan derives `user_principal:capstan-user:<id>` from that request value independently of the presented credential. A mismatch is rejected before validation or domain work.
 
-The package registers its routes itself: `GET /bfc/meta` (unauthenticated product metadata),
-`/bfc/ownership/*`, and `/bfc/onboarding/*`. The credential API stays disabled by default.
+Device and loopback clients use the package routes under `/bfc/device*` and `/bfc/loopback*`. They never choose purpose, subject, installation, application, audience, ownership, abilities, credential kind, expiry, or binding.
 
-## The two auth-foundation opt-outs
+Postmaster envelopes are signed server-side with the package installation signing root after bearer authentication and sender ownership checks. Provision it on a local installation with:
 
-The package ships an optional "auth foundation" for apps that don't already have one. Capstan does,
-so both pieces are opted out. Set these wherever Capstan runs — they are in `.env.example` and, so
-the test and CI databases opt out too, in `phpunit.xml`:
-
-```dotenv
-BUILT_FOR_CLOUD_PRODUCT=Capstan
-BUILT_FOR_CLOUD_INVITATIONS=false
-BUILT_FOR_CLOUD_USER_ADMIN_COLUMN=false
+```sh
+php artisan bfc:signing-root:provision --local
 ```
 
-- **`BUILT_FOR_CLOUD_INVITATIONS=false`** — Capstan owns `invitations` (`code`, `role`, `issued_by`,
-  `used_by`, `expires_at`, plus `App\Models\Invitation` and the `IssueInvitation` action). The
-  package's `invitations` migration is timestamped *earlier* than Capstan's, so leaving it enabled
-  would create the package's shape first and make Capstan's `Schema::create` collide on a fresh
-  migrate. Opting out makes that migration a no-op.
-- **`BUILT_FOR_CLOUD_USER_ADMIN_COLUMN=false`** — Capstan's admin concept is `OrgRole`
-  (`owner` / `admin` / `member`) on `users`. A separate `is_admin` boolean column would be a second,
-  drift-prone source of truth.
-
-In `phpunit.xml` these are written as the literal `(false)`, not `false`. PHPUnit casts a
-`value="false"` attribute to a real boolean and then `putenv()`s it as an *empty string*, which is
-not the `=== false` the package's migration guards check for. Laravel's `Env` repository maps
-`(false)` to boolean `false`, so the literal round-trips correctly.
-
-`tests/Feature/BuiltForCloud/AuthFoundationOptOutTest.php` locks this in: after a fresh migrate,
-Capstan's `invitations` columns are present, the BfC ownership tables (`api_tokens`,
-`ownership_claims`, `ownership`, `onboarding_tokens`) exist, and `users` has no `is_admin` column.
-
-## `is_admin` is derived from `OrgRole`
-
-The package's `bfc.admin` middleware (`EnsureUserIsAdmin`) reads `$user->getAttribute('is_admin')`.
-`App\Models\User` satisfies that with a **read-only** accessor rather than a column:
-
-```php
-protected function isAdmin(): Attribute
-{
-    return Attribute::make(
-        get: fn (): bool => $this->org_role === OrgRole::Owner || $this->org_role === OrgRole::Admin,
-    );
-}
-```
-
-There is no migration, no `$fillable` entry, and nothing persisted. Grant admin by setting
-`org_role`.
-
-The trade-off: Capstan does **not** use the package's `create-admin` command, because that write path
-needs a real column to set. Admin in Capstan is always granted through the org-role UI or by setting
-`org_role` directly.
-
-## Contract conformance
-
-`tests/Feature/BuiltForCloud/ContractTest.php` runs the package's shipped
-`ArtisanBuild\BuiltForCloud\Testing\ContractAssertions::assertBuiltForCloudContract()` unmodified. It
-covers `/bfc/meta`'s payload shape, the ownership and onboarding auth boundaries, and the
-`api_tokens` model shape. None of it depends on the auth-foundation migrations, so the opt-outs cost
-nothing in conformance.
+Never omit `--local` from a state-changing Built for Cloud artisan command unless a remote environment is explicitly intended and authorized.
