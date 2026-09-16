@@ -23,6 +23,7 @@ use stdClass;
  * @property array<array-key, mixed> $refs
  * @property string $message_id
  * @property string $signature
+ * @property string $signing_key_id
  * @property MessageStatus $status
  * @property CarbonImmutable|null $delivered_at
  * @property CarbonImmutable|null $acked_at

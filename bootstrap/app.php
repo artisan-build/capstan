@@ -1,8 +1,8 @@
 <?php
 
+use App\Http\Middleware\AuthenticateBoundCredential;
 use App\Http\Middleware\NoIndexArtifactPaths;
 use App\Http\Middleware\RenderOriginIsolation;
-use App\Http\Middleware\ResolveApiActor;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -32,13 +32,17 @@ return Application::configure(basePath: dirname(__DIR__))
         );
 
         $middleware->alias([
-            'capstan.auth' => ResolveApiActor::class,
+            'capstan.bound_credential' => AuthenticateBoundCredential::class,
             'capstan.noindex_artifacts' => NoIndexArtifactPaths::class,
         ]);
 
+        $middleware->prependToPriorityList(
+            [ThrottleRequests::class, ThrottleRequestsWithRedis::class],
+            AuthenticateBoundCredential::class,
+        );
+
         $middleware->append(RenderOriginIsolation::class);
 
-        $middleware->prependToPriorityList([ThrottleRequests::class, ThrottleRequestsWithRedis::class], ResolveApiActor::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

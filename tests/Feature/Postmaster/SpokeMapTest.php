@@ -1,21 +1,23 @@
 <?php
 
-use App\Enums\OrgRole;
 use App\Enums\SpokeLiveness;
 use App\Enums\SpokeMapStatus;
 use App\Livewire\Postmaster\SpokeMap;
 use App\Models\Inbox;
 use App\Models\Spoke;
-use App\Models\User;
+use ArtisanBuild\BuiltForCloud\User;
+use ArtisanBuild\BuiltForCloud\UserRole;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Laravel\Pennant\Feature;
 use Livewire\Livewire;
 
 beforeEach(function (): void {
     config([
+        'app.key' => 'base64:'.base64_encode(str_repeat('m', 32)),
         'capstan.features.postmaster' => true,
         'capstan.postmaster.map.stale_after_seconds' => 300,
     ]);
@@ -35,7 +37,8 @@ function createMapSpoke(
     int $inboxes = 0,
 ): Spoke {
     $spoke = Spoke::query()->create([
-        'user_id' => $user->id,
+        'actor_id' => (string) $user->id,
+        'credential_id' => (string) Str::uuid(),
         'name' => $name,
         'last_polled_at' => $lastPolledAt,
         'probe_status' => $probeStatus,
@@ -43,7 +46,7 @@ function createMapSpoke(
 
     for ($index = 1; $index <= $inboxes; $index++) {
         $inbox = Inbox::query()->create([
-            'user_id' => $user->id,
+            'actor_id' => (string) $user->id,
             'local_part' => "map-{$spoke->id}-{$index}",
         ]);
         $spoke->inboxes()->attach($inbox);
@@ -53,10 +56,10 @@ function createMapSpoke(
 }
 
 test('the authenticated map page renders registered spoke data', function (): void {
-    $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+    $owner = capstanUser(['role' => UserRole::Owner->value]);
     $spoke = createMapSpoke($owner, 'rendered-spoke', now(), SpokeLiveness::Green, 2);
 
-    $this->actingAs($owner)
+    $this->actingAsVersioned($owner)
         ->get(route('postmaster.map'))
         ->assertOk()
         ->assertSee($spoke->name)
@@ -66,7 +69,7 @@ test('the authenticated map page renders registered spoke data', function (): vo
 });
 
 test('map status combines poll recency and probe state', function (): void {
-    $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+    $owner = capstanUser(['role' => UserRole::Owner->value]);
     $green = createMapSpoke($owner, 'green-spoke', now()->subSecond(), SpokeLiveness::Green);
     $stale = createMapSpoke($owner, 'stale-spoke', now()->subSeconds(301), SpokeLiveness::Green);
     $failed = createMapSpoke($owner, 'failed-spoke', now()->subSecond(), SpokeLiveness::Red);
@@ -90,7 +93,7 @@ test('map status combines poll recency and probe state', function (): void {
 
 test('the configured staleness boundary is honored', function (): void {
     config(['capstan.postmaster.map.stale_after_seconds' => 120]);
-    $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+    $owner = capstanUser(['role' => UserRole::Owner->value]);
     $inside = createMapSpoke($owner, 'inside-window', now()->subSeconds(119), SpokeLiveness::Green);
     $atCutoff = createMapSpoke($owner, 'at-cutoff', now()->subSeconds(120), SpokeLiveness::Green);
     $outside = createMapSpoke($owner, 'outside-window', now()->subSeconds(121), SpokeLiveness::Green);
@@ -107,7 +110,7 @@ test('the configured staleness boundary is honored', function (): void {
 
 test('the staleness window has a safe default and minimum', function (array $mapConfig, int $insideAge, int $outsideAge): void {
     config(['capstan.postmaster.map' => $mapConfig]);
-    $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+    $owner = capstanUser(['role' => UserRole::Owner->value]);
     $inside = createMapSpoke($owner, 'safe-window-inside', now()->subSeconds($insideAge), SpokeLiveness::Green);
     $outside = createMapSpoke($owner, 'safe-window-outside', now()->subSeconds($outsideAge), SpokeLiveness::Green);
 
@@ -123,24 +126,10 @@ test('the staleness window has a safe default and minimum', function (array $map
     'missing uses the default' => [[], 299, 301],
 ]);
 
-test('a member sees only their own spokes', function (): void {
-    $member = User::factory()->create();
-    $otherMember = User::factory()->create();
-    $own = createMapSpoke($member, 'member-owned-spoke', now(), SpokeLiveness::Green, 1);
-    $other = createMapSpoke($otherMember, 'other-member-spoke', now(), SpokeLiveness::Green, 1);
-
-    $component = Livewire::actingAs($member)->test(SpokeMap::class);
-    $visibleIds = $component->viewData('spokes')->pluck('id')->all();
-
-    expect($visibleIds)->toBe([$own->id])
-        ->and($visibleIds)->not->toContain($other->id);
-    $component->assertSee($own->name)->assertDontSee($other->name);
-});
-
-test('owners and admins see every spoke', function (OrgRole $role): void {
-    $operator = User::factory()->create(['org_role' => $role]);
-    $firstMember = User::factory()->create();
-    $secondMember = User::factory()->create();
+test('every package role sees the same installation-wide spoke map', function (UserRole $role): void {
+    $operator = capstanUser(['role' => $role->value]);
+    $firstMember = capstanUser();
+    $secondMember = capstanUser();
     $first = createMapSpoke($firstMember, 'first-member-spoke', now(), SpokeLiveness::Green);
     $second = createMapSpoke($secondMember, 'second-member-spoke', now(), SpokeLiveness::Unknown);
 
@@ -153,12 +142,13 @@ test('owners and admins see every spoke', function (OrgRole $role): void {
     expect($visibleIds)->toHaveCount(2)
         ->and($visibleIds)->toContain($first->id, $second->id);
 })->with([
-    'owner' => OrgRole::Owner,
-    'admin' => OrgRole::Admin,
+    'owner' => UserRole::Owner,
+    'admin' => UserRole::Admin,
+    'member' => UserRole::Member,
 ]);
 
 test('a disabled postmaster map returns 404 without changing routing state', function (): void {
-    $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+    $owner = capstanUser(['role' => UserRole::Owner->value]);
     $spoke = createMapSpoke($owner, 'disabled-map-spoke', now(), SpokeLiveness::Green, 2);
     $before = [
         Spoke::query()->count(),
@@ -168,7 +158,7 @@ test('a disabled postmaster map returns 404 without changing routing state', fun
     config(['capstan.features.postmaster' => false]);
     Feature::flushCache();
 
-    $this->actingAs($owner)->get(route('postmaster.map'))->assertNotFound();
+    $this->actingAsVersioned($owner)->get(route('postmaster.map'))->assertNotFound();
 
     expect([
         Spoke::query()->count(),
@@ -179,9 +169,9 @@ test('a disabled postmaster map returns 404 without changing routing state', fun
 });
 
 test('disabling postmaster rejects an existing Livewire snapshot', function (): void {
-    $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+    $owner = capstanUser(['role' => UserRole::Owner->value]);
     $spoke = createMapSpoke($owner, 'snapshot-guarded-spoke', now(), SpokeLiveness::Green, 2);
-    $page = $this->actingAs($owner)
+    $page = $this->actingAsVersioned($owner)
         ->get(route('postmaster.map'))
         ->assertOk()
         ->assertSee($spoke->name);
@@ -205,11 +195,11 @@ test('disabling postmaster rejects an existing Livewire snapshot', function (): 
 });
 
 test('an unauthenticated map request redirects to login', function (): void {
-    $this->get(route('postmaster.map'))->assertRedirect(route('login'));
+    $this->get(route('postmaster.map'))->assertRedirect(route('bfc.login'));
 });
 
 test('rendering several routed spokes uses a bounded query count', function (): void {
-    $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+    $owner = capstanUser(['role' => UserRole::Owner->value]);
 
     foreach (range(1, 6) as $index) {
         createMapSpoke($owner, "bounded-spoke-{$index}", now(), SpokeLiveness::Green, 2);
@@ -232,7 +222,7 @@ test('rendering several routed spokes uses a bounded query count', function (): 
 });
 
 test('map ordering is deterministic with red spokes first', function (): void {
-    $owner = User::factory()->create(['org_role' => OrgRole::Owner]);
+    $owner = capstanUser(['role' => UserRole::Owner->value]);
     $redZulu = createMapSpoke($owner, 'zulu-red', now(), SpokeLiveness::Red);
     $pendingAlpha = createMapSpoke($owner, 'alpha-pending', now(), SpokeLiveness::Unknown);
     $greenGamma = createMapSpoke($owner, 'gamma-green', now(), SpokeLiveness::Green);

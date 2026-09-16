@@ -2,18 +2,16 @@
 
 namespace App\Livewire\Postmaster;
 
-use App\Enums\OrgRole;
 use App\Enums\SpokeLiveness;
 use App\Enums\SpokeMapStatus;
 use App\Features\Postmaster;
-use App\Models\DeviceCode;
 use App\Models\Spoke;
-use App\Models\User;
 use App\Postmaster\OnboardingSnippet;
+use ArtisanBuild\BuiltForCloud\Contracts\IdentityContext;
+use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Contracts\View\View;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\RateLimiter;
 use Laravel\Pennant\Feature;
 use Livewire\Component;
@@ -29,34 +27,29 @@ class SpokeMap extends Component
         $this->guardFeature();
     }
 
-    public function generateOnboardingSnippet(OnboardingSnippet $onboarding): void
-    {
-        $this->guardFeature();
-        abort_unless($this->canOnboard(), 403);
-        abort_unless(RateLimiter::attempt(
-            $this->onboardingRateLimitKey(),
-            15,
-            static fn (): bool => true,
-            60,
-        ), 429);
-
-        $this->onboardingSnippet = $onboarding->generate();
-        $this->onboardingExpiresAt = now()->addSeconds(DeviceCode::LIFETIME_SECONDS)->getTimestamp();
-    }
-
     public function render(): View
     {
         $this->guardFeature();
 
-        if (! $this->canOnboard()) {
-            $this->onboardingSnippet = null;
-            $this->onboardingExpiresAt = null;
-        }
-
         return view('livewire.postmaster.spoke-map', [
             'spokes' => collect($this->spokes()),
-            'canOnboard' => $this->canOnboard(),
         ]);
+    }
+
+    public function generateOnboardingSnippet(OnboardingSnippet $snippet, IdentityContext $identity): void
+    {
+        $this->guardFeature();
+        abort_unless($identity->canUseProduct(), 403);
+
+        $user = request()->user();
+        abort_unless($user instanceof User, 401);
+
+        $key = 'postmaster-onboarding:'.(request()->ip() ?: 'unknown');
+        abort_if(RateLimiter::tooManyAttempts($key, 15), 429);
+        RateLimiter::hit($key, 60);
+
+        $this->onboardingSnippet = $snippet->generate(request(), (string) $user->getKey());
+        $this->onboardingExpiresAt = now()->addSeconds(600)->getTimestamp();
     }
 
     /**
@@ -72,16 +65,8 @@ class SpokeMap extends Component
      */
     private function spokes(): array
     {
-        /** @var User $user */
-        $user = Auth::user();
-
         $query = Spoke::query()
-            ->with('user:id,name')
             ->withCount('inboxes');
-
-        if (! in_array($user->org_role, [OrgRole::Owner, OrgRole::Admin], true)) {
-            $query->where('user_id', $user->id);
-        }
 
         $staleAfter = max(60, (int) config('capstan.postmaster.map.stale_after_seconds', 300));
         $staleBefore = now()->subSeconds($staleAfter);
@@ -103,7 +88,7 @@ class SpokeMap extends Component
             ->map(fn (Spoke $spoke): array => [
                 'id' => $spoke->id,
                 'name' => $this->displayName($spoke),
-                'owner_name' => $spoke->user->name,
+                'owner_name' => $spoke->actor_id,
                 'last_polled_at' => $spoke->last_polled_at,
                 'inboxes_count' => (int) $spoke->inboxes_count,
                 'probe_status' => $spoke->probe_status,
@@ -135,21 +120,8 @@ class SpokeMap extends Component
         return $status === SpokeMapStatus::Red ? 0 : 1;
     }
 
-    private function canOnboard(): bool
-    {
-        $user = Auth::user();
-
-        return $user instanceof User
-            && in_array($user->org_role, [OrgRole::Owner, OrgRole::Admin], true);
-    }
-
     private function guardFeature(): void
     {
         abort_unless(Feature::active(Postmaster::class), 404);
-    }
-
-    private function onboardingRateLimitKey(): string
-    {
-        return 'postmaster-onboarding:'.(request()->ip() ?: 'unknown');
     }
 }

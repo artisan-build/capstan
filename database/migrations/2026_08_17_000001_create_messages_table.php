@@ -20,6 +20,7 @@ return new class extends Migration
             $table->json('refs');
             $table->string('message_id')->unique();
             $table->string('signature', 64);
+            $table->uuid('signing_key_id');
             $table->string('status')->default('pending');
             $table->timestamp('delivered_at')->nullable();
             $table->timestamp('acked_at')->nullable();

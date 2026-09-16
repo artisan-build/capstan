@@ -1,5 +1,6 @@
 <?php
 
+use App\Auth\CapstanCredentialDeclaration;
 use App\Enums\ProbeStatus;
 use App\Enums\SpokeLiveness;
 use App\Features\Postmaster;
@@ -7,8 +8,11 @@ use App\Models\Envelope;
 use App\Models\Inbox;
 use App\Models\Spoke;
 use App\Models\SpokeProbe;
-use App\Models\User;
 use App\Postmaster\ProbeFailureNotifier;
+use App\Postmaster\ProbeManager;
+use ArtisanBuild\BuiltForCloud\SystemAuthorityContext;
+use ArtisanBuild\BuiltForCloud\User;
+use Carbon\CarbonImmutable;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
@@ -46,12 +50,12 @@ beforeEach(function (): void {
 
 function probeToken(User $user): string
 {
-    return $user->createToken('probe-client')->plainTextToken;
+    return capstanBoundBearer($user, CapstanCredentialDeclaration::POSTMASTER_POLL)['token'];
 }
 
 test('a correct computed echo passes the probe and marks the spoke green without message side effects', function (): void {
     Date::setTestNow('2026-08-17 12:00:00');
-    $user = User::factory()->create();
+    $user = capstanUser();
     $token = probeToken($user);
 
     $issued = $this->withToken($token)->postJson('/api/v1/poll', [
@@ -74,7 +78,7 @@ test('a correct computed echo passes the probe and marks the spoke green without
         'messages' => Envelope::query()->count(),
         'inboxes' => Inbox::query()->count(),
         'routes' => DB::table('spoke_inboxes')->count(),
-        'owner' => Inbox::query()->where('local_part', 'worker')->value('user_id'),
+        'owner' => Inbox::query()->where('local_part', 'worker')->value('actor_id'),
     ];
 
     Date::setTestNow('2026-08-17 12:00:01');
@@ -96,12 +100,12 @@ test('a correct computed echo passes the probe and marks the spoke green without
         ->and(Envelope::query()->count())->toBe($state['messages'])
         ->and(Inbox::query()->count())->toBe($state['inboxes'])
         ->and(DB::table('spoke_inboxes')->count())->toBe($state['routes'])
-        ->and(Inbox::query()->where('local_part', 'worker')->value('user_id'))->toBe($state['owner']);
+        ->and(Inbox::query()->where('local_part', 'worker')->value('actor_id'))->toBe($state['owner']);
 });
 
 test('a wrong digest fails immediately and notifies exactly once', function (): void {
     Date::setTestNow('2026-08-17 12:00:00');
-    $user = User::factory()->create();
+    $user = capstanUser();
     $token = probeToken($user);
     $challenge = $this->withToken($token)->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
@@ -136,7 +140,7 @@ test('a wrong digest fails immediately and notifies exactly once', function (): 
 });
 
 test('malformed probe responses return the api validation envelope without changing probe state', function (): void {
-    $user = User::factory()->create();
+    $user = capstanUser();
     $token = probeToken($user);
     $challenge = $this->withToken($token)->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
@@ -163,8 +167,8 @@ test('malformed probe responses return the api validation envelope without chang
 });
 
 test('unknown and foreign probe responses are ignored without changing another spoke', function (): void {
-    $alice = User::factory()->create();
-    $bob = User::factory()->create();
+    $alice = capstanUser();
+    $bob = capstanUser();
     $aliceToken = probeToken($alice);
     $bobToken = probeToken($bob);
     $aliceChallenge = $this->withToken($aliceToken)->postJson('/api/v1/poll', [
@@ -197,7 +201,7 @@ test('unknown and foreign probe responses are ignored without changing another s
 
 test('the scheduled sweep detects a spoke that stopped polling and is idempotent', function (): void {
     Date::setTestNow('2026-08-17 12:00:00');
-    $user = User::factory()->create();
+    $user = capstanUser();
     $this->withToken(probeToken($user))->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
     ])->assertOk();
@@ -224,7 +228,7 @@ test('the scheduled sweep detects a spoke that stopped polling and is idempotent
 
 test('a lost response is recovered by replaying the same challenge until it passes in window', function (): void {
     Date::setTestNow('2026-08-17 12:00:00');
-    $user = User::factory()->create();
+    $user = capstanUser();
     $token = probeToken($user);
     $challenge = $this->withToken($token)->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
@@ -256,7 +260,7 @@ test('a lost response is recovered by replaying the same challenge until it pass
 test('a failed spoke observes backoff before another challenge', function (): void {
     config(['capstan.postmaster.probe.interval_seconds' => 3600]);
     Date::setTestNow('2026-08-17 12:00:00');
-    $user = User::factory()->create();
+    $user = capstanUser();
     $token = probeToken($user);
     $challenge = $this->withToken($token)->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
@@ -296,7 +300,7 @@ test('a failed spoke observes backoff before another challenge', function (): vo
 test('an expired probe cannot be redeemed with a correct digest', function (): void {
     config(['capstan.postmaster.probe.timeout_seconds' => 60]);
     Date::setTestNow('2026-08-17 12:00:00');
-    $user = User::factory()->create();
+    $user = capstanUser();
     $token = probeToken($user);
     $challenge = $this->withToken($token)->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
@@ -321,7 +325,7 @@ test('an expired probe cannot be redeemed with a correct digest', function (): v
 
 test('a red spoke recovers to green after passing a new probe', function (): void {
     Date::setTestNow('2026-08-17 12:00:00');
-    $user = User::factory()->create();
+    $user = capstanUser();
     $token = probeToken($user);
     $failed = $this->withToken($token)->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
@@ -370,7 +374,7 @@ test('a red spoke recovers to green after passing a new probe', function (): voi
 test('an expired challenge does not block a later challenge and only the sweep fails it', function (): void {
     config(['capstan.postmaster.probe.timeout_seconds' => 60]);
     Date::setTestNow('2026-08-17 12:00:00');
-    $user = User::factory()->create();
+    $user = capstanUser();
     $token = probeToken($user);
     $firstId = $this->withToken($token)->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
@@ -397,7 +401,7 @@ test('an expired challenge does not block a later challenge and only the sweep f
 
 test('sweeping a stale probe cannot overwrite a newer successful probe', function (): void {
     Date::setTestNow('2026-08-17 12:00:00');
-    $user = User::factory()->create();
+    $user = capstanUser();
     $token = probeToken($user);
     $staleId = $this->withToken($token)->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
@@ -445,7 +449,7 @@ test('a throwing notifier does not stop the sweep or lose failed records', funct
     Log::spy();
     Date::setTestNow('2026-08-17 12:00:00');
 
-    foreach ([User::factory()->create(), User::factory()->create()] as $user) {
+    foreach ([capstanUser(), capstanUser()] as $user) {
         $this->withToken(probeToken($user))->postJson('/api/v1/poll', [
             'presence' => ['ready_inboxes' => []],
         ])->assertOk();
@@ -462,7 +466,7 @@ test('a throwing notifier does not stop the sweep or lose failed records', funct
 });
 
 test('probe ids are protected by a database unique constraint', function (): void {
-    $user = User::factory()->create();
+    $user = capstanUser();
     $this->withToken(probeToken($user))->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
     ])->assertOk();
@@ -492,8 +496,52 @@ test('the overdue probe sweep is scheduled every minute', function (): void {
     expect($scheduled)->toBeTrue();
 });
 
+test('the probe sweep runs with system authority and never synthesizes a human principal', function (): void {
+    $context = app(SystemAuthorityContext::class);
+    $manager = new class($context) extends ProbeManager
+    {
+        public bool $authorityWasActive = false;
+
+        public mixed $principal = 'not-observed';
+
+        public function __construct(private readonly SystemAuthorityContext $context) {}
+
+        public function fail(Spoke $spoke, SpokeProbe $probe, CarbonImmutable $now, bool $responded): bool
+        {
+            $this->authorityWasActive = $this->context->active();
+            $this->principal = auth()->user();
+
+            return parent::fail($spoke, $probe, $now, $responded);
+        }
+    };
+    $this->app->instance(ProbeManager::class, $manager);
+    $spoke = Spoke::query()->create([
+        'actor_id' => 'test-created-actor',
+        'credential_id' => (string) Str::uuid(),
+        'last_polled_at' => now()->subHour(),
+    ]);
+    SpokeProbe::query()->create([
+        'spoke_id' => $spoke->id,
+        'probe_id' => (string) Str::ulid(),
+        'nonce' => str_repeat('a', 43),
+        'status' => ProbeStatus::Awaiting,
+        'issued_at' => now()->subHour(),
+        'expires_at' => now()->subMinute(),
+    ]);
+
+    expect($context->active())->toBeFalse()
+        ->and(auth()->user())->toBeNull();
+
+    $this->artisan('postmaster:probe-sweep')->assertSuccessful();
+
+    expect($manager->authorityWasActive)->toBeTrue()
+        ->and($manager->principal)->toBeNull()
+        ->and($context->active())->toBeFalse()
+        ->and(auth()->user())->toBeNull();
+});
+
 test('disabling Postmaster voids outstanding probes before re-enable', function (): void {
-    $user = User::factory()->create();
+    $user = capstanUser();
     $token = probeToken($user);
     $this->withToken($token)->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
@@ -519,7 +567,7 @@ test('disabling Postmaster voids outstanding probes before re-enable', function 
 test('probe timeouts are clamped to the sweep cadence', function (): void {
     config(['capstan.postmaster.probe.timeout_seconds' => 0]);
     Date::setTestNow('2026-08-17 12:00:00');
-    $user = User::factory()->create();
+    $user = capstanUser();
     $this->withToken(probeToken($user))->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
     ])->assertOk();
@@ -531,7 +579,7 @@ test('probe timeouts are clamped to the sweep cadence', function (): void {
 test('a disabled feature never issues a probe or creates a spoke', function (): void {
     config(['capstan.features.postmaster' => false]);
     Feature::flushCache();
-    $user = User::factory()->create();
+    $user = capstanUser();
 
     $this->withToken(probeToken($user))->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],

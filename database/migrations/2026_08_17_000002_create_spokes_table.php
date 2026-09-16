@@ -10,8 +10,8 @@ return new class extends Migration
     {
         Schema::create('spokes', function (Blueprint $table): void {
             $table->id();
-            $table->foreignId('user_id')->constrained()->cascadeOnDelete();
-            $table->foreignId('token_id')->nullable()->unique()->constrained('personal_access_tokens')->cascadeOnDelete();
+            $table->string('actor_id', 64)->index();
+            $table->uuid('credential_id')->unique();
             $table->string('name')->nullable();
             $table->timestamp('last_polled_at')->nullable()->index();
             $table->string('last_cursor')->nullable();

@@ -31,25 +31,6 @@ return new class extends Migration
             'updated_at' => $now,
         ]);
 
-        Schema::create('team_user', function (Blueprint $table) {
-            $table->foreignId('team_id')->constrained()->cascadeOnDelete();
-            $table->foreignId('user_id')->constrained()->cascadeOnDelete();
-            $table->timestamps();
-
-            $table->primary(['team_id', 'user_id']);
-            $table->index('user_id');
-        });
-
-        $defaultTeamId = DB::table('teams')->where('slug', Team::DEFAULT_SLUG)->value('id');
-
-        DB::table('team_user')->insertUsing(
-            ['team_id', 'user_id', 'created_at', 'updated_at'],
-            DB::table('users')->selectRaw('? as team_id, id as user_id, ? as created_at, ? as updated_at', [
-                $defaultTeamId,
-                $now,
-                $now,
-            ]),
-        );
     }
 
     /**
@@ -57,7 +38,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('team_user');
         Schema::dropIfExists('teams');
     }
 };

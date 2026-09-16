@@ -8,5 +8,5 @@ Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
 
-Schedule::command('capstan:prune-device-codes')->hourly();
 Schedule::command('postmaster:probe-sweep')->everyMinute()->withoutOverlapping(5);
+Schedule::command('postmaster:retire-dead-spokes --local')->everyMinute()->withoutOverlapping(5);

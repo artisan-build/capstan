@@ -8,28 +8,27 @@ use App\Features\Postmaster;
 use App\Http\ApiError;
 use App\Http\ApiErrorException;
 use App\Http\Controllers\Controller;
+use App\Http\Middleware\AuthenticateBoundCredential;
 use App\Models\Envelope;
 use App\Models\Inbox;
 use App\Models\Spoke;
 use App\Models\SpokeProbe;
-use App\Models\User;
 use App\Postmaster\ProbeFailureNotifier;
 use App\Postmaster\ProbeManager;
 use App\Support\Address;
-use App\Support\EnvelopeSigner;
+use App\Support\JsonCanonicalizer;
 use App\Support\ServerIdentity;
+use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Database\Query\Builder as QueryBuilder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use InvalidArgumentException;
-use JsonException;
 use Laravel\Pennant\Feature;
 use RuntimeException;
 use stdClass;
@@ -49,11 +48,14 @@ class PollController extends Controller
 
     public function __invoke(
         Request $request,
-        EnvelopeSigner $signer,
+        SigningRootMac $signer,
         ServerIdentity $identity,
         ProbeManager $probeManager,
         ProbeFailureNotifier $probeFailureNotifier,
     ): JsonResponse {
+        $credential = AuthenticateBoundCredential::credential($request);
+        $actorId = AuthenticateBoundCredential::actorId($request);
+
         if (! Feature::active(Postmaster::class)) {
             return ApiError::notFound();
         }
@@ -82,46 +84,31 @@ class PollController extends Controller
                 ]);
             }
 
-            try {
-                $verified = $signer->verify($envelope);
-            } catch (InvalidArgumentException|JsonException) {
-                return $this->validationError([
-                    "outbound.$index.body" => ['The envelope body contains unsupported JSON values.'],
-                ]);
-            }
-
-            if (! $verified) {
-                return ApiError::response(422, 'invalid_signature', 'The envelope signature is invalid.', [
-                    'index' => $index,
-                ]);
-            }
-
             $envelopes[] = $envelope;
         }
-
-        /** @var User $user */
-        $user = Auth::user();
-        $token = $user->currentAccessToken();
 
         $serverId = $identity->id();
 
         try {
             /** @var array{payload: array{inbound: list<array<string, mixed>>, cursor: string|null, probe_challenge?: array{probe_id: string, nonce: string, algorithm: string}}, failure: array{Spoke, SpokeProbe}|null} $result */
-            $result = DB::transaction(function () use ($user, $token, $validation, $envelopes, $serverId, $probeManager): array {
+            $result = DB::transaction(function () use ($credential, $actorId, $validation, $envelopes, $serverId, $probeManager, $signer): array {
                 $now = now();
-                $spoke = $this->resolveSpoke($user->id, (int) $token->getKey(), $now);
+                $spoke = $this->resolveSpoke($actorId, $credential->id, $now);
                 $readyInboxes = array_values(array_unique($validation['ready_inboxes']));
                 $failedProbe = $probeManager->respond($spoke, $validation['probe_response'], $now);
 
-                $this->refreshRouting($spoke, $user->id, $readyInboxes, $validation['cursor'], $now);
-                $this->assertSendersOwned($user->id, $envelopes, $serverId);
+                $this->refreshRouting($spoke, $actorId, $readyInboxes, $validation['cursor'], $now);
+                $this->assertSendersOwned($actorId, $envelopes, $serverId);
 
                 foreach ($envelopes as $envelope) {
+                    $mac = $signer->mac(JsonCanonicalizer::encode($envelope->signablePayload()));
+                    $envelope->signature = $mac->lowercaseHexMac;
+                    $envelope->signing_key_id = $mac->keyId;
                     $this->storeEnvelope($envelope, $serverId, $now);
                 }
 
-                $this->processAcks($user->id, $validation['acks'], $serverId, $now);
-                $inbound = $this->inbound($spoke, $user->id, $serverId);
+                $this->processAcks($actorId, $validation['acks'], $serverId, $now);
+                $inbound = $this->inbound($spoke, $actorId, $serverId);
                 $this->markDelivered($inbound, $now);
                 $challenge = $probeManager->issue($spoke, $now);
 
@@ -224,7 +211,7 @@ class PollController extends Controller
                 },
             ],
             'outbound.*.refs' => ['present', 'array', 'size:0'],
-            'outbound.*.signature' => ['required', 'string', 'regex:/^[0-9a-f]{64}$/'],
+            'outbound.*.signature' => ['prohibited'],
             'acks' => ['array', 'max:'.self::MAX_ACKS],
             'acks.*' => ['string', 'max:255'],
             'cursor' => ['nullable', 'string', 'max:255'],
@@ -309,23 +296,23 @@ class PollController extends Controller
             'body' => $wireEnvelope['body'],
             'refs' => $wireEnvelope['refs'],
             'message_id' => $wireEnvelope['message_id'],
-            'signature' => $wireEnvelope['signature'],
+            'signature' => '',
         ]);
         $envelope->created_at = CarbonImmutable::createFromFormat('!Y-m-d\TH:i:s\Z', $wireEnvelope['created_at'], 'UTC');
 
         return $envelope;
     }
 
-    private function resolveSpoke(int $userId, int $tokenId, CarbonImmutable $now): Spoke
+    private function resolveSpoke(string $actorId, string $credentialId, CarbonImmutable $now): Spoke
     {
         DB::table('spokes')->insertOrIgnore([
-            'user_id' => $userId,
-            'token_id' => $tokenId,
+            'actor_id' => $actorId,
+            'credential_id' => $credentialId,
             'created_at' => $now,
             'updated_at' => $now,
         ]);
 
-        return Spoke::query()->where('token_id', $tokenId)->lockForUpdate()->firstOrFail();
+        return Spoke::query()->where('credential_id', $credentialId)->lockForUpdate()->firstOrFail();
     }
 
     /**
@@ -335,9 +322,9 @@ class PollController extends Controller
      *
      * @param  list<string>  $readyInboxes
      */
-    private function refreshRouting(Spoke $spoke, int $userId, array $readyInboxes, ?string $cursor, CarbonImmutable $now): void
+    private function refreshRouting(Spoke $spoke, string $actorId, array $readyInboxes, ?string $cursor, CarbonImmutable $now): void
     {
-        $inboxIds = $readyInboxes === [] ? [] : $this->claimInboxes($userId, $readyInboxes, $now);
+        $inboxIds = $readyInboxes === [] ? [] : $this->claimInboxes($actorId, $readyInboxes, $now);
 
         /** @var list<int> $current */
         $current = DB::table('spoke_inboxes')->where('spoke_id', $spoke->id)->pluck('inbox_id')->all();
@@ -369,11 +356,11 @@ class PollController extends Controller
      * @param  non-empty-list<string>  $localParts
      * @return list<int>
      */
-    private function claimInboxes(int $userId, array $localParts, CarbonImmutable $now): array
+    private function claimInboxes(string $actorId, array $localParts, CarbonImmutable $now): array
     {
         foreach (array_chunk($localParts, self::QUERY_CHUNK) as $chunk) {
             DB::table('inboxes')->insertOrIgnore(array_map(fn (string $localPart): array => [
-                'user_id' => $userId,
+                'actor_id' => $actorId,
                 'local_part' => $localPart,
                 'created_at' => $now,
                 'updated_at' => $now,
@@ -384,10 +371,10 @@ class PollController extends Controller
         $inboxes = new Collection;
 
         foreach (array_chunk($localParts, self::QUERY_CHUNK) as $chunk) {
-            $inboxes = $inboxes->merge(Inbox::query()->whereIn('local_part', $chunk)->get(['id', 'user_id', 'local_part']));
+            $inboxes = $inboxes->merge(Inbox::query()->whereIn('local_part', $chunk)->get(['id', 'actor_id', 'local_part']));
         }
 
-        $foreign = $inboxes->where('user_id', '!=', $userId)->pluck('local_part')->sort()->values()->all();
+        $foreign = $inboxes->where('actor_id', '!=', $actorId)->pluck('local_part')->sort()->values()->all();
 
         if ($foreign !== []) {
             throw new ApiErrorException(409, 'inbox_claimed', 'One or more advertised inboxes are owned by another user.', [
@@ -408,7 +395,7 @@ class PollController extends Controller
      *
      * @param  list<Envelope>  $envelopes
      */
-    private function assertSendersOwned(int $userId, array $envelopes, string $serverId): void
+    private function assertSendersOwned(string $actorId, array $envelopes, string $serverId): void
     {
         if ($envelopes === []) {
             return;
@@ -429,7 +416,7 @@ class PollController extends Controller
         $owned = [];
 
         foreach (array_chunk(array_values(array_unique($senders)), self::QUERY_CHUNK) as $chunk) {
-            $owned = [...$owned, ...Inbox::query()->where('user_id', $userId)->whereIn('local_part', $chunk)->pluck('local_part')->all()];
+            $owned = [...$owned, ...Inbox::query()->where('actor_id', $actorId)->whereIn('local_part', $chunk)->pluck('local_part')->all()];
         }
 
         $owned = array_flip($owned);
@@ -465,6 +452,7 @@ class PollController extends Controller
             'refs' => json_encode($envelope->refs, JSON_THROW_ON_ERROR),
             'message_id' => $envelope->message_id,
             'signature' => $envelope->signature,
+            'signing_key_id' => $envelope->signing_key_id,
             'status' => $to->isLocal($serverId) ? MessageStatus::Pending->value : MessageStatus::PendingRelay->value,
             'received_at' => $now,
             'created_at' => $envelope->created_at,
@@ -478,13 +466,13 @@ class PollController extends Controller
      *
      * @param  list<string>  $acks
      */
-    private function processAcks(int $userId, array $acks, string $serverId, CarbonImmutable $now): void
+    private function processAcks(string $actorId, array $acks, string $serverId, CarbonImmutable $now): void
     {
         foreach (array_chunk(array_values(array_unique($acks)), self::QUERY_CHUNK) as $chunk) {
             Envelope::query()
                 ->whereIn('message_id', $chunk)
                 ->where('to_server_id', $serverId)
-                ->whereIn('to_local_part', $this->ownedLocalParts($userId))
+                ->whereIn('to_local_part', $this->ownedLocalParts($actorId))
                 ->where('status', '!=', MessageStatus::Acked->value)
                 ->update([
                     'status' => MessageStatus::Acked->value,
@@ -499,7 +487,7 @@ class PollController extends Controller
      *
      * @return Collection<int, Envelope>
      */
-    private function inbound(Spoke $spoke, int $userId, string $serverId): Collection
+    private function inbound(Spoke $spoke, string $actorId, string $serverId): Collection
     {
         $limit = max(0, (int) config('capstan.postmaster.poll.max_inbound', 50));
 
@@ -509,7 +497,7 @@ class PollController extends Controller
 
         return Envelope::query()
             ->where('to_server_id', $serverId)
-            ->whereIn('to_local_part', $this->routedLocalParts($spoke, $userId))
+            ->whereIn('to_local_part', $this->routedLocalParts($spoke, $actorId))
             ->whereIn('status', [MessageStatus::Pending->value, MessageStatus::Delivered->value])
             ->orderBy('received_at')
             ->orderBy('id')
@@ -528,23 +516,23 @@ class PollController extends Controller
     }
 
     /** @return \Closure(QueryBuilder): void */
-    private function ownedLocalParts(int $userId): \Closure
+    private function ownedLocalParts(string $actorId): \Closure
     {
-        return function (QueryBuilder $query) use ($userId): void {
-            $query->select('local_part')->from('inboxes')->where('user_id', $userId);
+        return function (QueryBuilder $query) use ($actorId): void {
+            $query->select('local_part')->from('inboxes')->where('actor_id', $actorId);
         };
     }
 
     /** @return \Closure(QueryBuilder): void */
-    private function routedLocalParts(Spoke $spoke, int $userId): \Closure
+    private function routedLocalParts(Spoke $spoke, string $actorId): \Closure
     {
-        return function (QueryBuilder $query) use ($spoke, $userId): void {
+        return function (QueryBuilder $query) use ($spoke, $actorId): void {
             $query
                 ->select('inboxes.local_part')
                 ->from('inboxes')
                 ->join('spoke_inboxes', 'spoke_inboxes.inbox_id', '=', 'inboxes.id')
                 ->where('spoke_inboxes.spoke_id', $spoke->id)
-                ->where('inboxes.user_id', $userId);
+                ->where('inboxes.actor_id', $actorId);
         };
     }
 

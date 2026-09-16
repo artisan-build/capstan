@@ -37,8 +37,8 @@ jobs:
           cp .env.example .env
           php artisan key:generate
           touch database/database.sqlite
-          # Proves the Built for Cloud auth-foundation opt-outs hold on a fresh
-          # database: no invitations collision, no stray users.is_admin column.
+          # Proves the no-opt-out package auth schema migrates without an
+          # invitations collision or a stray users.is_admin column.
           php artisan migrate:fresh --force
 
       - name: Install zsh

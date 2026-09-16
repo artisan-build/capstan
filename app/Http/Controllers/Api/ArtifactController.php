@@ -6,13 +6,12 @@ use App\Enums\ArtifactVisibility;
 use App\Features\Artifacts;
 use App\Http\ApiError;
 use App\Http\Controllers\Controller;
+use App\Http\Middleware\AuthenticateBoundCredential;
 use App\Models\Artifact;
 use App\Models\Team;
-use App\Models\User;
 use App\Support\ArtifactRenderOrigin;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
@@ -20,8 +19,11 @@ use Laravel\Pennant\Feature;
 
 class ArtifactController extends Controller
 {
-    public function store(Request $request): JsonResponse
-    {
+    public function store(
+        Request $request,
+    ): JsonResponse {
+        $actorId = AuthenticateBoundCredential::actorId($request);
+
         if (! Feature::active(Artifacts::class)) {
             return ApiError::notFound();
         }
@@ -48,15 +50,13 @@ class ArtifactController extends Controller
 
         /** @var array{content: string, content_type: string, visibility?: string, expires_at?: string|null} $validated */
         $validated = $validator->validated();
-        /** @var User $user */
-        $user = Auth::user();
         $defaultTeam = Team::default();
 
         [$contentHash, $storageKey] = Artifact::storeBlob($validated['content']);
 
-        $artifact = DB::transaction(function () use ($validated, $user, $defaultTeam, $contentHash, $storageKey): Artifact {
+        $artifact = DB::transaction(function () use ($validated, $actorId, $defaultTeam, $contentHash, $storageKey): Artifact {
             $artifact = Artifact::query()->create([
-                'author_id' => $user->id,
+                'actor_id' => $actorId,
                 'visibility' => ArtifactVisibility::from($validated['visibility'] ?? ArtifactVisibility::OrgAuth->value),
                 'expires_at' => $validated['expires_at'] ?? null,
                 'content_type' => $validated['content_type'],
@@ -83,7 +83,7 @@ class ArtifactController extends Controller
     {
         return [
             'id' => $artifact->id,
-            'author_id' => $artifact->author_id,
+            'actor_id' => $artifact->actor_id,
             'visibility' => $artifact->visibility->value,
             'expires_at' => $artifact->expires_at?->toJSON(),
             'content_type' => $artifact->content_type,
