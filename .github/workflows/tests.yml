@@ -32,6 +32,9 @@ jobs:
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
 
+      - name: Audit dependencies
+        run: composer audit
+
       - name: Prepare application
         run: |
           cp .env.example .env
