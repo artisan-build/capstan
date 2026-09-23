@@ -27,14 +27,12 @@ per person.
 
 ## The easy way: Scalpels
 
-[Scalpels](https://scalpels.app/products/capstan) deploys and operates Capstan inside your own Laravel
-Cloud account. It provisions the database, queue and object storage, configures both hostnames, applies
-upgrades, and manages team access. You keep the infrastructure and the data; Scalpels runs the
-software on it.
+[Scalpels](https://scalpels.app/products/capstan) does the setup for you: it forks Capstan, provisions
+what it needs on your Laravel Cloud account, and deploys it. The repository and the infrastructure end
+up yours either way — the difference is who spends the afternoon on the steps below.
 
-Running it yourself costs nothing for Capstan itself — it is MIT licensed — but you pay for and
-maintain the infrastructure listed below, and you do the provisioning and upgrade work described in
-this README.
+Running it yourself is free of licence cost; Capstan is MIT licensed. You still pay for the
+infrastructure it runs on, and you do the provisioning, deployment and upgrade work described here.
 
 Scalpels: **<https://scalpels.app/products/capstan>**
 
@@ -62,17 +60,29 @@ artifact HTML on another. Using one hostname for both is not a shortcut: Capstan
 artifacts at all rather than give up the separation. Postmaster on its own needs only the app
 hostname. Locally you do not need DNS for this — see step 5.
 
-### 1. Get the code and install it
+### 1. Fork it, then install it
+
+**Fork <https://github.com/artisan-build/capstan> into your own GitHub organisation first**, and clone
+the fork. This is not optional if you intend to deploy: Laravel Cloud builds your application from
+whatever `origin` points at, so cloning the upstream repository directly would deploy *our* code from
+*our* repository and leave you unable to push a change to it.
 
 ```bash
-git clone https://github.com/artisan-build/capstan.git
+git clone https://github.com/<your-org>/capstan.git
 cd capstan
+git remote get-url origin     # must print YOUR organisation, not artisan-build
 composer setup
 ```
 
 `composer setup` is the whole local install: it installs the PHP packages, copies `.env.example` to
 `.env` if you do not have one, generates an app key, creates a SQLite database and migrates it, then
-installs and builds the frontend. It will not overwrite an existing `.env`.
+installs and builds the frontend.
+
+**Run it on a fresh clone only.** It keeps an existing `.env` file, but it always regenerates
+`APP_KEY` — so running it in an installation you already use invalidates that installation's
+encrypted values and signs everyone out. On an existing checkout run the pieces you need by hand
+(`composer install`, `php artisan migrate`, `npm install && npm run build`) and leave `key:generate`
+alone.
 
 The migration step prints a long list of tables ending in `DONE`. Most of them belong to Built for
 Cloud, the package that provides Capstan's accounts, sign-in and API credentials.
@@ -182,8 +192,9 @@ Restart the app after changing `.env`. A **Postmaster** link appears in the side
 > cat .cloud/config.json     # whose application is this?
 > ```
 >
-> `cloud ship` in the next step writes your own IDs over it. Until it does, run no other Cloud command
-> from this directory.
+> The binding stays in place through `cloud ship` — `ship` prints the ids it creates but does not write
+> this file. **`cloud repo:config`, immediately after, is the command that replaces it.** Until you have
+> run that and checked the file, run no other Cloud command from this directory.
 
 The `cloud` CLI is pre-1.0 and its flags move between releases. Confirm any command below with
 `cloud <command> -h` before running it.
@@ -198,9 +209,12 @@ The `cloud` CLI is pre-1.0 and its flags move between releases. Confirm any comm
    PostgreSQL database** — that path attaches reliably, and attaching by CLI flag afterwards does not
    work. Enable the scheduler when it offers: Postmaster's liveness sweep runs every minute.
 
+   `ship` takes the application's repository from this checkout's `origin`, which is why step 1 had you
+   clone your fork. Then rebind the local config, because `ship` does not:
+
    ```bash
-   cloud repo:config           # rebinds .cloud/config.json to YOUR application
-   cat .cloud/config.json      # confirm the IDs changed
+   cloud repo:config           # THIS is what rewrites .cloud/config.json
+   cat .cloud/config.json      # required checkpoint: the IDs must now be yours
    ```
 
 2. **Create the object storage bucket** (artifact hosting only). Every flag here is required:
@@ -219,7 +233,13 @@ The `cloud` CLI is pre-1.0 and its flags move between releases. Confirm any comm
 
    ```bash
    cloud managed-queue:create <env> --name capstan --size <size> -n --json
-   cloud managed-queue:set-default <env> --name capstan -n
+   ```
+
+   Note the `id` in that response — `set-default` takes the **queue instance id** as its only
+   argument, not the environment and not the name:
+
+   ```bash
+   cloud managed-queue:set-default <instance-id> -n
    ```
 
    Use a managed queue rather than a worker instance.
@@ -237,16 +257,18 @@ The `cloud` CLI is pre-1.0 and its flags move between releases. Confirm any comm
    cloud environment:variables --json -n --action=set --key=APP_ENV   --value=production
    cloud environment:variables --json -n --action=set --key=APP_DEBUG --value=false
    cloud environment:variables --json -n --action=set --key=APP_NAME  --value=Capstan
+   cloud environment:variables --json -n --action=set --key=APP_URL   --value=https://<app-host>
    # plus the CAPSTAN_* keys from the Configuration table
    ```
 
    Let Cloud generate `APP_KEY`.
 
-   **`APP_URL` must end up equal to your app hostname.** Cloud sets it from the environment's primary
-   domain once one is attached, so normally you do not set it by hand — but you must confirm it,
-   because a wrong `APP_URL` breaks both capabilities quietly: the artifact policy would name the
-   wrong page as allowed to frame artifacts, and Postmaster installers would hand agents a
-   `http://localhost` poll address. Check it in step 7 and set it only if Cloud has it wrong.
+   **Set `APP_URL` yourself, to your app hostname, exactly as above.** It is app configuration, not a
+   provisioned resource, so the rule above does not cover it. Get it wrong and both capabilities break
+   quietly while the deployment stays green: the artifact policy names the wrong page as allowed to
+   frame artifacts, and Postmaster hands agents a `http://localhost` poll address. Cloud may also
+   derive this value from the environment's *primary* domain — which is a separate step from creating
+   a domain — so confirm the final value in step 7 whatever you do here.
 
 5. **Add your hostnames and point DNS at Cloud.**
 
@@ -255,12 +277,17 @@ The `cloud` CLI is pre-1.0 and its flags move between releases. Confirm any comm
    cloud domain:create <env> --name <render-host> --wildcard-enabled=false -n --json   # artifacts only
    ```
 
-   Each response carries a `dnsRecords` array. **Place exactly the records Cloud returns** — that is
-   its statement of what it wants for that hostname right now — then verify each one:
+   Each response carries an `id` and a `dnsRecords` array. **Place exactly the records Cloud returns** —
+   that is its statement of what it wants for that hostname right now — then verify each domain by the
+   **id from its own `domain:create` response**, which is the only argument this command takes:
 
    ```bash
-   cloud domain:verify <app-host> --env <env> -n --json
+   cloud domain:verify <domain-id> -n --json
    ```
+
+   If you want Cloud to derive `APP_URL` from this hostname, make it the environment's **primary**
+   domain — a separate action in the Cloud dashboard. Setting `APP_URL` in step 4 does not depend on
+   it.
 
    **Leave `SESSION_DOMAIN` unset.** If the app and artifact hostnames are neighbours under one domain,
    a shared `SESSION_DOMAIN` hands your login cookie to the artifact origin and removes the isolation
@@ -274,8 +301,12 @@ The `cloud` CLI is pre-1.0 and its flags move between releases. Confirm any comm
    ```bash
    cloud deploy -n
    cloud deploy:monitor -n
-   cloud command:run <env> --cmd "php artisan migrate --force" -n --no-monitor
+   cloud command:run <env> --cmd "php artisan migrate --force" -n
    ```
+
+   **Do not add `--no-monitor` here.** With it, `command:run` returns as soon as the command has been
+   *submitted*, so a failed migration looks like success. Without it, a non-interactive run waits for
+   the remote command to finish and reports how it ended. Wait for that result before step 7.
 
 7. **Verify the injected resources actually work.** A green deploy does not prove this; read the
    resolved config out of the running environment:
@@ -300,8 +331,9 @@ The `cloud` CLI is pre-1.0 and its flags move between releases. Confirm any comm
    php artisan create-admin --environment=<env> --email=you@example.com --name="Your Name"
 
    # Postmaster only. This command is local-only by design, so run it INSIDE the
-   # environment rather than pointing it at one.
-   cloud command:run <env> --cmd "php artisan bfc:signing-root:provision --local" -n --no-monitor
+   # environment rather than pointing it at one. Again, no --no-monitor: wait for
+   # it to report success, or you will not know the key exists.
+   cloud command:run <env> --cmd "php artisan bfc:signing-root:provision --local" -n
    ```
 
 9. **Check the app answers.** `https://<app-host>` should return `200` with a valid certificate, and
@@ -350,11 +382,10 @@ one purpose is rejected on the other endpoint.
 Tokens are issued by a **device authorization**: a program asks for one, you approve it in your
 browser, and the program collects it. This is the flow that produces a token the APIs accept.
 
-> **Not the Personal credentials page.** `/bfc/ui/credentials/personal` will issue you a bearer
-> credential for either purpose, but at the currently pinned Built for Cloud version those credentials
-> are stored without the protocol binding `POST /api/v1/artifacts` and `POST /api/v1/poll` check for,
-> so they come back `401 unauthenticated`. Use the device flow below. For Postmaster you never touch
-> either page — the installer in the Postmaster UI does the whole thing for you.
+> **Not the Personal credentials page.** `/bfc/ui/credentials/personal` offers to issue a token for
+> either purpose, but a token from that page is rejected with `401` by both APIs — a bug in the
+> version of Built for Cloud this release pins. Use the device flow below instead. For Postmaster you
+> do not do any of this by hand: the installer on the Postmaster page runs the whole flow for you.
 
 You also need your **actor id**, a number the UI does not display. Read it once:
 
@@ -367,16 +398,21 @@ Asking for an authorization needs a signed-in session, so start by getting one i
 ```bash
 CAPSTAN_URL=http://localhost:8000
 
-# 1. Sign in and keep the session cookie.
-CSRF=$(curl -s -c cookies.txt "$CAPSTAN_URL/bfc/login" \
+# The cookie jar holds a live session for your account. Keep it out of the
+# repository and delete it when you are done, even if a command fails.
+JAR=$(mktemp -t capstan-cookies)
+trap 'rm -f "$JAR"' EXIT
+
+# 1. Sign in.
+CSRF=$(curl -s -c "$JAR" "$CAPSTAN_URL/bfc/login" \
   | grep -o 'name="_token" value="[^"]*"' | cut -d'"' -f4)
-curl -s -b cookies.txt -c cookies.txt -X POST "$CAPSTAN_URL/bfc/login" \
+curl -s -b "$JAR" -c "$JAR" -X POST "$CAPSTAN_URL/bfc/login" \
   -d "_token=$CSRF" -d "email=you@example.com" -d "password=<your password>"
 
 # 2. Ask for a token. Prints device_code, user_code and verification_uri.
-CSRF=$(curl -s -b cookies.txt -c cookies.txt "$CAPSTAN_URL/bfc/ui" \
+CSRF=$(curl -s -b "$JAR" -c "$JAR" "$CAPSTAN_URL/bfc/ui" \
   | grep -o 'name="_token" value="[^"]*"' | cut -d'"' -f4)
-curl -s -b cookies.txt -c cookies.txt -X POST "$CAPSTAN_URL/bfc/device-authorizations" \
+curl -s -b "$JAR" -c "$JAR" -X POST "$CAPSTAN_URL/bfc/device-authorizations" \
   -H "Content-Type: application/json" -H "Accept: application/json" -H "X-CSRF-TOKEN: $CSRF" \
   -d '{"app_purpose":"capstan.artifact.ingest","label":"my laptop"}'
 
@@ -387,7 +423,12 @@ curl -s -b cookies.txt -c cookies.txt -X POST "$CAPSTAN_URL/bfc/device-authoriza
 curl -s -X POST "$CAPSTAN_URL/bfc/device/token" \
   -H "Content-Type: application/json" -H "Accept: application/json" \
   -d '{"device_code":"<device_code from step 2>"}'
+
+rm -f "$JAR"
 ```
+
+If you adapt this against a deployed Capstan, the same rule applies: that file is a live login. Never
+leave one in a directory you might commit.
 
 Step 4 returns `{"access_token":"tok_…","token_type":"Bearer","credential_id":"…","app_purpose":"…"}`.
 The authorization expires ten minutes after step 2, and a device code can be exchanged only once.
@@ -428,8 +469,10 @@ A success is `201` with the artifact and a link to share:
 ```
 
 Open `share_url` in a browser. You get a page on the app hostname holding a sandboxed iframe, and the
-iframe loads your HTML from `artifacts.localhost:8000` under a content security policy that allows
-nothing but inline scripts and styles. That is the isolation working: two hostnames, one page.
+iframe loads your HTML from `artifacts.localhost:8000` under a content security policy that by default
+permits inline scripts and styles and `data:` images, and blocks the page from reaching the network at
+all. It can load an external script, stylesheet, font or image only from a source you add yourself
+through the `CAPSTAN_ARTIFACT_CSP_*` variables. That is the isolation working: two hostnames, one page.
 
 Fields you can send:
 
