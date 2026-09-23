@@ -10,8 +10,8 @@ return [
         'name' => 'Capstan',
         'slug' => 'capstan',
         'description' => 'Fork-and-deploy AI ecosystem server for the Solo fleet.',
-        'icon' => 'https://scalpels.app/catalog/capstan/icon.svg',
-        'product_url' => 'https://scalpels.app/catalog/capstan',
+        'icon' => 'https://scalpels.app/img/products/transparent/capstan.png',
+        'product_url' => 'https://scalpels.app/products/capstan',
     ],
 
     'credentials' => [
