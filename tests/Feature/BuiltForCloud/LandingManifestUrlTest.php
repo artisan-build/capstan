@@ -3,8 +3,6 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\LandingManifest;
-use Illuminate\Http\Client\ConnectionException;
-use Illuminate\Support\Facades\Http;
 
 /*
 |--------------------------------------------------------------------------
@@ -15,6 +13,11 @@ use Illuminate\Support\Facades\Http;
 | as an <img src>, the product URL as an <a href>), so every URL it carries has
 | to resolve publicly. scalpels.app/catalog/* is the owner-only namespace and
 | 302s to /login; the public namespace is /products/*. See issue #37.
+|
+| These assertions are deliberately deterministic: they pin the configured
+| values and never call out to scalpels.app. Whether a public URL *stays*
+| reachable is an operational property for an external monitor, not for the
+| merge gate.
 |
 */
 
@@ -49,25 +52,4 @@ it('pins the landing manifest product URL to the public scalpels.app product pag
     $manifest = LandingManifest::fromConfiguration();
 
     expect($manifest->productUrl)->toBe("https://scalpels.app/products/{$manifest->slug}");
-});
-
-it('serves every landing manifest URL publicly, with no redirect', function (): void {
-    foreach (capstanManifestUrls() as $field => $url) {
-        try {
-            $response = Http::withoutRedirecting()->timeout(10)->head($url);
-        } catch (ConnectionException $exception) {
-            $this->markTestSkipped("Could not reach [{$url}]: {$exception->getMessage()}");
-        }
-
-        if ($response->serverError()) {
-            $this->markTestSkipped("The host serving [{$url}] answered HTTP {$response->status()}.");
-        }
-
-        expect($response->status())->toBe(
-            200,
-            "The landing manifest [{$field}] URL [{$url}] answered HTTP {$response->status()}".
-            ($response->redirect() ? ' to '.$response->header('Location') : '').
-            ', but anonymous visitors must get a 200.',
-        );
-    }
 });
