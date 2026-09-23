@@ -22,6 +22,8 @@
         "symfony/http-client": "^8.1"
     },
     "require-dev": {
+        "barryvdh/laravel-ide-helper": "^3.6",
+        "driftingly/rector-laravel": "^2.1",
         "fakerphp/faker": "^1.24",
         "larastan/larastan": "^3.9",
         "laravel/pail": "^1.2.5",
@@ -32,7 +34,8 @@
         "nunomaduro/collision": "^8.9.3",
         "pestphp/pest": "^5.0",
         "pestphp/pest-plugin-drift": "^5.0",
-        "pestphp/pest-plugin-laravel": "^5.0"
+        "pestphp/pest-plugin-laravel": "^5.0",
+        "rector/rector": "^2.3"
     },
     "autoload": {
         "psr-4": {
@@ -63,25 +66,57 @@
             "pint --parallel"
         ],
         "lint:check": [
+            "@test:lint"
+        ],
+        "test:lint": [
             "pint --parallel --test"
+        ],
+        "rector": [
+            "rector process"
+        ],
+        "rector:check": [
+            "rector process --dry-run"
+        ],
+        "stan": [
+            "phpstan analyse --memory-limit=512M"
         ],
         "ci:check": [
             "Composer\\Config::disableProcessTimeout",
             "@test"
         ],
         "types:check": [
-            "phpstan analyse"
+            "@stan"
         ],
         "test": [
             "@php artisan config:clear --ansi",
-            "@lint:check",
-            "@types:check",
+            "@test:lint",
             "@php artisan test"
         ],
+        "ide-helper": [
+            "@php artisan ide-helper:generate",
+            "@php artisan ide-helper:models --write-mixin --no-interaction",
+            "@php -r \"file_put_contents('_ide_helper_models.php', rtrim((string) file_get_contents('_ide_helper_models.php')) . PHP_EOL);\"",
+            "@php artisan ide-helper:meta"
+        ],
         "ready": [
-            "pint --parallel",
-            "phpstan analyse",
-            "@php artisan test"
+            "@ide-helper",
+            "@rector",
+            "@lint",
+            "@stan",
+            "@test",
+            "composer audit"
+        ],
+        "report": [
+            "@php -r \"echo PHP_EOL . '=== Rector ===' . PHP_EOL;\"",
+            "-@rector",
+            "@php -r \"echo PHP_EOL . '=== Pint ===' . PHP_EOL;\"",
+            "-@test:lint",
+            "@php -r \"echo PHP_EOL . '=== PHPStan ===' . PHP_EOL;\"",
+            "-@stan",
+            "@php -r \"echo PHP_EOL . '=== Tests ===' . PHP_EOL;\"",
+            "-@php artisan test",
+            "@php -r \"echo PHP_EOL . '=== Security Audit ===' . PHP_EOL;\"",
+            "-composer audit"
         ],
         "post-autoload-dump": [
             "Illuminate\\Foundation\\ComposerScripts::postAutoloadDump",
