@@ -21,6 +21,8 @@ use Illuminate\Support\Facades\Storage;
  * @property int $size_bytes
  * @property string $content_hash
  * @property string $storage_key
+ *
+ * @mixin IdeHelperArtifact
  */
 #[UseFactory(ArtifactFactory::class)]
 class Artifact extends Model

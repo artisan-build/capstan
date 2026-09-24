@@ -30,6 +30,8 @@ use stdClass;
  * @property CarbonImmutable|null $received_at
  * @property CarbonImmutable $created_at
  * @property CarbonImmutable $updated_at
+ *
+ * @mixin IdeHelperEnvelope
  */
 class Envelope extends Model
 {

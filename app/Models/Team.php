@@ -6,6 +6,9 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\UniqueConstraintViolationException;
 
+/**
+ * @mixin IdeHelperTeam
+ */
 class Team extends Model
 {
     public const DEFAULT_SLUG = 'default';

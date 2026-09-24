@@ -12,4 +12,7 @@ parameters:
         - database/
         - routes/
 
+    scanFiles:
+        - _ide_helper_models.php
+
     level: 7

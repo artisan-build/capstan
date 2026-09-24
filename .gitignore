@@ -12,6 +12,7 @@
 .env.backup
 .env.production
 .phpactor.json
+.phpstorm.meta.php
 .phpunit.result.cache
 Homestead.json
 Homestead.yaml
