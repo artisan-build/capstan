@@ -17,7 +17,7 @@ test('every package role can complete bound artifact ingest and Postmaster poll'
     ]);
     Feature::flushCache();
     Storage::fake();
-    app(SigningRootLifecycle::class)->provision();
+    resolve(SigningRootLifecycle::class)->provision();
     $user = capstanUser(['role' => $role->value]);
 
     $this->withHeaders(capstanBearerHeaders($user, CapstanCredentialDeclaration::ARTIFACT_INGEST))
@@ -47,7 +47,7 @@ test('package role changes preserve Capstan product access at the new role', fun
     ]);
     Feature::flushCache();
     Storage::fake();
-    app(SigningRootLifecycle::class)->provision();
+    resolve(SigningRootLifecycle::class)->provision();
     $owner = capstanUser(['role' => UserRole::Owner->value]);
     $user = capstanUser(['role' => UserRole::Member->value]);
 

@@ -39,9 +39,7 @@ pest()->extend(TestCase::class)
 |
 */
 
-expect()->extend('toBeOne', function () {
-    return $this->toBe(1);
-});
+expect()->extend('toBeOne', fn () => $this->toBe(1));
 
 /*
 |--------------------------------------------------------------------------
@@ -54,7 +52,7 @@ expect()->extend('toBeOne', function () {
 |
 */
 
-function something()
+function something(): void
 {
     // ..
 }
@@ -90,7 +88,7 @@ function capstanBoundBearer(
         'POST',
         server: ['HTTP_X_CAPSTAN_ACTOR_ID' => (string) $user->getKey()],
     );
-    $profile = collect(app(CapstanCredentialDeclaration::class)->credentialAuthorizationProfiles($request))
+    $profile = collect(resolve(CapstanCredentialDeclaration::class)->credentialAuthorizationProfiles($request))
         ->first(fn (CredentialAuthorizationProfile $profile): bool => $profile->appPurpose === $appPurpose);
     expect($profile)->toBeInstanceOf(CredentialAuthorizationProfile::class);
 
@@ -98,7 +96,7 @@ function capstanBoundBearer(
     $credential = new Credential;
     $credential->forceFill([
         'kind' => CredentialKind::Bearer,
-        'purpose' => app(AppPurposeRegistry::class)->purpose($appPurpose),
+        'purpose' => resolve(AppPurposeRegistry::class)->purpose($appPurpose),
         'subject_type' => $profile->scope->subject->type,
         'subject_ref' => $profile->scope->subject->ref,
         'name' => 'Capstan test credential',

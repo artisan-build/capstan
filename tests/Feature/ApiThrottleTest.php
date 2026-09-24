@@ -20,7 +20,7 @@ test('product api routes authenticate their fixed purpose before sharing the api
 
     foreach ($routes as $uri => $appPurpose) {
         $route = Route::getRoutes()->match(Request::create($uri, 'POST'));
-        $middleware = app(Router::class)->gatherRouteMiddleware($route);
+        $middleware = resolve(Router::class)->gatherRouteMiddleware($route);
         $authentication = AuthenticateBoundCredential::class.':'.$appPurpose;
         $throttle = ThrottleRequests::class.':api';
 

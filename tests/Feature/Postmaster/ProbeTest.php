@@ -487,17 +487,15 @@ test('probe ids are protected by a database unique constraint', function (): voi
 });
 
 test('the overdue probe sweep is scheduled every minute', function (): void {
-    $scheduled = collect(app(Schedule::class)->events())->contains(function ($event): bool {
-        return str_contains($event->command, 'postmaster:probe-sweep')
-            && $event->expression === '* * * * *'
-            && $event->expiresAt === 5;
-    });
+    $scheduled = collect(resolve(Schedule::class)->events())->contains(fn ($event): bool => str_contains($event->command, 'postmaster:probe-sweep')
+        && $event->expression === '* * * * *'
+        && $event->expiresAt === 5);
 
     expect($scheduled)->toBeTrue();
 });
 
 test('the probe sweep runs with system authority and never synthesizes a human principal', function (): void {
-    $context = app(SystemAuthorityContext::class);
+    $context = resolve(SystemAuthorityContext::class);
     $manager = new class($context) extends ProbeManager
     {
         public bool $authorityWasActive = false;

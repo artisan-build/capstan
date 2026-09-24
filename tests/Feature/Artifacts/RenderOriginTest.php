@@ -37,7 +37,7 @@ function storedArtifact(string $content, ArtifactVisibility $visibility = Artifa
 test('signed url mode streams byte-identical content with strict headers from render origin', function (): void {
     $content = '<!doctype html><html><body><script>window.x = "raw";</script></body></html>';
     $artifact = storedArtifact($content, ArtifactVisibility::SignedUrl, now()->addHour());
-    $url = app(ArtifactRenderOrigin::class)->signedContentUrl($artifact);
+    $url = resolve(ArtifactRenderOrigin::class)->signedContentUrl($artifact);
 
     $response = $this->get($url)
         ->assertOk()
@@ -58,7 +58,7 @@ test('signed url mode streams byte-identical content with strict headers from re
 test('content url expiry is capped at five minutes even when artifact expiry is far future', function (): void {
     $this->travelTo(now()->startOfSecond());
     $artifact = storedArtifact('<html><body>long lived artifact</body></html>', ArtifactVisibility::OrgAuth, now()->addMonths(6));
-    $query = parse_url(app(ArtifactRenderOrigin::class)->signedContentUrl($artifact), PHP_URL_QUERY);
+    $query = parse_url(resolve(ArtifactRenderOrigin::class)->signedContentUrl($artifact), PHP_URL_QUERY);
     parse_str(is_string($query) ? $query : '', $parameters);
 
     expect((int) $parameters['expires'])->toBeLessThanOrEqual(now()->addMinutes(5)->timestamp);
@@ -66,7 +66,7 @@ test('content url expiry is capped at five minutes even when artifact expiry is 
 
 test('content url valid now is rejected after six minutes', function (): void {
     $artifact = storedArtifact('<html><body>short content grant</body></html>', ArtifactVisibility::SignedUrl, now()->addMonths(6));
-    $url = app(ArtifactRenderOrigin::class)->signedContentUrl($artifact);
+    $url = resolve(ArtifactRenderOrigin::class)->signedContentUrl($artifact);
 
     $this->get($url)->assertOk();
 
@@ -80,7 +80,7 @@ test('content url valid now is rejected after six minutes', function (): void {
 test('tampered and expired signed urls are refused without content', function (): void {
     $content = '<html><body>secret signed artifact</body></html>';
     $artifact = storedArtifact($content, ArtifactVisibility::SignedUrl, now()->addHour());
-    $url = app(ArtifactRenderOrigin::class)->signedContentUrl($artifact);
+    $url = resolve(ArtifactRenderOrigin::class)->signedContentUrl($artifact);
 
     $this->get($url.'&tampered=1')
         ->assertForbidden()
@@ -119,7 +119,7 @@ test('org auth signed content url authorizes unauthenticated render origin reque
     $artifact = storedArtifact($content, ArtifactVisibility::OrgAuth, now()->addHour());
     $artifact->teams()->sync([Team::default()->id]);
 
-    $response = $this->get(app(ArtifactRenderOrigin::class)->signedContentUrl($artifact))
+    $response = $this->get(resolve(ArtifactRenderOrigin::class)->signedContentUrl($artifact))
         ->assertOk()
         ->assertStreamed();
 
@@ -138,7 +138,7 @@ test('expired org auth artifacts are refused', function (): void {
 
 test('content route refuses app host and viewer uses opaque-origin sandbox iframe', function (): void {
     $artifact = storedArtifact('<html><body>isolated</body></html>', ArtifactVisibility::SignedUrl, now()->addHour());
-    $shareUrl = app(ArtifactRenderOrigin::class)->signedViewerUrl($artifact);
+    $shareUrl = resolve(ArtifactRenderOrigin::class)->signedViewerUrl($artifact);
 
     $this->get("https://app.capstan.test/artifacts/{$artifact->id}/content")
         ->assertNotFound();
@@ -159,7 +159,7 @@ test('robots txt disallows artifact paths', function (): void {
 test('artifact serving does not expose storage urls or call temporary disk urls', function (): void {
     $artifact = storedArtifact('<html><body>streamed not redirected</body></html>', ArtifactVisibility::SignedUrl, now()->addHour());
 
-    $response = $this->get(app(ArtifactRenderOrigin::class)->signedContentUrl($artifact))
+    $response = $this->get(resolve(ArtifactRenderOrigin::class)->signedContentUrl($artifact))
         ->assertOk()
         ->assertStreamed();
 
@@ -176,8 +176,8 @@ test('artifact serving does not expose storage urls or call temporary disk urls'
 
 test('artifact serving routes fail closed when the feature is off', function (): void {
     $artifact = storedArtifact('<html><body>feature off artifact</body></html>', ArtifactVisibility::SignedUrl, now()->addHour());
-    $shareUrl = app(ArtifactRenderOrigin::class)->signedViewerUrl($artifact);
-    $contentUrl = app(ArtifactRenderOrigin::class)->signedContentUrl($artifact);
+    $shareUrl = resolve(ArtifactRenderOrigin::class)->signedViewerUrl($artifact);
+    $contentUrl = resolve(ArtifactRenderOrigin::class)->signedContentUrl($artifact);
 
     config(['capstan.features.artifacts' => false]);
     Feature::flushCache();
@@ -196,7 +196,7 @@ test('content length is taken from the stored blob instead of artifact metadata'
     $artifact = storedArtifact($content, ArtifactVisibility::SignedUrl, now()->addHour());
     $artifact->forceFill(['size_bytes' => 1])->save();
 
-    $response = $this->get(app(ArtifactRenderOrigin::class)->signedContentUrl($artifact))
+    $response = $this->get(resolve(ArtifactRenderOrigin::class)->signedContentUrl($artifact))
         ->assertOk()
         ->assertHeader('Content-Length', (string) strlen($content));
 
@@ -207,7 +207,7 @@ test('missing stored blob returns not found without leaking storage details', fu
     $artifact = storedArtifact('<html><body>missing blob</body></html>', ArtifactVisibility::SignedUrl, now()->addHour());
     Storage::disk()->delete($artifact->storage_key);
 
-    $this->get(app(ArtifactRenderOrigin::class)->signedContentUrl($artifact))
+    $this->get(resolve(ArtifactRenderOrigin::class)->signedContentUrl($artifact))
         ->assertNotFound()
         ->assertDontSee($artifact->storage_key)
         ->assertDontSee($artifact->content_hash)

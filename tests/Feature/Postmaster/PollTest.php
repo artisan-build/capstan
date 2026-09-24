@@ -29,7 +29,7 @@ beforeEach(function (): void {
         'capstan.postmaster.poll.max_inbound' => 50,
     ]);
     Feature::flushCache();
-    app(SigningRootLifecycle::class)->provision();
+    resolve(SigningRootLifecycle::class)->provision();
 });
 
 function spokeToken(User $user): string

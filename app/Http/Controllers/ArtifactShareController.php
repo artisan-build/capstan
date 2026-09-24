@@ -85,7 +85,7 @@ class ArtifactShareController extends Controller
 
     private function authorizeOrgArtifact(Request $request, Artifact $artifact): void
     {
-        $identity = app(IdentityContext::class);
+        $identity = resolve(IdentityContext::class);
 
         abort_unless($identity->canUseProduct(), 403);
     }

@@ -13,7 +13,7 @@ class RenderOriginIsolation
      * The only paths reachable on the render origin: artifact blobs and the
      * health probe. Everything else on that host does not exist (D22).
      */
-    private const ALLOWED_PATTERNS = ['up', 'artifacts/*/content'];
+    private const array ALLOWED_PATTERNS = ['up', 'artifacts/*/content'];
 
     public function __construct(private readonly ArtifactRenderOrigin $origin) {}
 

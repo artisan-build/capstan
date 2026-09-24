@@ -499,7 +499,7 @@ class PollController extends Controller
             ->where('to_server_id', $serverId)
             ->whereIn('to_local_part', $this->routedLocalParts($spoke, $actorId))
             ->whereIn('status', [MessageStatus::Pending->value, MessageStatus::Delivered->value])
-            ->orderBy('received_at')
+            ->oldest('received_at')
             ->orderBy('id')
             ->limit($limit)
             ->get();

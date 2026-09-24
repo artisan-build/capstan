@@ -16,6 +16,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
  * @property string $local_part
  * @property CarbonImmutable $created_at
  * @property CarbonImmutable $updated_at
+ *
+ * @mixin IdeHelperInbox
  */
 class Inbox extends Model
 {
