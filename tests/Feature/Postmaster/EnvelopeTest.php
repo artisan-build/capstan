@@ -13,7 +13,7 @@ use Illuminate\Support\Facades\Schema;
 
 beforeEach(function (): void {
     config(['app.key' => 'base64:'.base64_encode(str_repeat('e', 32))]);
-    app(SigningRootLifecycle::class)->provision();
+    resolve(SigningRootLifecycle::class)->provision();
 });
 
 /**
@@ -31,7 +31,7 @@ function postmasterTestEnvelope(array $overrides = []): Envelope
         'message_id' => $serverId.':01ARZ3NDEKTSV4RRFFQ69G5FAX',
     ], $overrides));
     $envelope->created_at = now()->utc()->startOfSecond();
-    $mac = app(SigningRootMac::class)->mac(JsonCanonicalizer::encode($envelope->signablePayload()));
+    $mac = resolve(SigningRootMac::class)->mac(JsonCanonicalizer::encode($envelope->signablePayload()));
     $envelope->signature = $mac->lowercaseHexMac;
     $envelope->signing_key_id = $mac->keyId;
 
@@ -44,7 +44,7 @@ function verifyPostmasterEnvelope(Envelope $envelope): bool
         return false;
     }
 
-    return app(SigningRootMac::class)->verify(
+    return resolve(SigningRootMac::class)->verify(
         $envelope->signing_key_id,
         JsonCanonicalizer::encode($envelope->signablePayload()),
         $envelope->signature,
@@ -227,7 +227,7 @@ test('wrong or missing signatures fail without error', function (mixed $signatur
 test('created at normalization survives database precision loss', function (): void {
     $envelope = postmasterTestEnvelope();
     $envelope->created_at = '2026-08-17 11:44:44';
-    $mac = app(SigningRootMac::class)->mac(JsonCanonicalizer::encode($envelope->signablePayload()));
+    $mac = resolve(SigningRootMac::class)->mac(JsonCanonicalizer::encode($envelope->signablePayload()));
     $envelope->signature = $mac->lowercaseHexMac;
     $envelope->signing_key_id = $mac->keyId;
     $envelope->save();
@@ -253,7 +253,7 @@ test('stored envelopes remain verifiable through signing-root rotation', functio
     $stored->save();
     $oldKeyId = $stored->signing_key_id;
 
-    app(SigningRootLifecycle::class)->rotate($oldKeyId, false);
+    resolve(SigningRootLifecycle::class)->rotate($oldKeyId, false);
     $next = postmasterTestEnvelope([
         'id' => '01ARZ3NDEKTSV4RRFFQ69G5FAV:01ARZ3NDEKTSV4RRFFQ69G5FAY',
         'message_id' => '01ARZ3NDEKTSV4RRFFQ69G5FAV:01ARZ3NDEKTSV4RRFFQ69G5FAZ',

@@ -9,13 +9,13 @@ beforeEach(function (): void {
 });
 
 test('server identity is minted once and memoized through the container', function (): void {
-    $resolver = app(ServerIdentity::class);
+    $resolver = resolve(ServerIdentity::class);
     $first = $resolver->id();
-    $second = app(ServerIdentity::class)->id();
+    $second = resolve(ServerIdentity::class)->id();
 
     expect($first)->toBe($second)
         ->toMatch('/^[0-9A-HJKMNP-TV-Z]{26}\z/')
-        ->and(app(ServerIdentity::class))->toBe($resolver)
+        ->and(resolve(ServerIdentity::class))->toBe($resolver)
         ->and(DB::table('server_identity')->count())->toBe(1)
         ->and(DB::table('server_identity')->value('server_id'))->toBe($first);
 });

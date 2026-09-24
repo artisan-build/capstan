@@ -4,7 +4,7 @@ namespace App\Support;
 
 use InvalidArgumentException;
 
-final readonly class Address
+final readonly class Address implements \Stringable
 {
     private const string LOCAL_PART_PATTERN = '/^[a-z0-9]([a-z0-9._-]*[a-z0-9])?\z/';
 

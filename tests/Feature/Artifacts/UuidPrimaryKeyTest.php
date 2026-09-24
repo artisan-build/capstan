@@ -54,7 +54,7 @@ test('artifact ids sort lexically in creation order', function (): void {
 
 test('share and content routes resolve a uuid-keyed artifact and refuse an unknown uuid', function (): void {
     $artifact = uuidKeyedArtifact('<html><body>uuid keyed artifact</body></html>');
-    $origin = app(ArtifactRenderOrigin::class);
+    $origin = resolve(ArtifactRenderOrigin::class);
 
     $this->get($origin->signedViewerUrl($artifact))->assertOk();
     $this->get($origin->signedContentUrl($artifact))->assertOk();
