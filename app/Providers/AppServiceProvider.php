@@ -29,7 +29,7 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->app->singleton(ServerIdentity::class);
         $this->app->bind(ProbeFailureNotifier::class, LogProbeFailureNotifier::class);
-        $this->app->bind(IdentityContext::class, function (): DomainIdentityContext {
+        $this->app->bind(function (): IdentityContext {
             $user = auth()->user();
 
             abort_unless($user instanceof User, 401);
@@ -73,8 +73,6 @@ class AppServiceProvider extends ServiceProvider
             : null,
         );
 
-        RateLimiter::for('api', function (Request $request): Limit {
-            return Limit::perMinute(60)->by('actor:'.AuthenticateBoundCredential::actorId($request));
-        });
+        RateLimiter::for('api', fn (Request $request): Limit => Limit::perMinute(60)->by('actor:'.AuthenticateBoundCredential::actorId($request)));
     }
 }

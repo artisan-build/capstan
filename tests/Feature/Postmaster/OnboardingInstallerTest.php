@@ -29,9 +29,9 @@ function installerSnippet(object $test): string
     $test->actingAs($user);
     $request = Request::create('/postmaster', 'GET');
     $request->setUserResolver(static fn (): User => $user);
-    $request->setLaravelSession(app('session')->driver());
+    $request->setLaravelSession(resolve('session')->driver());
 
-    return app(OnboardingSnippet::class)->generate($request, (string) $user->getKey());
+    return resolve(OnboardingSnippet::class)->generate($request, (string) $user->getKey());
 }
 
 function installerLine(string $snippet, string $prefix): string

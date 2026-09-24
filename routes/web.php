@@ -3,7 +3,7 @@
 use App\Http\Controllers\ArtifactShareController;
 use Illuminate\Support\Facades\Route;
 
-Route::middleware('bfc.auth')->group(function () {
+Route::middleware('bfc.auth')->group(function (): void {
     Route::view('dashboard', 'dashboard')->name('dashboard');
     Route::livewire('postmaster', 'postmaster.spoke-map')->name('postmaster.map');
 });

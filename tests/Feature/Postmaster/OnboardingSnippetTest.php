@@ -31,7 +31,7 @@ beforeEach(function (): void {
     Feature::flushCache();
     RateLimiter::clear('postmaster-onboarding:127.0.0.1');
     app()->forgetInstance(ServerIdentity::class);
-    request()->setLaravelSession(app('session')->driver());
+    request()->setLaravelSession(resolve('session')->driver());
 });
 
 function onboardingSnippetFor(object $test, User $user): string
@@ -39,9 +39,9 @@ function onboardingSnippetFor(object $test, User $user): string
     $test->actingAs($user);
     $request = Request::create('/postmaster', 'GET');
     $request->setUserResolver(static fn (): User => $user);
-    $request->setLaravelSession(app('session')->driver());
+    $request->setLaravelSession(resolve('session')->driver());
 
-    return app(OnboardingSnippet::class)->generate($request, (string) $user->getKey());
+    return resolve(OnboardingSnippet::class)->generate($request, (string) $user->getKey());
 }
 
 test('the snippet starts the fixed package device flow without disclosing durable secrets', function (): void {
@@ -120,7 +120,7 @@ test('onboarding generation is limited to fifteen attempts per minute per ip', f
     $operator = capstanUser();
     $this->actingAsVersioned($operator);
     request()->setUserResolver(static fn (): User => $operator);
-    $component = app(SpokeMap::class);
+    $component = resolve(SpokeMap::class);
 
     foreach (range(1, 15) as $attempt) {
         RateLimiter::hit('postmaster-onboarding:127.0.0.1', 60);
@@ -128,8 +128,8 @@ test('onboarding generation is limited to fifteen attempts per minute per ip', f
 
     try {
         $component->generateOnboardingSnippet(
-            app(OnboardingSnippet::class),
-            app(IdentityContext::class),
+            resolve(OnboardingSnippet::class),
+            resolve(IdentityContext::class),
         );
         $this->fail('The sixteenth onboarding attempt should be rate limited.');
     } catch (HttpException $exception) {

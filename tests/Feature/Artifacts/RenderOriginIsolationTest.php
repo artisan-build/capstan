@@ -58,7 +58,7 @@ test('signed content on the render host streams with strict headers and zero coo
     $content = '<html><body>cookieless blob</body></html>';
     $artifact = isolationArtifact($content);
 
-    $response = $this->get(app(ArtifactRenderOrigin::class)->signedContentUrl($artifact))
+    $response = $this->get(resolve(ArtifactRenderOrigin::class)->signedContentUrl($artifact))
         ->assertOk()
         ->assertStreamed()
         ->assertHeader('Content-Type', 'text/html; charset=utf-8')
@@ -96,12 +96,12 @@ test('org auth content on the render host is signature-only with no session fall
         ->get("https://render.test/artifacts/{$artifact->id}/content")
         ->assertUnauthorized();
 
-    $this->get(app(ArtifactRenderOrigin::class)->signedContentUrl($artifact))->assertOk();
+    $this->get(resolve(ArtifactRenderOrigin::class)->signedContentUrl($artifact))->assertOk();
 });
 
 test('the content route stack is sessionless and cookieless by construction', function (): void {
     $route = Route::getRoutes()->getByName('artifacts.content');
-    $middleware = app(Router::class)->gatherRouteMiddleware($route);
+    $middleware = resolve(Router::class)->gatherRouteMiddleware($route);
 
     expect($middleware)
         ->toContain(SubstituteBindings::class)
@@ -116,7 +116,7 @@ test('the app origin stays fully intact', function (): void {
 
     $this->get('https://app.test/')->assertOk();
 
-    $this->get(app(ArtifactRenderOrigin::class)->signedViewerUrl($artifact))
+    $this->get(resolve(ArtifactRenderOrigin::class)->signedViewerUrl($artifact))
         ->assertOk()
         ->assertSee('sandbox="allow-scripts"', false);
 

@@ -72,7 +72,7 @@ class ArtifactController extends Controller
 
         return new JsonResponse([
             'artifact' => $this->representation($artifact),
-            'share_url' => app(ArtifactRenderOrigin::class)->signedViewerUrl($artifact),
+            'share_url' => resolve(ArtifactRenderOrigin::class)->signedViewerUrl($artifact),
         ], 201);
     }
 
@@ -89,7 +89,7 @@ class ArtifactController extends Controller
             'content_type' => $artifact->content_type,
             'size_bytes' => $artifact->size_bytes,
             'content_hash' => $artifact->content_hash,
-            'share_url' => app(ArtifactRenderOrigin::class)->signedViewerUrl($artifact),
+            'share_url' => resolve(ArtifactRenderOrigin::class)->signedViewerUrl($artifact),
             'created_at' => $artifact->created_at?->toJSON(),
         ];
     }

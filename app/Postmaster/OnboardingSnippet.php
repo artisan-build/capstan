@@ -11,8 +11,8 @@ use RuntimeException;
 class OnboardingSnippet
 {
     public function __construct(
-        private ServerIdentity $identity,
-        private StartDeviceAuthorization $startDeviceAuthorization,
+        private readonly ServerIdentity $identity,
+        private readonly StartDeviceAuthorization $startDeviceAuthorization,
     ) {}
 
     public function generate(Request $request, string $actorId): string
