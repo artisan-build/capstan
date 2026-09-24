@@ -50,6 +50,9 @@ jobs:
       - name: Run Pest
         run: php artisan test
 
+      - name: Run Rector
+        run: composer rector:check
+
       - name: Run PHPStan
         run: vendor/bin/phpstan analyse
 
