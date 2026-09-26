@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Auth\CapstanCredentialDeclaration;
+use App\Http\Controllers\DashboardController;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 
 return [
@@ -13,6 +14,8 @@ return [
         'icon' => 'https://scalpels.app/img/products/transparent/capstan.png',
         'product_url' => 'https://scalpels.app/products/capstan',
     ],
+
+    'dashboard' => DashboardController::class,
 
     'credentials' => [
         'guard' => env('BUILT_FOR_CLOUD_CREDENTIAL_GUARD', 'bfc'),
