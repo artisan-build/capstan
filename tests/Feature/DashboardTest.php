@@ -7,11 +7,11 @@ beforeEach(function (): void {
 });
 
 test('guests are redirected to the package login page', function (): void {
-    $this->get(route('dashboard'))->assertRedirect(route('bfc.login'));
+    $this->get(route('bfc.dashboard'))->assertRedirect(route('bfc.login'));
 });
 
 test('every active package role can visit the dashboard', function (UserRole $role): void {
     $this->actingAsVersioned(capstanUser(['role' => $role->value]))
-        ->get(route('dashboard'))
+        ->get(route('bfc.dashboard'))
         ->assertOk();
 })->with(UserRole::cases());
