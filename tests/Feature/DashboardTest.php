@@ -7,7 +7,7 @@ beforeEach(function (): void {
 });
 
 test('guests are redirected to the package login page', function (): void {
-    $this->get(route('bfc.dashboard'))->assertRedirect(route('bfc.login'));
+    $this->get(route('bfc.dashboard'))->assertRedirect(route('bfc.login', ['intended' => '/dashboard']));
 });
 
 test('every active package role can visit the dashboard', function (UserRole $role): void {
