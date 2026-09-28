@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "e14d160bc615bbbcb31d4b78b8b72df2",
+    "content-hash": "b3aaeab3dd317be522ee73a816e0cd3e",
     "packages": [
         {
             "name": "artisan-build/bfc-client",
@@ -68,31 +68,36 @@
         },
         {
             "name": "artisan-build/built-for-cloud",
-            "version": "v0.18.0",
+            "version": "v0.19.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/artisan-build/built-for-cloud.git",
-                "reference": "c2f3b3808640c4a31622288cb588e9d493eba14f"
+                "reference": "c73fab57c6c6f44a0633e1f20ed9a71a8d64ed8b"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/artisan-build/built-for-cloud/zipball/c2f3b3808640c4a31622288cb588e9d493eba14f",
-                "reference": "c2f3b3808640c4a31622288cb588e9d493eba14f",
+                "url": "https://api.github.com/repos/artisan-build/built-for-cloud/zipball/c73fab57c6c6f44a0633e1f20ed9a71a8d64ed8b",
+                "reference": "c73fab57c6c6f44a0633e1f20ed9a71a8d64ed8b",
                 "shasum": ""
             },
             "require": {
+                "artisan-build/built-for-cloud-contracts": "^0.2",
                 "composer/semver": "^3.4",
                 "illuminate/auth": "^13.24",
                 "illuminate/console": "^13.24",
                 "illuminate/contracts": "^13.24",
                 "illuminate/database": "^13.24",
+                "illuminate/http": "^13.24",
+                "illuminate/mail": "^13.24",
                 "illuminate/notifications": "^13.24",
                 "illuminate/process": "^13.24",
                 "illuminate/routing": "^13.24",
                 "illuminate/support": "^13.24",
                 "paragonie/paseto": "^3.5",
                 "paragonie/sodium_compat": "^1|^2",
-                "php": "^8.3"
+                "php": "^8.3",
+                "symfony/mailer": "^7.4|^8.0",
+                "symfony/mime": "^7.4|^8.0"
             },
             "require-dev": {
                 "larastan/larastan": "^3.9",
@@ -131,9 +136,54 @@
             ],
             "support": {
                 "issues": "https://github.com/artisan-build/built-for-cloud/issues",
-                "source": "https://github.com/artisan-build/built-for-cloud/tree/v0.18.0"
+                "source": "https://github.com/artisan-build/built-for-cloud/tree/v0.19.0"
             },
-            "time": "2026-09-26T11:53:32+00:00"
+            "time": "2026-09-28T08:22:02+00:00"
+        },
+        {
+            "name": "artisan-build/built-for-cloud-contracts",
+            "version": "v0.2.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/artisan-build/built-for-cloud-contracts.git",
+                "reference": "8d3238e8d173fb72b42a44d95f30ac403b173a57"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/artisan-build/built-for-cloud-contracts/zipball/8d3238e8d173fb72b42a44d95f30ac403b173a57",
+                "reference": "8d3238e8d173fb72b42a44d95f30ac403b173a57",
+                "shasum": ""
+            },
+            "require": {
+                "php": "^8.4"
+            },
+            "require-dev": {
+                "laravel/pint": "^1.27",
+                "pestphp/pest": "^4.0",
+                "phpstan/phpstan": "^2.1"
+            },
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "ArtisanBuild\\BuiltForCloudContracts\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "description": "Pure protocol contracts shared by Built for Cloud and Scalpels.",
+            "keywords": [
+                "artisan-build",
+                "built-for-cloud",
+                "contracts",
+                "scalpels"
+            ],
+            "support": {
+                "issues": "https://github.com/artisan-build/built-for-cloud-contracts/issues",
+                "source": "https://github.com/artisan-build/built-for-cloud-contracts/tree/v0.2.0"
+            },
+            "time": "2026-09-26T15:17:49+00:00"
         },
         {
             "name": "artisan-build/hone-client",
