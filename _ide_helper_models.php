@@ -21,12 +21,24 @@ namespace App\Models{
  * @property int $size_bytes
  * @property string $content_hash
  * @property string $storage_key
+ * @property \Carbon\CarbonImmutable|null $created_at
+ * @property \Carbon\CarbonImmutable|null $updated_at
  * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\Team> $teams
  * @property-read int|null $teams_count
  * @method static \Database\Factories\ArtifactFactory factory($count = null, $state = [])
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact whereActorId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact whereContentHash($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact whereContentType($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact whereExpiresAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact whereSizeBytes($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact whereStorageKey($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact whereUpdatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact whereVisibility($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -56,6 +68,24 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereAckedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereBody($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereDeliveredAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereFromAddress($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereMessageId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereReceivedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereRefs($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereSignature($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereSigningKeyId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereStatus($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereToAddress($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereToLocalPart($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereToServerId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereType($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereUpdatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereVersion($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -78,6 +108,11 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Inbox newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Inbox newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Inbox query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Inbox whereActorId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Inbox whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Inbox whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Inbox whereLocalPart($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Inbox whereUpdatedAt($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -103,6 +138,16 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereActorId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereCredentialId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereLastCursor($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereLastPolledAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereName($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereProbeFailedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereProbeStatus($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereUpdatedAt($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -121,10 +166,20 @@ namespace App\Models{
  * @property CarbonImmutable|null $responded_at
  * @property CarbonImmutable $created_at
  * @property CarbonImmutable $updated_at
- * @property-read \App\Models\Spoke|null $spoke
+ * @property-read \App\Models\Spoke $spoke
  * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe whereExpiresAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe whereIssuedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe whereNonce($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe whereProbeId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe whereRespondedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe whereSpokeId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe whereStatus($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe whereUpdatedAt($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -133,11 +188,23 @@ namespace App\Models{
 
 namespace App\Models{
 /**
+ * @property int $id
+ * @property string $name
+ * @property string $slug
+ * @property bool $is_default
+ * @property \Carbon\CarbonImmutable|null $created_at
+ * @property \Carbon\CarbonImmutable|null $updated_at
  * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\Artifact> $artifacts
  * @property-read int|null $artifacts_count
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Team newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Team newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Team query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereIsDefault($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereName($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereSlug($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereUpdatedAt($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]

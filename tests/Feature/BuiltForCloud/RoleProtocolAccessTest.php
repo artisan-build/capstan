@@ -58,7 +58,7 @@ test('package role changes preserve Capstan product access at the new role', fun
 
         expect($user->refresh()->roleValue())->toBe($role);
 
-        $this->actingAsVersioned($user)->get(route('dashboard'))->assertOk();
+        $this->actingAsVersioned($user)->get(route('bfc.dashboard'))->assertOk();
         $this->withHeaders(capstanBearerHeaders($user, CapstanCredentialDeclaration::ARTIFACT_INGEST))
             ->postJson('/api/v1/artifacts', [
                 'content' => '<html><body>'.$role->value.' artifact</body></html>',
