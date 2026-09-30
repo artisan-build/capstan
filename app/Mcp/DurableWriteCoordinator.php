@@ -101,6 +101,19 @@ final readonly class DurableWriteCoordinator
                         return ['response' => $this->decodeResponse($claim->terminal_response), 'execute' => false];
                     }
 
+                    if ($claim->refusal_response !== null) {
+                        $response = $this->decodeResponse($claim->refusal_response);
+                        DB::table('mcp_write_claims')->where('id', $claim->id)->update([
+                            'state' => 'refused',
+                            'terminal_response' => json_encode($response, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES),
+                            'fence_token' => null,
+                            'lease_expires_at' => null,
+                            'updated_at' => $now,
+                        ]);
+
+                        return ['response' => $response, 'execute' => false];
+                    }
+
                     if ($claim->lease_expires_at !== null && CarbonImmutable::parse($claim->lease_expires_at)->isPast()) {
                         $response = $this->outcome('outcome_unknown');
                         DB::table('mcp_write_claims')->where('id', $claim->id)->update([
@@ -141,7 +154,7 @@ final readonly class DurableWriteCoordinator
 
         try {
             $this->faults->beforeOperation($tool);
-            $accepted = DB::transaction(function () use ($operation, $claimId, $targetId, $fenceToken): array {
+            $result = DB::transaction(function () use ($operation, $claimId, $targetId, $fenceToken): array {
                 $claim = DB::table('mcp_write_claims')->where('id', $claimId)->lockForUpdate()->first();
 
                 if ($claim === null
@@ -153,7 +166,26 @@ final readonly class DurableWriteCoordinator
                     throw new RuntimeException('The write claim no longer owns its effect fence.');
                 }
 
-                $response = $operation($targetId, $claimId);
+                try {
+                    $response = DB::transaction(fn (): array => $operation($targetId, $claimId));
+                } catch (ApiErrorException $exception) {
+                    $response = $this->outcome('refused', ['reason' => $exception->errorCode]);
+                    $updated = DB::table('mcp_write_claims')
+                        ->where('id', $claimId)
+                        ->where('fence_token', $fenceToken)
+                        ->where('state', 'in_progress')
+                        ->update([
+                            'refusal_response' => json_encode($response, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES),
+                            'updated_at' => now(),
+                        ]);
+
+                    if ($updated !== 1) {
+                        throw new RuntimeException('The write claim no longer owns its refusal fence.');
+                    }
+
+                    return ['accepted' => false, 'response' => $response];
+                }
+
                 $response['outcome'] = 'accepted';
                 DB::table('mcp_write_effects')->insert([
                     'claim_id' => $claimId,
@@ -161,13 +193,20 @@ final readonly class DurableWriteCoordinator
                     'created_at' => now(),
                 ]);
 
-                return $response;
+                return ['accepted' => true, 'response' => $response];
             }, 3);
 
-            $this->faults->beforeSettlement($tool);
-            $this->settleAccepted($claimId, $fenceToken, $accepted);
+            /** @var array<string, mixed> $response */
+            $response = $result['response'];
 
-            return $accepted;
+            if ($result['accepted'] === false) {
+                return $this->settleFailure($claimId, $fenceToken, $tool, 'refused', $response);
+            }
+
+            $this->faults->beforeSettlement($tool);
+            $this->settleAccepted($claimId, $fenceToken, $response);
+
+            return $response;
         } catch (ApiErrorException $exception) {
             return $this->settleFailure(
                 $claimId,

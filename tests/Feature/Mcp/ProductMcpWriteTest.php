@@ -285,6 +285,77 @@ test('settles immutable intent conflicts refusals and unknown outcomes durably',
         ->toBe(['outcome' => 'outcome_unknown']);
 });
 
+test('preserves deterministic refusals when terminal settlement fails', function (): void {
+    $user = capstanUser();
+    $token = capstanMcpWriteToken($user);
+    Inbox::query()->create(['actor_id' => (string) $user->id, 'local_part' => 'sender']);
+    $settlementFailure = new class extends WriteFaultInjector
+    {
+        public function beforeFailureSettlement(string $tool): void
+        {
+            throw new RuntimeException('secret refusal settlement failure');
+        }
+    };
+
+    $notOwned = capstanMcpWriteSendArguments('not-owned-settlement-failure');
+    $notOwned['from'] = 'absent@'.MCP_WRITE_SERVER_ID;
+    app()->instance(WriteFaultInjector::class, $settlementFailure);
+    expect(capstanMcpWriteStructured(capstanMcpWriteCall('send_postmaster_message', $notOwned, $token)))
+        ->toBe(['outcome' => 'in_progress']);
+
+    $notOwnedClaim = DB::table('mcp_write_claims')
+        ->where('idempotency_key', 'not-owned-settlement-failure')
+        ->first();
+    expect($notOwnedClaim->state)->toBe('in_progress')
+        ->and(json_decode((string) $notOwnedClaim->refusal_response, true))->toBe([
+            'outcome' => 'refused',
+            'reason' => 'sender_not_owned',
+        ])
+        ->and(DB::table('mcp_write_effects')->count())->toBe(0)
+        ->and(Envelope::query()->count())->toBe(0);
+
+    DB::table('mcp_write_claims')->where('id', $notOwnedClaim->id)->update(['lease_expires_at' => now()->subSecond()]);
+    app()->instance(WriteFaultInjector::class, new WriteFaultInjector);
+    $notOwnedReplay = capstanMcpWriteStructured(capstanMcpWriteCall('send_postmaster_message', $notOwned, $token));
+    expect($notOwnedReplay)->toBe(['outcome' => 'refused', 'reason' => 'sender_not_owned'])
+        ->and(capstanMcpWriteStructured(capstanMcpWriteCall('send_postmaster_message', $notOwned, $token)))->toBe($notOwnedReplay)
+        ->and(DB::table('mcp_write_claims')->where('id', $notOwnedClaim->id)->value('state'))->toBe('refused')
+        ->and(DB::table('mcp_write_effects')->count())->toBe(0)
+        ->and(Envelope::query()->count())->toBe(0);
+
+    $accepted = capstanMcpWriteSendArguments('collision-source');
+    $accepted['message_id'] = 'settlement-collision-id';
+    expect(capstanMcpWriteStructured(capstanMcpWriteCall('send_postmaster_message', $accepted, $token))['outcome'])
+        ->toBe('accepted');
+
+    $collision = capstanMcpWriteSendArguments('collision-settlement-failure');
+    $collision['message_id'] = 'settlement-collision-id';
+    $collision['to'] = 'remote@'.MCP_WRITE_FOREIGN_SERVER_ID;
+    app()->instance(WriteFaultInjector::class, $settlementFailure);
+    expect(capstanMcpWriteStructured(capstanMcpWriteCall('send_postmaster_message', $collision, $token)))
+        ->toBe(['outcome' => 'in_progress']);
+
+    $collisionClaim = DB::table('mcp_write_claims')
+        ->where('idempotency_key', 'collision-settlement-failure')
+        ->first();
+    expect(json_decode((string) $collisionClaim->refusal_response, true))->toBe([
+        'outcome' => 'refused',
+        'reason' => 'message_identity_conflict',
+    ])
+        ->and(DB::table('mcp_write_effects')->where('claim_id', $collisionClaim->id)->count())->toBe(0)
+        ->and(DB::table('mcp_write_effects')->count())->toBe(1)
+        ->and(Envelope::query()->count())->toBe(1);
+
+    DB::table('mcp_write_claims')->where('id', $collisionClaim->id)->update(['lease_expires_at' => now()->subSecond()]);
+    app()->instance(WriteFaultInjector::class, new WriteFaultInjector);
+    $collisionReplay = capstanMcpWriteStructured(capstanMcpWriteCall('send_postmaster_message', $collision, $token));
+    expect($collisionReplay)->toBe(['outcome' => 'refused', 'reason' => 'message_identity_conflict'])
+        ->and(capstanMcpWriteStructured(capstanMcpWriteCall('send_postmaster_message', $collision, $token)))->toBe($collisionReplay)
+        ->and(DB::table('mcp_write_effects')->where('claim_id', $collisionClaim->id)->count())->toBe(0)
+        ->and(DB::table('mcp_write_effects')->count())->toBe(1)
+        ->and(Envelope::query()->count())->toBe(1);
+});
+
 test('repairs a known accepted effect after both settlement attempts fail', function (): void {
     $user = capstanUser();
     $token = capstanMcpWriteToken($user);

@@ -23,6 +23,7 @@ return new class extends Migration
             $table->string('state', 32);
             $table->uuid('fence_token')->nullable();
             $table->timestamp('lease_expires_at')->nullable();
+            $table->json('refusal_response')->nullable();
             $table->json('terminal_response')->nullable();
             $table->timestamps();
 
