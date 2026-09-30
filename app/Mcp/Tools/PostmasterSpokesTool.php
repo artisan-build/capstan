@@ -15,11 +15,9 @@ use ArtisanBuild\BuiltForCloud\Mcp\Classification;
 use ArtisanBuild\BuiltForCloud\Mcp\Effect;
 use ArtisanBuild\BuiltForCloud\Mcp\ToolClassification;
 use ArtisanBuild\BuiltForCloud\Mcp\ToolEffect;
-use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
-use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 use Laravel\Mcp\Exceptions\JsonRpcException;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
@@ -28,10 +26,9 @@ use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Attributes\Name;
 use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 use Laravel\Pennant\Feature;
-use Throwable;
 
 #[Name('postmaster_spokes')]
-#[Description('Lists the authenticated actor owned Postmaster spokes and currently routed inboxes in stable health order.')]
+#[Description('Lists the authenticated actor owned Postmaster spokes and currently routed inboxes.')]
 #[IsReadOnly]
 #[ToolClassification(Classification::Metadata)]
 #[ToolEffect(Effect::Read)]
@@ -42,19 +39,18 @@ final class PostmasterSpokesTool extends CapstanTool
 
     public const int MAX_LIMIT = 25;
 
-    private const int SNAPSHOT_TTL_SECONDS = 86_400;
-
     public function schema(JsonSchema $schema): array
     {
         return [
             'limit' => $schema->integer()->min(1)->max(self::MAX_LIMIT)->default(10),
             'cursor' => $schema->string()->max(2048),
+            'status' => $schema->string()->enum(SpokeMapStatus::class),
         ];
     }
 
     public function handle(Request $request, OwnerSubjectResolver $owners, SignedCursor $cursors): Response|ResponseFactory
     {
-        $this->requireExactArguments($request, ['limit', 'cursor']);
+        $this->requireExactArguments($request, ['limit', 'cursor', 'status']);
 
         if (! Feature::active(Postmaster::class)) {
             return Response::error('Postmaster is unavailable.');
@@ -63,50 +59,55 @@ final class PostmasterSpokesTool extends CapstanTool
         $validated = $request->validate([
             'limit' => ['sometimes', 'required', 'integer', 'min:1', 'max:'.self::MAX_LIMIT],
             'cursor' => ['sometimes', 'required', 'string', 'max:2048'],
+            'status' => ['sometimes', 'required', Rule::enum(SpokeMapStatus::class)],
         ]);
         $owner = $owners->resolve();
         $limit = (int) ($validated['limit'] ?? 10);
+        $status = isset($validated['status']) ? SpokeMapStatus::from($validated['status']) : null;
         $actorBinding = $owner->type.':'.$owner->ref;
         $staleAfter = max(60, (int) config('capstan.postmaster.map.stale_after_seconds', 300));
-        $queryBinding = hash('sha256', 'postmaster_spokes:v1:'.$staleAfter.':'.$limit);
+        $queryBinding = hash('sha256', 'postmaster_spokes:v2:'.$staleAfter.':'.$limit.':'.($status === null ? '*' : $status->value));
         $after = isset($validated['cursor'])
             ? $cursors->decode($validated['cursor'], $actorBinding, $queryBinding)
             : null;
-        $staleBefore = $after === null
-            ? now()->subSeconds($staleAfter)
-            : $this->cursorStaleBefore($after);
+        $lastId = $after['last_id'] ?? null;
 
-        $currentSpokes = Spoke::query()
+        if ($after !== null && (! is_int($lastId) || $lastId < 1)) {
+            throw new JsonRpcException('The cursor is invalid for this request.', -32602);
+        }
+
+        $staleBefore = now()->subSeconds($staleAfter);
+        $query = Spoke::query()
             ->where('actor_id', $owner->actorId)
+            ->when($lastId !== null, fn ($query) => $query->where('id', '>', $lastId));
+
+        if ($status === SpokeMapStatus::Red) {
+            $query->where(function ($query) use ($staleBefore): void {
+                $query->whereNull('last_polled_at')
+                    ->orWhere('last_polled_at', '<', $staleBefore)
+                    ->orWhere('probe_status', SpokeLiveness::Red->value);
+            });
+        } elseif ($status !== null) {
+            $query->whereNotNull('last_polled_at')
+                ->where('last_polled_at', '>=', $staleBefore)
+                ->where(
+                    'probe_status',
+                    $status === SpokeMapStatus::Green ? SpokeLiveness::Green->value : SpokeLiveness::Unknown->value,
+                );
+        }
+
+        $candidates = $query
             ->with(['inboxes' => fn ($query) => $query->where('actor_id', $owner->actorId)->orderBy('local_part')])
+            ->orderBy('id')
+            ->limit($limit + 1)
             ->get();
 
-        // Freeze traversal order while rendering each spoke's current health and routing details.
-        [$snapshotId, $snapshotIds, $offset] = $after === null
-            ? [Str::random(40), $currentSpokes
-                ->sort(fn (Spoke $first, Spoke $second): int => $this->compareSortKeys(
-                    $this->sortKey($first, $staleBefore),
-                    $this->sortKey($second, $staleBefore),
-                ))
-                ->pluck('id')
-                ->values()
-                ->all(), 0]
-            : $this->cursorSnapshot($after, $actorBinding, $queryBinding);
-        $spokesById = $currentSpokes->keyBy('id');
-
         $items = [];
-        $nextOffset = $offset;
+        $consumed = [];
 
-        foreach (array_slice($snapshotIds, $offset) as $spokeId) {
+        foreach ($candidates as $spoke) {
             if (count($items) >= $limit) {
                 break;
-            }
-
-            $nextOffset++;
-            $spoke = $spokesById->get($spokeId);
-
-            if (! $spoke instanceof Spoke) {
-                continue;
             }
 
             $item = [
@@ -120,31 +121,22 @@ final class PostmasterSpokesTool extends CapstanTool
             ];
 
             if (! ToolResponse::fits(['items' => [...$items, $item], 'next_cursor' => str_repeat('x', 2048)])) {
-                $nextOffset--;
                 break;
             }
 
             $items[] = $item;
+            $consumed[] = $spoke;
         }
 
-        $hasMore = $nextOffset < count($snapshotIds);
-
-        if ($hasMore) {
-            Cache::put($this->snapshotKey($snapshotId), [
+        $hasMore = count($consumed) < $candidates->count() || $candidates->count() > $limit;
+        $last = $consumed[array_key_last($consumed)] ?? null;
+        $nextCursor = $hasMore && $last instanceof Spoke
+            ? $cursors->encode([
                 'actor' => $actorBinding,
                 'query' => $queryBinding,
-                'ids' => $snapshotIds,
-            ], self::SNAPSHOT_TTL_SECONDS);
-            $nextCursor = $cursors->encode([
-                'actor' => $actorBinding,
-                'query' => $queryBinding,
-                'stale_before' => $staleBefore->toISOString(),
-                'snapshot' => $snapshotId,
-                'offset' => $nextOffset,
-            ]);
-        } else {
-            $nextCursor = null;
-        }
+                'last_id' => $last->id,
+            ])
+            : null;
 
         return ToolResponse::structured([
             'items' => $items,
@@ -153,86 +145,6 @@ final class PostmasterSpokesTool extends CapstanTool
             'limit' => $limit,
             'stale_after_seconds' => $staleAfter,
         ]);
-    }
-
-    /** @return array{int, string, int} */
-    private function sortKey(Spoke $spoke, CarbonInterface $staleBefore): array
-    {
-        return [
-            $this->mapStatus($spoke, $staleBefore) === SpokeMapStatus::Red ? 0 : 1,
-            $this->displayName($spoke),
-            $spoke->id,
-        ];
-    }
-
-    /**
-     * @param  array{int, string, int}  $left
-     * @param  array{int, string, int}  $right
-     */
-    private function compareSortKeys(array $left, array $right): int
-    {
-        $status = $left[0] <=> $right[0];
-
-        if ($status !== 0) {
-            return $status;
-        }
-
-        $name = strnatcasecmp($left[1], $right[1]);
-
-        return $name !== 0 ? $name : $left[2] <=> $right[2];
-    }
-
-    /** @param array<string, mixed> $cursor */
-    private function cursorStaleBefore(array $cursor): CarbonImmutable
-    {
-        $value = $cursor['stale_before'] ?? null;
-
-        if (! is_string($value)) {
-            throw new JsonRpcException('The cursor is invalid for this request.', -32602);
-        }
-
-        try {
-            return CarbonImmutable::parse($value);
-        } catch (Throwable) {
-            throw new JsonRpcException('The cursor is invalid for this request.', -32602);
-        }
-    }
-
-    /**
-     * @param  array<string, mixed>  $cursor
-     * @return array{string, list<int>, int}
-     */
-    private function cursorSnapshot(array $cursor, string $actorBinding, string $queryBinding): array
-    {
-        $snapshotId = $cursor['snapshot'] ?? null;
-        $offset = $cursor['offset'] ?? null;
-
-        if (! is_string($snapshotId)
-            || preg_match('/\A[A-Za-z0-9]{40}\z/D', $snapshotId) !== 1
-            || ! is_int($offset)
-            || $offset < 0) {
-            throw new JsonRpcException('The cursor is invalid for this request.', -32602);
-        }
-
-        $snapshot = Cache::get($this->snapshotKey($snapshotId));
-        $ids = is_array($snapshot) ? ($snapshot['ids'] ?? null) : null;
-
-        if (! is_array($snapshot)
-            || ($snapshot['actor'] ?? null) !== $actorBinding
-            || ($snapshot['query'] ?? null) !== $queryBinding
-            || ! is_array($ids)
-            || ! array_is_list($ids)
-            || array_filter($ids, fn (mixed $id): bool => ! is_int($id)) !== []
-            || $offset > count($ids)) {
-            throw new JsonRpcException('The cursor is invalid for this request.', -32602);
-        }
-
-        return [$snapshotId, $ids, $offset];
-    }
-
-    private function snapshotKey(string $snapshotId): string
-    {
-        return 'capstan:mcp:postmaster-spokes:'.$snapshotId;
     }
 
     private function mapStatus(Spoke $spoke, CarbonInterface $staleBefore): SpokeMapStatus

@@ -3,6 +3,9 @@
 use App\Enums\MessageStatus;
 use App\Enums\MessageType;
 use App\Mcp\CapstanServer;
+use App\Mcp\OwnerSubjectResolver;
+use App\Mcp\SignedCursor;
+use App\Mcp\Tools\PostmasterSpokesTool;
 use App\Models\Envelope;
 use App\Models\Inbox;
 use App\Models\Spoke;
@@ -17,10 +20,14 @@ use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\McpDelegatedTools;
 use ArtisanBuild\BuiltForCloud\Testing\McpProductAdmission;
 use ArtisanBuild\BuiltForCloud\User;
+use Illuminate\Database\Events\QueryExecuted;
+use Illuminate\Http\Request as HttpRequest;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
+use Laravel\Mcp\Request as McpRequest;
+use Laravel\Mcp\ResponseFactory;
 use Laravel\Pennant\Feature;
 
 const MCP_READ_SERVER_ID = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
@@ -213,49 +220,60 @@ test('lists only actor owned spokes and routed actor owned inboxes without crede
         ->and(strlen($response->getContent()))->toBeLessThan(1_048_576);
 });
 
-test('spoke cursors preserve frozen health ordering and reject actor or query replay', function (): void {
+test('spoke cursors bind the actor and exact query', function (): void {
     Date::setTestNow('2026-09-30 12:00:00');
     $owner = capstanUser();
     $other = capstanUser();
     $token = capstanMcpReadToken($owner);
     $otherToken = capstanMcpReadToken($other);
 
-    foreach ([
-        ['name' => 'Spoke 10', 'polled' => now()],
-        ['name' => 'Spoke 2', 'polled' => now()],
-        ['name' => 'Offline', 'polled' => now()->subHour()],
-    ] as $attributes) {
+    foreach ([now()->subHour(), now()->subHour(), now()] as $polledAt) {
         Spoke::query()->create([
             'actor_id' => (string) $owner->id,
             'credential_id' => (string) Str::uuid(),
-            'name' => $attributes['name'],
-            'last_polled_at' => $attributes['polled'],
+            'name' => Str::random(),
+            'last_polled_at' => $polledAt,
             'probe_status' => 'green',
         ]);
     }
 
-    $first = capstanMcpReadStructured(capstanMcpReadCall('postmaster_spokes', ['limit' => 1], $token));
-    expect(data_get($first, 'items.0.name'))->toBe('Offline')
+    $first = capstanMcpReadStructured(capstanMcpReadCall('postmaster_spokes', ['limit' => 1, 'status' => 'red'], $token));
+    expect(data_get($first, 'items.0.status'))->toBe('red')
         ->and($first['has_more'])->toBeTrue()
         ->and($first['next_cursor'])->toBeString();
+    $encodedPayload = explode('.', $first['next_cursor'], 2)[0];
+    $cursorPayload = json_decode(
+        (string) base64_decode(strtr($encodedPayload, '-_', '+/'), true),
+        true,
+        512,
+        JSON_THROW_ON_ERROR,
+    );
+    expect(array_keys($cursorPayload))->toBe(['actor', 'query', 'last_id']);
 
-    Date::setTestNow(now()->addHour());
     $second = capstanMcpReadStructured(capstanMcpReadCall('postmaster_spokes', [
         'limit' => 1,
+        'status' => 'red',
         'cursor' => $first['next_cursor'],
     ], $token));
-    expect(data_get($second, 'items.0.name'))->toBe('Spoke 2')
+    expect(data_get($second, 'items.0.status'))->toBe('red')
         ->and(capstanMcpReadError(capstanMcpReadCall('postmaster_spokes', [
             'limit' => 1,
+            'status' => 'red',
             'cursor' => $first['next_cursor'],
         ], $otherToken)))->toBe('The cursor is invalid for this request.')
         ->and(capstanMcpReadError(capstanMcpReadCall('postmaster_spokes', [
             'limit' => 2,
+            'status' => 'red',
+            'cursor' => $first['next_cursor'],
+        ], $token)))->toBe('The cursor is invalid for this request.')
+        ->and(capstanMcpReadError(capstanMcpReadCall('postmaster_spokes', [
+            'limit' => 1,
+            'status' => 'green',
             'cursor' => $first['next_cursor'],
         ], $token)))->toBe('The cursor is invalid for this request.');
 });
 
-test('spoke cursors exhaust the initial stable order when ordinary ordered fields mutate', function (): void {
+test('spoke cursors remain stateless when mutable fields change', function (): void {
     Date::setTestNow('2026-09-30 12:00:00');
     $owner = capstanUser();
     $token = capstanMcpReadToken($owner);
@@ -272,12 +290,15 @@ test('spoke cursors exhaust the initial stable order when ordinary ordered field
     });
 
     $first = capstanMcpReadStructured(capstanMcpReadCall('postmaster_spokes', ['limit' => 1], $token));
-    expect(data_get($first, 'items.0.id'))->toBe($spokes['A']->id);
+    $firstId = data_get($first, 'items.0.id');
+    expect($firstId)->toBeInt();
+    $returned = $spokes->firstOrFail(fn (Spoke $spoke): bool => $spoke->id === $firstId);
+    $unseen = $spokes->firstOrFail(fn (Spoke $spoke): bool => $spoke->id !== $firstId);
 
-    $spokes['A']->update(['last_polled_at' => now(), 'probe_status' => 'green']);
-    $spokes['C']->update(['name' => '0']);
+    $returned->update(['last_polled_at' => now(), 'probe_status' => 'green']);
+    $unseen->update(['name' => 'changed']);
 
-    $seen = [$spokes['A']->id];
+    $seen = [$firstId];
     $cursor = $first['next_cursor'];
 
     for ($pageNumber = 0; $cursor !== null && $pageNumber < 10; $pageNumber++) {
@@ -291,8 +312,55 @@ test('spoke cursors exhaust the initial stable order when ordinary ordered field
     }
 
     expect($cursor)->toBeNull()
-        ->and($seen)->toBe($spokes->pluck('id')->values()->all())
+        ->and($seen)->toEqualCanonicalizing($spokes->pluck('id')->values()->all())
         ->and(array_unique($seen))->toHaveCount(3);
+});
+
+test('reading spokes performs no writes with the production database cache store', function (): void {
+    $owner = capstanUser();
+    $token = capstanMcpReadToken($owner);
+
+    foreach (range(1, 2) as $index) {
+        Spoke::query()->create([
+            'actor_id' => (string) $owner->id,
+            'credential_id' => (string) Str::uuid(),
+            'name' => 'Spoke '.$index,
+            'last_polled_at' => now(),
+            'probe_status' => 'green',
+        ]);
+    }
+
+    config(['cache.default' => 'database']);
+    app('cache')->setDefaultDriver('database');
+    expect(DB::table('cache')->count())->toBe(0);
+    $credential = Credential::query()->where('secret_hash', hash('sha256', $token))->firstOrFail();
+    $credential->forceFill(['user_id' => (string) $owner->id]);
+    $httpRequest = HttpRequest::create(
+        '/mcp',
+        'POST',
+        server: ['CONTENT_TYPE' => 'application/json'],
+        content: json_encode(['params' => ['arguments' => ['limit' => 1]]], JSON_THROW_ON_ERROR),
+    );
+    app()->instance('request', $httpRequest);
+    $httpRequest->setUserResolver(static fn (): Credential => $credential);
+
+    $writes = [];
+    DB::listen(function (QueryExecuted $query) use (&$writes): void {
+        if (preg_match('/\A\s*(insert|update|delete|replace|merge|truncate)\b/i', $query->sql) === 1) {
+            $writes[] = $query->sql;
+        }
+    });
+
+    $response = resolve(PostmasterSpokesTool::class)->handle(
+        new McpRequest(['limit' => 1]),
+        new OwnerSubjectResolver($httpRequest),
+        resolve(SignedCursor::class),
+    );
+    expect($response)->toBeInstanceOf(ResponseFactory::class)
+        ->and($response->getStructuredContent())->toMatchArray(['has_more' => true])
+        ->and(data_get($response->getStructuredContent(), 'next_cursor'))->toBeString()
+        ->and($writes)->toBe([])
+        ->and(DB::table('cache')->count())->toBe(0);
 });
 
 test('byte-paginates maximum-inbox spokes below the relay response ceiling', function (): void {
@@ -547,6 +615,7 @@ test('runtime validation rejects list numeric null unknown malformed and oversiz
         ['postmaster_spokes', ['limit' => null]],
         ['postmaster_spokes', ['limit' => 26]],
         ['postmaster_spokes', ['cursor' => 'malformed']],
+        ['postmaster_spokes', ['status' => 'unhealthy']],
         ['postmaster_spokes', ['unexpected' => true]],
         ['postmaster_messages', (object) []],
         ['postmaster_messages', ['inbox' => null]],
