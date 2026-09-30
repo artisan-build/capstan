@@ -17,6 +17,8 @@ final readonly class DurableWriteCoordinator
 {
     public const int LEASE_SECONDS = 300;
 
+    private const int REFUSAL_REASON_MAX_BYTES = 255;
+
     public function __construct(private WriteFaultInjector $faults) {}
 
     /**
@@ -102,16 +104,19 @@ final readonly class DurableWriteCoordinator
                     }
 
                     if ($claim->refusal_response !== null) {
-                        $response = $this->decodeResponse($claim->refusal_response);
-                        DB::table('mcp_write_claims')->where('id', $claim->id)->update([
-                            'state' => 'refused',
-                            'terminal_response' => json_encode($response, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES),
-                            'fence_token' => null,
-                            'lease_expires_at' => null,
-                            'updated_at' => $now,
-                        ]);
+                        $response = $this->decodeRefusalResponse($claim->refusal_response);
 
-                        return ['response' => $response, 'execute' => false];
+                        if ($response !== null) {
+                            DB::table('mcp_write_claims')->where('id', $claim->id)->update([
+                                'state' => 'refused',
+                                'terminal_response' => json_encode($response, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES),
+                                'fence_token' => null,
+                                'lease_expires_at' => null,
+                                'updated_at' => $now,
+                            ]);
+
+                            return ['response' => $response, 'execute' => false];
+                        }
                     }
 
                     if ($claim->lease_expires_at !== null && CarbonImmutable::parse($claim->lease_expires_at)->isPast()) {
@@ -156,34 +161,68 @@ final readonly class DurableWriteCoordinator
             $this->faults->beforeOperation($tool);
             $result = DB::transaction(function () use ($operation, $claimId, $targetId, $fenceToken): array {
                 $claim = DB::table('mcp_write_claims')->where('id', $claimId)->lockForUpdate()->first();
+                $effectStartedAt = CarbonImmutable::now();
 
                 if ($claim === null
                     || $claim->state !== 'in_progress'
                     || ! is_string($claim->fence_token)
                     || ! hash_equals($claim->fence_token, $fenceToken)
                     || $claim->lease_expires_at === null
-                    || CarbonImmutable::parse($claim->lease_expires_at)->isPast()) {
+                    || CarbonImmutable::parse($claim->lease_expires_at)->lessThanOrEqualTo($effectStartedAt)) {
                     throw new RuntimeException('The write claim no longer owns its effect fence.');
                 }
 
                 try {
                     $response = DB::transaction(fn (): array => $operation($targetId, $claimId));
                 } catch (ApiErrorException $exception) {
+                    $markerWrittenAt = CarbonImmutable::now();
+                    $markerClaim = DB::table('mcp_write_claims')->where('id', $claimId)->lockForUpdate()->first();
+
+                    if ($markerClaim === null
+                        || $markerClaim->state !== 'in_progress'
+                        || ! is_string($markerClaim->fence_token)
+                        || ! hash_equals($markerClaim->fence_token, $fenceToken)) {
+                        throw new RuntimeException('The write claim no longer owns its refusal fence.');
+                    }
+
+                    if ($markerClaim->lease_expires_at === null
+                        || CarbonImmutable::parse($markerClaim->lease_expires_at)->lessThanOrEqualTo($markerWrittenAt)) {
+                        $response = $this->outcome('outcome_unknown');
+                        $updated = DB::table('mcp_write_claims')
+                            ->where('id', $claimId)
+                            ->where('fence_token', $fenceToken)
+                            ->where('state', 'in_progress')
+                            ->update([
+                                'state' => 'outcome_unknown',
+                                'terminal_response' => json_encode($response, JSON_THROW_ON_ERROR),
+                                'fence_token' => null,
+                                'lease_expires_at' => null,
+                                'updated_at' => $markerWrittenAt,
+                            ]);
+
+                        if ($updated !== 1) {
+                            throw new RuntimeException('The write claim no longer owns its refusal fence.');
+                        }
+
+                        return ['accepted' => false, 'settled' => true, 'response' => $response];
+                    }
+
                     $response = $this->outcome('refused', ['reason' => $exception->errorCode]);
                     $updated = DB::table('mcp_write_claims')
                         ->where('id', $claimId)
                         ->where('fence_token', $fenceToken)
                         ->where('state', 'in_progress')
+                        ->where('lease_expires_at', '>', $markerWrittenAt)
                         ->update([
                             'refusal_response' => json_encode($response, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES),
-                            'updated_at' => now(),
+                            'updated_at' => $markerWrittenAt,
                         ]);
 
                     if ($updated !== 1) {
                         throw new RuntimeException('The write claim no longer owns its refusal fence.');
                     }
 
-                    return ['accepted' => false, 'response' => $response];
+                    return ['accepted' => false, 'settled' => false, 'response' => $response];
                 }
 
                 $response['outcome'] = 'accepted';
@@ -193,13 +232,17 @@ final readonly class DurableWriteCoordinator
                     'created_at' => now(),
                 ]);
 
-                return ['accepted' => true, 'response' => $response];
+                return ['accepted' => true, 'settled' => false, 'response' => $response];
             }, 3);
 
             /** @var array<string, mixed> $response */
             $response = $result['response'];
 
             if ($result['accepted'] === false) {
+                if ($result['settled'] === true) {
+                    return $response;
+                }
+
                 return $this->settleFailure($claimId, $fenceToken, $tool, 'refused', $response);
             }
 
@@ -229,6 +272,13 @@ final readonly class DurableWriteCoordinator
                 }
 
                 return $accepted;
+            }
+
+            $claim = DB::table('mcp_write_claims')->where('id', $claimId)->first();
+            $refusal = $this->decodeRefusalResponse($claim?->refusal_response);
+
+            if ($refusal !== null) {
+                return $this->settleFailure($claimId, $fenceToken, $tool, 'refused', $refusal);
             }
 
             return $this->settleFailure(
@@ -312,6 +362,26 @@ final readonly class DurableWriteCoordinator
         $decoded = json_decode((string) $response, true);
 
         return is_array($decoded) && ! array_is_list($decoded) ? $decoded : $this->outcome('outcome_unknown');
+    }
+
+    /** @return array{outcome: 'refused', reason: string}|null */
+    private function decodeRefusalResponse(mixed $response): ?array
+    {
+        $decoded = json_decode((string) $response, true);
+
+        if (! is_array($decoded)
+            || array_is_list($decoded)
+            || count($decoded) !== 2
+            || ! array_key_exists('outcome', $decoded)
+            || ! array_key_exists('reason', $decoded)
+            || $decoded['outcome'] !== 'refused'
+            || ! is_string($decoded['reason'])
+            || trim($decoded['reason']) === ''
+            || strlen($decoded['reason']) > self::REFUSAL_REASON_MAX_BYTES) {
+            return null;
+        }
+
+        return ['outcome' => 'refused', 'reason' => $decoded['reason']];
     }
 
     /**

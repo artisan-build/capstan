@@ -1,7 +1,10 @@
 <?php
 
 use App\Enums\MessageStatus;
+use App\Http\ApiErrorException;
 use App\Mcp\CapstanServer;
+use App\Mcp\DurableWriteCoordinator;
+use App\Mcp\OwnerSubject;
 use App\Mcp\WriteFaultInjector;
 use App\Models\Envelope;
 use App\Models\Inbox;
@@ -16,8 +19,10 @@ use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\McpDelegatedTools;
 use ArtisanBuild\BuiltForCloud\Testing\McpProductAdmission;
 use ArtisanBuild\BuiltForCloud\User;
+use Illuminate\Database\Events\TransactionCommitted;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
 use Laravel\Pennant\Feature;
@@ -355,6 +360,139 @@ test('preserves deterministic refusals when terminal settlement fails', function
         ->and(DB::table('mcp_write_effects')->count())->toBe(1)
         ->and(Envelope::query()->count())->toBe(1);
 });
+
+test('preserves a committed refusal when a transaction committed listener throws', function (): void {
+    $connection = DB::connection();
+    $connection->rollBack();
+    $listenerArmed = false;
+
+    try {
+        Event::listen(TransactionCommitted::class, function () use (&$listenerArmed): void {
+            if (! $listenerArmed) {
+                return;
+            }
+
+            $listenerArmed = false;
+
+            throw new RuntimeException('post-commit listener failure');
+        });
+
+        $owner = new OwnerSubject('user_principal', 'capstan-user:post-commit-probe', 'post-commit-probe');
+        $coordinator = resolve(DurableWriteCoordinator::class);
+        $intent = ['probe' => 'post-commit-refusal'];
+        $operation = function () use (&$listenerArmed): never {
+            $listenerArmed = true;
+
+            throw new ApiErrorException(409, 'post_commit_probe_refusal', 'Deterministic probe refusal.');
+        };
+
+        $response = $coordinator->run($owner, 'post_commit_probe', 'post-commit-key', $intent, 'probe', $operation);
+        $claim = DB::table('mcp_write_claims')->where('idempotency_key', 'post-commit-key')->first();
+
+        expect($response)->toBe(['outcome' => 'refused', 'reason' => 'post_commit_probe_refusal'])
+            ->and($claim->state)->toBe('refused')
+            ->and(json_decode((string) $claim->refusal_response, true))->toBe($response)
+            ->and(DB::table('mcp_write_effects')->count())->toBe(0)
+            ->and($coordinator->run(
+                $owner,
+                'post_commit_probe',
+                'post-commit-key',
+                $intent,
+                'probe',
+                fn (): never => throw new RuntimeException('replay must not execute'),
+            ))->toBe($response);
+    } finally {
+        Event::forget(TransactionCommitted::class);
+        DB::table('mcp_write_effects')->delete();
+        DB::table('mcp_write_claims')->delete();
+        $connection->beginTransaction();
+    }
+});
+
+test('expires ownership before writing a deterministic refusal marker', function (): void {
+    $owner = new OwnerSubject('user_principal', 'capstan-user:lease-probe', 'lease-probe');
+    $coordinator = resolve(DurableWriteCoordinator::class);
+    $intent = ['probe' => 'expired-refusal'];
+
+    $response = $coordinator->run(
+        $owner,
+        'lease_probe',
+        'lease-probe-key',
+        $intent,
+        'probe',
+        function (): never {
+            DB::table('inboxes')->insert([
+                'actor_id' => 'lease-probe',
+                'local_part' => 'lease-probe',
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+            Date::setTestNow(now()->addSeconds(DurableWriteCoordinator::LEASE_SECONDS + 1));
+
+            throw new ApiErrorException(409, 'expired_lease_probe_refusal', 'Deterministic probe refusal.');
+        },
+    );
+    $claim = DB::table('mcp_write_claims')->where('idempotency_key', 'lease-probe-key')->first();
+
+    expect($response)->toBe(['outcome' => 'outcome_unknown'])
+        ->and($claim->state)->toBe('outcome_unknown')
+        ->and($claim->refusal_response)->toBeNull()
+        ->and(DB::table('mcp_write_effects')->count())->toBe(0)
+        ->and(DB::table('inboxes')->where('local_part', 'lease-probe')->count())->toBe(0)
+        ->and($coordinator->run(
+            $owner,
+            'lease_probe',
+            'lease-probe-key',
+            $intent,
+            'probe',
+            fn (): never => throw new RuntimeException('replay must not execute'),
+        ))->toBe($response);
+});
+
+test('rejects malformed durable refusal markers', function (mixed $marker): void {
+    $owner = new OwnerSubject('user_principal', 'capstan-user:marker-probe', 'marker-probe');
+    $intent = ['probe' => 'malformed-marker'];
+    $claimId = (string) Str::uuid();
+
+    DB::table('mcp_write_claims')->insert([
+        'id' => $claimId,
+        'owner_subject_type' => $owner->type,
+        'owner_subject_ref' => $owner->ref,
+        'tool' => 'marker_probe',
+        'idempotency_key' => 'marker-probe-key',
+        'intent_hash' => hash('sha256', JsonCanonicalizer::encode($intent)),
+        'target_type' => 'probe',
+        'target_id' => (string) Str::uuid(),
+        'state' => 'in_progress',
+        'fence_token' => (string) Str::uuid(),
+        'lease_expires_at' => now()->subSecond(),
+        'refusal_response' => json_encode($marker, JSON_THROW_ON_ERROR),
+        'created_at' => now()->subMinute(),
+        'updated_at' => now()->subMinute(),
+    ]);
+
+    $response = resolve(DurableWriteCoordinator::class)->run(
+        $owner,
+        'marker_probe',
+        'marker-probe-key',
+        $intent,
+        'probe',
+        fn (): never => throw new RuntimeException('malformed marker replay must not execute'),
+    );
+
+    expect($response)->toBe(['outcome' => 'outcome_unknown'])
+        ->and($response['outcome'])->toBeIn(['accepted', 'already_accepted', 'in_progress', 'refused', 'outcome_unknown'])
+        ->and(DB::table('mcp_write_claims')->where('id', $claimId)->value('state'))->toBe('outcome_unknown')
+        ->and(DB::table('mcp_write_claims')->where('id', $claimId)->value('terminal_response'))
+        ->toBe(json_encode($response, JSON_THROW_ON_ERROR));
+})->with([
+    'list shaped' => [[]],
+    'extra key' => [['outcome' => 'refused', 'reason' => 'probe', 'unexpected' => true]],
+    'missing reason' => [['outcome' => 'refused']],
+    'wrong outcome' => [['outcome' => 'accepted', 'reason' => 'probe']],
+    'empty reason' => [['outcome' => 'refused', 'reason' => '']],
+    'oversized reason' => [['outcome' => 'refused', 'reason' => str_repeat('x', 1024)]],
+]);
 
 test('repairs a known accepted effect after both settlement attempts fail', function (): void {
     $user = capstanUser();
