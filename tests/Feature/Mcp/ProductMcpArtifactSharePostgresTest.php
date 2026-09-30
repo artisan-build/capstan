@@ -152,7 +152,6 @@ test('postgres serializes simultaneous artifact share submissions without duplic
         DB::table('mcp_write_claims')->delete();
         DB::table('artifact_team')->delete();
         Artifact::query()->delete();
-        DB::table('teams')->delete();
         Storage::disk()->deleteDirectory('artifacts');
         DB::connection()->beginTransaction();
     }
