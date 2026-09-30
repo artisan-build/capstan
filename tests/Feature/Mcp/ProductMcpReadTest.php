@@ -189,6 +189,7 @@ test('keeps exactly two tools on the read effect door when the write door is mou
     expect(collect(capstanMcpReadList($token, '/mcp/write')->assertOk()->json('result.tools'))->pluck('name')->sort()->values()->all())
         ->toBe([
             'ack_postmaster_messages',
+            'create_artifact_share',
             'postmaster_messages',
             'postmaster_spokes',
             'send_postmaster_message',

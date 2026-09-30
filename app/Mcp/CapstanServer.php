@@ -3,6 +3,7 @@
 namespace App\Mcp;
 
 use App\Mcp\Tools\AckPostmasterMessagesTool;
+use App\Mcp\Tools\CreateArtifactShareTool;
 use App\Mcp\Tools\PostmasterMessagesTool;
 use App\Mcp\Tools\PostmasterSpokesTool;
 use App\Mcp\Tools\SendPostmasterMessageTool;
@@ -23,5 +24,6 @@ final class CapstanServer extends Server
         PostmasterMessagesTool::class,
         SendPostmasterMessageTool::class,
         AckPostmasterMessagesTool::class,
+        CreateArtifactShareTool::class,
     ];
 }
