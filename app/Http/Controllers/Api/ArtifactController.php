@@ -7,12 +7,9 @@ use App\Features\Artifacts;
 use App\Http\ApiError;
 use App\Http\Controllers\Controller;
 use App\Http\Middleware\AuthenticateBoundCredential;
-use App\Models\Artifact;
-use App\Models\Team;
-use App\Support\ArtifactRenderOrigin;
+use App\Support\ArtifactCreator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use Laravel\Pennant\Feature;
@@ -21,6 +18,7 @@ class ArtifactController extends Controller
 {
     public function store(
         Request $request,
+        ArtifactCreator $creator,
     ): JsonResponse {
         $actorId = AuthenticateBoundCredential::actorId($request);
 
@@ -50,48 +48,19 @@ class ArtifactController extends Controller
 
         /** @var array{content: string, content_type: string, visibility?: string, expires_at?: string|null} $validated */
         $validated = $validator->validated();
-        $defaultTeam = Team::default();
-
-        [$contentHash, $storageKey] = Artifact::storeBlob($validated['content']);
-
-        $artifact = DB::transaction(function () use ($validated, $actorId, $defaultTeam, $contentHash, $storageKey): Artifact {
-            $artifact = Artifact::query()->create([
-                'actor_id' => $actorId,
-                'visibility' => ArtifactVisibility::from($validated['visibility'] ?? ArtifactVisibility::OrgAuth->value),
-                'expires_at' => $validated['expires_at'] ?? null,
-                'content_type' => $validated['content_type'],
-                'size_bytes' => strlen($validated['content']),
-                'content_hash' => $contentHash,
-                'storage_key' => $storageKey,
-            ]);
-
-            $artifact->teams()->syncWithoutDetaching([$defaultTeam->id]);
-
-            return $artifact;
-        });
+        $artifact = $creator->create(
+            actorId: $actorId,
+            content: $validated['content'],
+            contentType: $validated['content_type'],
+            visibility: ArtifactVisibility::from($validated['visibility'] ?? ArtifactVisibility::OrgAuth->value),
+            expiresAt: $validated['expires_at'] ?? null,
+        );
+        $representation = $creator->representation($artifact);
 
         return new JsonResponse([
-            'artifact' => $this->representation($artifact),
-            'share_url' => resolve(ArtifactRenderOrigin::class)->signedViewerUrl($artifact),
+            'artifact' => $representation,
+            'share_url' => $representation['share_url'],
         ], 201);
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function representation(Artifact $artifact): array
-    {
-        return [
-            'id' => $artifact->id,
-            'actor_id' => $artifact->actor_id,
-            'visibility' => $artifact->visibility->value,
-            'expires_at' => $artifact->expires_at?->toJSON(),
-            'content_type' => $artifact->content_type,
-            'size_bytes' => $artifact->size_bytes,
-            'content_hash' => $artifact->content_hash,
-            'share_url' => resolve(ArtifactRenderOrigin::class)->signedViewerUrl($artifact),
-            'created_at' => $artifact->created_at?->toJSON(),
-        ];
     }
 
     private function maxContentBytes(): int

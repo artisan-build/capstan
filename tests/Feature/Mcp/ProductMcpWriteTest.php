@@ -115,7 +115,7 @@ function capstanMcpWriteSendArguments(string $key, array|object|null $body = nul
     ];
 }
 
-test('mounts the Postmaster write family behind the write ceiling without artifact leakage', function (): void {
+test('mounts the complete write family behind the write ceiling', function (): void {
     $token = capstanMcpWriteToken(capstanUser());
 
     McpDelegatedTools::assertConforms(CapstanServer::class);
@@ -127,11 +127,11 @@ test('mounts the Postmaster write family behind the write ceiling without artifa
     expect($read->keys()->sort()->values()->all())->toBe(['postmaster_messages', 'postmaster_spokes'])
         ->and($write->keys()->sort()->values()->all())->toBe([
             'ack_postmaster_messages',
+            'create_artifact_share',
             'postmaster_messages',
             'postmaster_spokes',
             'send_postmaster_message',
-        ])
-        ->and($write->has('create_artifact_share'))->toBeFalse();
+        ]);
 
     foreach ([
         'send_postmaster_message' => ['content', false, false, true],
