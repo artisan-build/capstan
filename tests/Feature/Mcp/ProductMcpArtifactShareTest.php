@@ -258,6 +258,35 @@ test('rejects invalid shapes bytes content types visibility and expiry before du
         ->and(Artifact::query()->firstOrFail()->size_bytes)->toBe(4);
 });
 
+test('requires the canonical second precision expiry to remain future before creating state', function (): void {
+    Date::setTestNow('2026-09-30T10:00:00.500000Z');
+    $token = artifactMcpToken(capstanUser());
+    $sameSecond = artifactMcpArguments('same-second-expiry');
+    $sameSecond['expires_at'] = '2026-09-30T10:00:00.900000Z';
+
+    artifactMcpCall($sameSecond, $token)
+        ->assertOk()
+        ->assertJsonPath('result.isError', true);
+
+    expect(DB::table('mcp_write_claims')->count())->toBe(0)
+        ->and(DB::table('mcp_write_effects')->count())->toBe(0)
+        ->and(Artifact::query()->count())->toBe(0)
+        ->and(DB::table('artifact_team')->count())->toBe(0)
+        ->and(Storage::disk()->allFiles())->toBe([]);
+
+    $nextSecond = artifactMcpArguments('next-second-expiry');
+    $nextSecond['expires_at'] = '2026-09-30T10:00:01.900000Z';
+    $accepted = artifactMcpStructured(artifactMcpCall($nextSecond, $token));
+
+    expect($accepted['outcome'])->toBe('accepted')
+        ->and(data_get($accepted, 'artifact.expires_at'))->toBe('2026-09-30T10:00:01.000000Z')
+        ->and(DB::table('mcp_write_claims')->count())->toBe(1)
+        ->and(DB::table('mcp_write_effects')->count())->toBe(1)
+        ->and(Artifact::query()->count())->toBe(1)
+        ->and(DB::table('artifact_team')->count())->toBe(1)
+        ->and(Storage::disk()->allFiles('artifacts'))->toHaveCount(1);
+});
+
 test('leaves no state or blob on a pre claim fault and accepts a retry', function (): void {
     $token = artifactMcpToken(capstanUser());
     $arguments = artifactMcpArguments('preclaim');

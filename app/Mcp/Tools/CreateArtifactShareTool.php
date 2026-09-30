@@ -137,13 +137,13 @@ final class CreateArtifactShareTool extends CapstanTool
             throw ValidationException::withMessages(['expires_at' => ['The expires at field must be a real date and time.']]);
         }
 
-        $expiry = CarbonImmutable::instance($parsed)->utc();
+        $expiry = CarbonImmutable::instance($parsed)->utc()->startOfSecond();
 
         if (! $expiry->isFuture()) {
             throw ValidationException::withMessages(['expires_at' => ['The expires at field must be a future date.']]);
         }
 
-        return $expiry->startOfSecond()->format('Y-m-d\TH:i:s.u\Z');
+        return $expiry->format('Y-m-d\TH:i:s.u\Z');
     }
 
     /** @return list<string> */
