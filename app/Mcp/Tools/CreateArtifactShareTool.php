@@ -8,6 +8,7 @@ use App\Http\ApiErrorException;
 use App\Mcp\DurableWriteCoordinator;
 use App\Mcp\OwnerSubjectResolver;
 use App\Mcp\ToolResponse;
+use App\Models\Artifact;
 use App\Support\ArtifactCreator;
 use ArtisanBuild\BuiltForCloud\Mcp\AdvertisesToolClassification;
 use ArtisanBuild\BuiltForCloud\Mcp\AdvertisesToolEffect;
@@ -107,7 +108,7 @@ final class CreateArtifactShareTool extends CapstanTool
                     throw new ApiErrorException(409, 'artifact_identity_conflict', 'The artifact identity is unavailable.');
                 }
 
-                return ['artifact' => $creator->representation($artifact)];
+                return ['artifact' => $this->publicArtifactRepresentation($creator, $artifact)];
             },
         );
 
@@ -121,7 +122,7 @@ final class CreateArtifactShareTool extends CapstanTool
         }
 
         if (! is_string($value) || preg_match(
-            '/\A(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}:\d{2})\z/D',
+            '/\A(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?(Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)\z/D',
             $value,
             $matches,
         ) !== 1) {
@@ -144,6 +145,21 @@ final class CreateArtifactShareTool extends CapstanTool
         }
 
         return $expiry->format('Y-m-d\TH:i:s.u\Z');
+    }
+
+    /** @return array<string, mixed> */
+    private function publicArtifactRepresentation(ArtifactCreator $creator, Artifact $artifact): array
+    {
+        return array_intersect_key($creator->representation($artifact), array_flip([
+            'id',
+            'actor_id',
+            'visibility',
+            'expires_at',
+            'content_type',
+            'size_bytes',
+            'share_url',
+            'created_at',
+        ]));
     }
 
     /** @return list<string> */

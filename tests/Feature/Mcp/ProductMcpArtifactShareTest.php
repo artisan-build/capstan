@@ -142,6 +142,7 @@ test('stores one private artifact and grant then replays accepted state after me
 
     $accepted = artifactMcpStructured(artifactMcpCall($arguments, $token));
     $artifact = Artifact::query()->firstOrFail();
+    $contentHash = hash('sha256', $arguments['content']);
     $storedResponse = DB::table('mcp_write_effects')->value('accepted_response');
 
     expect($accepted['outcome'])->toBe('accepted')
@@ -159,9 +160,16 @@ test('stores one private artifact and grant then replays accepted state after me
     $artifact->delete();
     $arguments['expires_at'] = '2026-10-01T10:04:56.999999Z';
     $replay = artifactMcpStructured(artifactMcpCall($arguments, $token));
+    $stored = json_decode($storedResponse, true, 512, JSON_THROW_ON_ERROR);
 
     expect($replay['outcome'])->toBe('already_accepted')
         ->and($replay['artifact'])->toBe($accepted['artifact'])
+        ->and($accepted['artifact'])->not->toHaveKey('content_hash')
+        ->and($stored['artifact'])->not->toHaveKey('content_hash')
+        ->and($replay['artifact'])->not->toHaveKey('content_hash')
+        ->and(json_encode($accepted, JSON_THROW_ON_ERROR))->not->toContain($contentHash)
+        ->and($storedResponse)->not->toContain($contentHash)
+        ->and(json_encode($replay, JSON_THROW_ON_ERROR))->not->toContain($contentHash)
         ->and(Artifact::query()->count())->toBe(0)
         ->and(Storage::disk()->allFiles('artifacts'))->toHaveCount(1)
         ->and(DB::table('mcp_write_claims')->where('target_id', $id)->value('state'))->toBe('accepted');
@@ -256,6 +264,29 @@ test('rejects invalid shapes bytes content types visibility and expiry before du
     $unicode = [...$valid, 'idempotency_key' => 'four-byte-unicode', 'content' => 'éé'];
     expect(artifactMcpStructured(artifactMcpCall($unicode, $token))['outcome'])->toBe('accepted')
         ->and(Artifact::query()->firstOrFail()->size_bytes)->toBe(4);
+});
+
+test('rejects impossible numeric offset components through stable validation before any effect', function (): void {
+    Date::setTestNow('2026-09-30T10:00:00Z');
+    $token = artifactMcpToken(capstanUser());
+    $responses = [];
+
+    foreach (['+24:00', '+00:60', '+99:99'] as $index => $offset) {
+        $arguments = artifactMcpArguments('invalid-offset-'.$index);
+        $arguments['expires_at'] = '2026-10-05T12:00:00'.$offset;
+        $responses[] = artifactMcpCall($arguments, $token)->assertOk();
+    }
+
+    expect(DB::table('mcp_write_claims')->count())->toBe(0)
+        ->and(DB::table('mcp_write_effects')->count())->toBe(0)
+        ->and(Artifact::query()->count())->toBe(0)
+        ->and(DB::table('artifact_team')->count())->toBe(0)
+        ->and(Storage::disk()->allFiles())->toBe([]);
+
+    foreach ($responses as $response) {
+        $response->assertJsonPath('result.isError', true)
+            ->assertJsonPath('result.content.0.text', 'The expires at field must be a valid RFC 3339 timestamp.');
+    }
 });
 
 test('requires the canonical second precision expiry to remain future before creating state', function (): void {
