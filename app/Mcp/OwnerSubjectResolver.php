@@ -8,9 +8,9 @@ use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Http\Request;
 use Laravel\Mcp\Exceptions\JsonRpcException;
 
-final class OwnerSubjectResolver
+final readonly class OwnerSubjectResolver
 {
-    public function __construct(private readonly Request $request) {}
+    public function __construct(private Request $request) {}
 
     public function resolve(): OwnerSubject
     {

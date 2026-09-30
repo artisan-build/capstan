@@ -76,12 +76,10 @@ final class PostmasterSpokesTool extends CapstanTool
             ->where('actor_id', $owner->actorId)
             ->with(['inboxes' => fn ($query) => $query->where('actor_id', $owner->actorId)->orderBy('local_part')])
             ->get()
-            ->sort(function (Spoke $first, Spoke $second) use ($staleBefore): int {
-                return $this->compareSortKeys(
-                    $this->sortKey($first, $staleBefore),
-                    $this->sortKey($second, $staleBefore),
-                );
-            })
+            ->sort(fn (Spoke $first, Spoke $second): int => $this->compareSortKeys(
+                $this->sortKey($first, $staleBefore),
+                $this->sortKey($second, $staleBefore),
+            ))
             ->values();
 
         if ($after !== null) {
@@ -158,8 +156,8 @@ final class PostmasterSpokesTool extends CapstanTool
     }
 
     /**
-     * @param array{int, string, int} $left
-     * @param array{int, string, int} $right
+     * @param  array{int, string, int}  $left
+     * @param  array{int, string, int}  $right
      */
     private function compareSortKeys(array $left, array $right): int
     {
