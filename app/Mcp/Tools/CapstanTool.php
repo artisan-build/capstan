@@ -52,6 +52,25 @@ abstract class CapstanTool extends Tool
         }
     }
 
+    protected function rawObjectArgument(string $name): ?stdClass
+    {
+        $arguments = $this->rawArgumentObject();
+        $value = $arguments instanceof stdClass && property_exists($arguments, $name)
+            ? $arguments->{$name}
+            : null;
+
+        return $value instanceof stdClass ? $value : null;
+    }
+
+    protected function rawArgument(string $name): mixed
+    {
+        $arguments = $this->rawArgumentObject();
+
+        return $arguments instanceof stdClass && property_exists($arguments, $name)
+            ? $arguments->{$name}
+            : null;
+    }
+
     private function rawArgumentObject(): ?stdClass
     {
         $payload = json_decode(request()->getContent(), false);

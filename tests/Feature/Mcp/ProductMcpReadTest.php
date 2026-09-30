@@ -155,7 +155,7 @@ function capstanMcpReadEnvelope(
     return $envelope->refresh();
 }
 
-test('mounts one conforming read-only effect-scoped server with exactly two tools', function (): void {
+test('keeps exactly two tools on the read effect door when the write door is mounted', function (): void {
     $token = capstanMcpReadToken(capstanUser());
 
     McpDelegatedTools::assertConforms(CapstanServer::class);
@@ -163,7 +163,7 @@ test('mounts one conforming read-only effect-scoped server with exactly two tool
 
     $meta = $this->getJson('/bfc/meta')->assertOk();
     expect($meta->json('capabilities'))->toContain('mcp-serve', 'mcp-delegated', 'mcp-effect-scoped')
-        ->and($meta->json('endpoints'))->toBe(['mcp' => '/mcp']);
+        ->and($meta->json('endpoints'))->toBe(['mcp' => '/mcp', 'mcp_write' => '/mcp/write']);
 
     $tools = collect(capstanMcpReadList($token)->assertOk()->json('result.tools'))->keyBy('name');
     expect($tools->keys()->sort()->values()->all())->toBe(['postmaster_messages', 'postmaster_spokes']);
@@ -186,7 +186,13 @@ test('mounts one conforming read-only effect-scoped server with exactly two tool
         capstanMcpReadError($response);
     }
 
-    capstanMcpReadList($token, '/mcp/write')->assertNotFound();
+    expect(collect(capstanMcpReadList($token, '/mcp/write')->assertOk()->json('result.tools'))->pluck('name')->sort()->values()->all())
+        ->toBe([
+            'ack_postmaster_messages',
+            'postmaster_messages',
+            'postmaster_spokes',
+            'send_postmaster_message',
+        ]);
 });
 
 test('lists only actor owned spokes and routed actor owned inboxes without credential data', function (): void {
