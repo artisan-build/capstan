@@ -2,7 +2,6 @@
 
 use App\Enums\MessageStatus;
 use App\Enums\MessageType;
-use App\Features\Postmaster;
 use App\Mcp\CapstanServer;
 use App\Models\Envelope;
 use App\Models\Inbox;
@@ -380,7 +379,7 @@ test('an oversized legacy message is explicitly omitted and pagination advances'
         MCP_READ_SERVER_ID.':01ARZ3NDEKTSV4RRFFQ69G5FAW',
         'legacy-large',
         'receiver@'.MCP_READ_SERVER_ID,
-        (object) ['content' => str_repeat('x', 410_000)],
+        (object) ['content' => str_repeat('\\', 190_000)],
         '2026-09-30 13:00:00',
     );
     capstanMcpReadEnvelope(

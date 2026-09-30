@@ -14,11 +14,10 @@ final class OwnerSubjectResolver
 
     public function resolve(): OwnerSubject
     {
-        $principal = $this->request->user();
+        $principal = ($this->request->getUserResolver())();
 
         if (! $principal instanceof Credential
             || $principal->subject_type !== SubjectType::UserPrincipal
-            || ! is_string($principal->subject_ref)
             || ! is_string($principal->user_id)
             || preg_match('/\A[1-9][0-9]{0,18}\z/D', $principal->user_id) !== 1
             || ! hash_equals('capstan-user:'.$principal->user_id, $principal->subject_ref)
