@@ -82,7 +82,7 @@ final class PostmasterMessagesTool extends CapstanTool
             ->where('to_server_id', $identity->id())
             ->where('to_local_part', $inbox->local_part)
             ->orderByRaw('CASE WHEN received_at IS NULL THEN 0 ELSE 1 END')
-            ->orderBy('received_at')
+            ->oldest('received_at')
             ->orderBy('id');
 
         if ($after !== null) {
