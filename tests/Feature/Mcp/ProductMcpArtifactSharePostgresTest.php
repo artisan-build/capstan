@@ -7,6 +7,7 @@ use App\Models\Artifact;
 use App\Support\ArtifactCreator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Sleep;
 
 test('postgres serializes simultaneous artifact share submissions without duplicate effects', function (): void {
     if (DB::getDriverName() !== 'pgsql') {
@@ -51,7 +52,7 @@ test('postgres serializes simultaneous artifact share submissions without duplic
                 DB::purge();
 
                 while (microtime(true) < $startAt) {
-                    usleep(1_000);
+                    Sleep::usleep(1_000);
                 }
 
                 try {
