@@ -81,23 +81,32 @@ final class PostmasterMessagesTool extends CapstanTool
         $query = Envelope::query()
             ->where('to_server_id', $identity->id())
             ->where('to_local_part', $inbox->local_part)
-            ->oldest('received_at')
+            ->orderByRaw('CASE WHEN received_at IS NULL THEN 0 ELSE 1 END')
+            ->orderBy('received_at')
             ->orderBy('id');
 
         if ($after !== null) {
-            $receivedAt = $after['received_at'] ?? null;
+            $receivedAt = array_key_exists('received_at', $after) ? $after['received_at'] : false;
             $id = $after['id'] ?? null;
 
-            if (! is_string($receivedAt) || ! is_string($id)) {
+            if ((! is_string($receivedAt) && $receivedAt !== null) || ! is_string($id)) {
                 throw new JsonRpcException('The cursor is invalid for this request.', -32602);
             }
 
-            $query->where(function ($query) use ($receivedAt, $id): void {
-                $query->where('received_at', '>', $receivedAt)
-                    ->orWhere(function ($query) use ($receivedAt, $id): void {
-                        $query->where('received_at', $receivedAt)->where('id', '>', $id);
-                    });
-            });
+            if ($receivedAt === null) {
+                $query->where(function ($query) use ($id): void {
+                    $query->where(function ($query) use ($id): void {
+                        $query->whereNull('received_at')->where('id', '>', $id);
+                    })->orWhereNotNull('received_at');
+                });
+            } else {
+                $query->where(function ($query) use ($receivedAt, $id): void {
+                    $query->where('received_at', '>', $receivedAt)
+                        ->orWhere(function ($query) use ($receivedAt, $id): void {
+                            $query->where('received_at', $receivedAt)->where('id', '>', $id);
+                        });
+                });
+            }
         }
 
         $candidates = $query->limit($limit + 1)->get();

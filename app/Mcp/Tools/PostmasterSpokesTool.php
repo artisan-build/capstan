@@ -18,6 +18,8 @@ use ArtisanBuild\BuiltForCloud\Mcp\ToolEffect;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
 use Laravel\Mcp\Exceptions\JsonRpcException;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
@@ -39,6 +41,8 @@ final class PostmasterSpokesTool extends CapstanTool
     use AdvertisesToolEffect;
 
     public const int MAX_LIMIT = 25;
+
+    private const int SNAPSHOT_TTL_SECONDS = 86_400;
 
     public function schema(JsonSchema $schema): array
     {
@@ -72,39 +76,37 @@ final class PostmasterSpokesTool extends CapstanTool
             ? now()->subSeconds($staleAfter)
             : $this->cursorStaleBefore($after);
 
-        $spokes = Spoke::query()
+        $currentSpokes = Spoke::query()
             ->where('actor_id', $owner->actorId)
             ->with(['inboxes' => fn ($query) => $query->where('actor_id', $owner->actorId)->orderBy('local_part')])
-            ->get()
-            ->sort(fn (Spoke $first, Spoke $second): int => $this->compareSortKeys(
-                $this->sortKey($first, $staleBefore),
-                $this->sortKey($second, $staleBefore),
-            ))
-            ->values();
+            ->get();
 
-        if ($after !== null) {
-            $afterKey = $after['after'] ?? null;
-
-            if (! is_array($afterKey)
-                || ! array_is_list($afterKey)
-                || count($afterKey) !== 3
-                || ! is_int($afterKey[0] ?? null)
-                || ! is_string($afterKey[1] ?? null)
-                || ! is_int($afterKey[2] ?? null)) {
-                throw new JsonRpcException('The cursor is invalid for this request.', -32602);
-            }
-
-            $spokes = $spokes->filter(
-                fn (Spoke $spoke): bool => $this->compareSortKeys($this->sortKey($spoke, $staleBefore), $afterKey) > 0,
-            )->values();
-        }
+        // Freeze traversal order while rendering each spoke's current health and routing details.
+        [$snapshotId, $snapshotIds, $offset] = $after === null
+            ? [Str::random(40), $currentSpokes
+                ->sort(fn (Spoke $first, Spoke $second): int => $this->compareSortKeys(
+                    $this->sortKey($first, $staleBefore),
+                    $this->sortKey($second, $staleBefore),
+                ))
+                ->pluck('id')
+                ->values()
+                ->all(), 0]
+            : $this->cursorSnapshot($after, $actorBinding, $queryBinding);
+        $spokesById = $currentSpokes->keyBy('id');
 
         $items = [];
-        $consumed = [];
+        $nextOffset = $offset;
 
-        foreach ($spokes->take($limit + 1) as $spoke) {
+        foreach (array_slice($snapshotIds, $offset) as $spokeId) {
             if (count($items) >= $limit) {
                 break;
+            }
+
+            $nextOffset++;
+            $spoke = $spokesById->get($spokeId);
+
+            if (! $spoke instanceof Spoke) {
+                continue;
             }
 
             $item = [
@@ -118,23 +120,31 @@ final class PostmasterSpokesTool extends CapstanTool
             ];
 
             if (! ToolResponse::fits(['items' => [...$items, $item], 'next_cursor' => str_repeat('x', 2048)])) {
+                $nextOffset--;
                 break;
             }
 
             $items[] = $item;
-            $consumed[] = $spoke;
         }
 
-        $hasMore = count($consumed) < $spokes->count();
-        $last = $consumed[array_key_last($consumed)] ?? null;
-        $nextCursor = $hasMore && $last instanceof Spoke
-            ? $cursors->encode([
+        $hasMore = $nextOffset < count($snapshotIds);
+
+        if ($hasMore) {
+            Cache::put($this->snapshotKey($snapshotId), [
+                'actor' => $actorBinding,
+                'query' => $queryBinding,
+                'ids' => $snapshotIds,
+            ], self::SNAPSHOT_TTL_SECONDS);
+            $nextCursor = $cursors->encode([
                 'actor' => $actorBinding,
                 'query' => $queryBinding,
                 'stale_before' => $staleBefore->toISOString(),
-                'after' => $this->sortKey($last, $staleBefore),
-            ])
-            : null;
+                'snapshot' => $snapshotId,
+                'offset' => $nextOffset,
+            ]);
+        } else {
+            $nextCursor = null;
+        }
 
         return ToolResponse::structured([
             'items' => $items,
@@ -186,6 +196,43 @@ final class PostmasterSpokesTool extends CapstanTool
         } catch (Throwable) {
             throw new JsonRpcException('The cursor is invalid for this request.', -32602);
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $cursor
+     * @return array{string, list<int>, int}
+     */
+    private function cursorSnapshot(array $cursor, string $actorBinding, string $queryBinding): array
+    {
+        $snapshotId = $cursor['snapshot'] ?? null;
+        $offset = $cursor['offset'] ?? null;
+
+        if (! is_string($snapshotId)
+            || preg_match('/\A[A-Za-z0-9]{40}\z/D', $snapshotId) !== 1
+            || ! is_int($offset)
+            || $offset < 0) {
+            throw new JsonRpcException('The cursor is invalid for this request.', -32602);
+        }
+
+        $snapshot = Cache::get($this->snapshotKey($snapshotId));
+        $ids = is_array($snapshot) ? ($snapshot['ids'] ?? null) : null;
+
+        if (! is_array($snapshot)
+            || ($snapshot['actor'] ?? null) !== $actorBinding
+            || ($snapshot['query'] ?? null) !== $queryBinding
+            || ! is_array($ids)
+            || ! array_is_list($ids)
+            || array_filter($ids, fn (mixed $id): bool => ! is_int($id)) !== []
+            || $offset > count($ids)) {
+            throw new JsonRpcException('The cursor is invalid for this request.', -32602);
+        }
+
+        return [$snapshotId, $ids, $offset];
+    }
+
+    private function snapshotKey(string $snapshotId): string
+    {
+        return 'capstan:mcp:postmaster-spokes:'.$snapshotId;
     }
 
     private function mapStatus(Spoke $spoke, CarbonInterface $staleBefore): SpokeMapStatus

@@ -43,7 +43,7 @@ abstract class CapstanTool extends Tool
 
         if ($unexpected !== []) {
             throw ValidationException::withMessages([
-                'arguments' => ['Unknown argument: '.$unexpected[0].'.'],
+                'arguments' => ['Unknown tool argument.'],
             ]);
         }
 
@@ -56,7 +56,11 @@ abstract class CapstanTool extends Tool
     {
         $payload = json_decode(request()->getContent(), false);
         $params = $payload instanceof stdClass && property_exists($payload, 'params') ? $payload->params : null;
-        $arguments = $params instanceof stdClass && property_exists($params, 'arguments') ? $params->arguments : null;
+        if (! $params instanceof stdClass) {
+            return null;
+        }
+
+        $arguments = property_exists($params, 'arguments') ? $params->arguments : new stdClass;
 
         return $arguments instanceof stdClass ? $arguments : null;
     }

@@ -18,6 +18,7 @@ use ArtisanBuild\BuiltForCloud\Testing\McpDelegatedTools;
 use ArtisanBuild\BuiltForCloud\Testing\McpProductAdmission;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Support\Facades\Date;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
 use Laravel\Pennant\Feature;
@@ -80,6 +81,16 @@ function capstanMcpReadList(string $token, string $path = '/mcp'): TestResponse
         'id' => 1,
         'method' => 'tools/list',
         'params' => [],
+    ], ['Authorization' => 'Bearer '.$token]);
+}
+
+function capstanMcpReadCallWithoutArguments(string $tool, string $token, string|int $id = 1): TestResponse
+{
+    return test()->postJson('/mcp', [
+        'jsonrpc' => '2.0',
+        'id' => $id,
+        'method' => 'tools/call',
+        'params' => ['name' => $tool],
     ], ['Authorization' => 'Bearer '.$token]);
 }
 
@@ -244,6 +255,46 @@ test('spoke cursors preserve frozen health ordering and reject actor or query re
         ], $token)))->toBe('The cursor is invalid for this request.');
 });
 
+test('spoke cursors exhaust the initial stable order when ordinary ordered fields mutate', function (): void {
+    Date::setTestNow('2026-09-30 12:00:00');
+    $owner = capstanUser();
+    $token = capstanMcpReadToken($owner);
+    $spokes = collect(['A', 'B', 'C'])->mapWithKeys(function (string $name) use ($owner): array {
+        $spoke = Spoke::query()->create([
+            'actor_id' => (string) $owner->id,
+            'credential_id' => (string) Str::uuid(),
+            'name' => $name,
+            'last_polled_at' => now()->subHour(),
+            'probe_status' => 'green',
+        ]);
+
+        return [$name => $spoke];
+    });
+
+    $first = capstanMcpReadStructured(capstanMcpReadCall('postmaster_spokes', ['limit' => 1], $token));
+    expect(data_get($first, 'items.0.id'))->toBe($spokes['A']->id);
+
+    $spokes['A']->update(['last_polled_at' => now(), 'probe_status' => 'green']);
+    $spokes['C']->update(['name' => '0']);
+
+    $seen = [$spokes['A']->id];
+    $cursor = $first['next_cursor'];
+
+    for ($pageNumber = 0; $cursor !== null && $pageNumber < 10; $pageNumber++) {
+        $page = capstanMcpReadStructured(capstanMcpReadCall('postmaster_spokes', [
+            'limit' => 1,
+            'cursor' => $cursor,
+        ], $token));
+        expect($page['items'])->toHaveCount(1);
+        $seen[] = data_get($page, 'items.0.id');
+        $cursor = $page['next_cursor'];
+    }
+
+    expect($cursor)->toBeNull()
+        ->and($seen)->toBe($spokes->pluck('id')->values()->all())
+        ->and(array_unique($seen))->toHaveCount(3);
+});
+
 test('byte-paginates maximum-inbox spokes below the relay response ceiling', function (): void {
     $owner = capstanUser();
     $token = capstanMcpReadToken($owner);
@@ -358,6 +409,55 @@ test('message cursors traverse equal delivery timestamps and bind inbox and acto
         ], $otherToken)))->toBe('The cursor is invalid for this request.');
 });
 
+test('message cursors exhaust true legacy null and timestamped delivery rows', function (): void {
+    $owner = capstanUser();
+    $token = capstanMcpReadToken($owner);
+    Inbox::query()->create(['actor_id' => (string) $owner->id, 'local_part' => 'receiver']);
+
+    foreach ([
+        ['W', 'legacy-null-a', null],
+        ['X', 'timestamped-a', '2026-09-30 13:00:00'],
+        ['Y', 'legacy-null-b', null],
+        ['Z', 'timestamped-b', '2026-09-30 13:00:01'],
+    ] as [$suffix, $messageId, $receivedAt]) {
+        $envelope = capstanMcpReadEnvelope(
+            MCP_READ_SERVER_ID.':01ARZ3NDEKTSV4RRFFQ69G5FA'.$suffix,
+            $messageId,
+            'receiver@'.MCP_READ_SERVER_ID,
+            (object) ['sequence' => $messageId],
+            $receivedAt,
+        );
+
+        if ($receivedAt === null) {
+            DB::table('messages')->where('id', $envelope->id)->update(['received_at' => null]);
+        }
+    }
+
+    $seen = [];
+    $cursor = null;
+
+    for ($pageNumber = 0; $pageNumber < 10; $pageNumber++) {
+        $arguments = ['inbox' => 'receiver', 'limit' => 1];
+
+        if ($cursor !== null) {
+            $arguments['cursor'] = $cursor;
+        }
+
+        $page = capstanMcpReadStructured(capstanMcpReadCall('postmaster_messages', $arguments, $token));
+        expect($page['items'])->toHaveCount(1);
+        $seen[] = data_get($page, 'items.0.message_id');
+        $cursor = $page['next_cursor'];
+
+        if ($cursor === null) {
+            break;
+        }
+    }
+
+    expect($cursor)->toBeNull()
+        ->and($seen)->toBe(['legacy-null-a', 'legacy-null-b', 'timestamped-a', 'timestamped-b'])
+        ->and(array_unique($seen))->toHaveCount(4);
+});
+
 test('foreign and missing inboxes disclose the same bounded refusal', function (): void {
     $owner = capstanUser();
     $other = capstanUser();
@@ -462,4 +562,29 @@ test('runtime validation rejects list numeric null unknown malformed and oversiz
             ->and(strlen($response->getContent()))->toBeLessThan(1_048_576);
         capstanMcpReadError($response);
     }
+});
+
+test('a zero argument tool accepts an omitted arguments member', function (): void {
+    $token = capstanMcpReadToken(capstanUser());
+
+    capstanMcpReadCallWithoutArguments('postmaster_spokes', $token)
+        ->assertOk()
+        ->assertJsonPath('result.structuredContent.items', [])
+        ->assertJsonPath('result.structuredContent.has_more', false)
+        ->assertJsonPath('result.structuredContent.limit', 10);
+});
+
+test('unknown argument diagnostics remain bounded for a maximum request id', function (): void {
+    $token = capstanMcpReadToken(capstanUser());
+    $property = str_repeat('x', 1_048_576);
+    $response = capstanMcpReadCall(
+        'postmaster_spokes',
+        (object) [$property => true],
+        $token,
+        str_repeat('i', 254),
+    );
+
+    expect(capstanMcpReadError($response))->toBe('Unknown tool argument.')
+        ->and(strlen($response->getContent()))->toBeLessThan(1_048_576)
+        ->and($response->getContent())->not->toContain($property);
 });
