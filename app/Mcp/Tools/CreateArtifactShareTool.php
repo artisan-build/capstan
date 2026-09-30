@@ -128,7 +128,7 @@ final class CreateArtifactShareTool extends CapstanTool
             throw ValidationException::withMessages(['expires_at' => ['The expires at field must be a valid RFC 3339 timestamp.']]);
         }
 
-        $fraction = str_pad($matches[2] ?? '', 6, '0');
+        $fraction = str_pad($matches[2], 6, '0');
         $offset = $matches[3] === 'Z' ? '+00:00' : $matches[3];
         $parsed = DateTimeImmutable::createFromFormat('!Y-m-d\TH:i:s.uP', $matches[1].'.'.$fraction.$offset);
         $errors = DateTimeImmutable::getLastErrors();
