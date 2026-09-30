@@ -19,7 +19,7 @@ return [
 
     'mcp' => [
         'path' => '/mcp',
-        'write_path' => null,
+        'write_path' => '/mcp/write',
         'destructive_path' => null,
         'delegated' => true,
     ],

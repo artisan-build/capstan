@@ -13,12 +13,12 @@ use App\Models\Envelope;
 use App\Models\Inbox;
 use App\Models\Spoke;
 use App\Models\SpokeProbe;
+use App\Postmaster\MessageAcknowledger;
+use App\Postmaster\MessageSender;
 use App\Postmaster\ProbeFailureNotifier;
 use App\Postmaster\ProbeManager;
 use App\Support\Address;
-use App\Support\JsonCanonicalizer;
 use App\Support\ServerIdentity;
-use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Database\Query\Builder as QueryBuilder;
 use Illuminate\Database\Eloquent\Collection;
@@ -48,10 +48,11 @@ class PollController extends Controller
 
     public function __invoke(
         Request $request,
-        SigningRootMac $signer,
         ServerIdentity $identity,
         ProbeManager $probeManager,
         ProbeFailureNotifier $probeFailureNotifier,
+        MessageSender $sender,
+        MessageAcknowledger $acknowledger,
     ): JsonResponse {
         $credential = AuthenticateBoundCredential::credential($request);
         $actorId = AuthenticateBoundCredential::actorId($request);
@@ -91,8 +92,8 @@ class PollController extends Controller
 
         try {
             /** @var array{payload: array{inbound: list<array<string, mixed>>, cursor: string|null, probe_challenge?: array{probe_id: string, nonce: string, algorithm: string}}, failure: array{Spoke, SpokeProbe}|null} $result */
-            $result = DB::transaction(function () use ($credential, $actorId, $validation, $envelopes, $serverId, $probeManager, $signer): array {
-                $now = now();
+            $result = DB::transaction(function () use ($credential, $actorId, $validation, $envelopes, $serverId, $probeManager, $sender, $acknowledger): array {
+                $now = CarbonImmutable::now();
                 $spoke = $this->resolveSpoke($actorId, $credential->id, $now);
                 $readyInboxes = array_values(array_unique($validation['ready_inboxes']));
                 $failedProbe = $probeManager->respond($spoke, $validation['probe_response'], $now);
@@ -100,14 +101,11 @@ class PollController extends Controller
                 $this->refreshRouting($spoke, $actorId, $readyInboxes, $validation['cursor'], $now);
                 $this->assertSendersOwned($actorId, $envelopes, $serverId);
 
-                foreach ($envelopes as $envelope) {
-                    $mac = $signer->mac(JsonCanonicalizer::encode($envelope->signablePayload()));
-                    $envelope->signature = $mac->lowercaseHexMac;
-                    $envelope->signing_key_id = $mac->keyId;
-                    $this->storeEnvelope($envelope, $serverId, $now);
+                foreach ($envelopes as $index => $envelope) {
+                    $sender->send($actorId, $envelope, $now, $index);
                 }
 
-                $this->processAcks($actorId, $validation['acks'], $serverId, $now);
+                $acknowledger->acknowledge($actorId, $validation['acks'], $now);
                 $inbound = $this->inbound($spoke, $actorId, $serverId);
                 $this->markDelivered($inbound, $now);
                 $challenge = $probeManager->issue($spoke, $now);
@@ -436,51 +434,6 @@ class PollController extends Controller
         ]);
     }
 
-    private function storeEnvelope(Envelope $envelope, string $serverId, CarbonImmutable $now): void
-    {
-        $to = Address::parse($envelope->to_address);
-
-        DB::table('messages')->insertOrIgnore([
-            'id' => $envelope->id,
-            'type' => $envelope->type->value,
-            'version' => $envelope->version,
-            'from_address' => $envelope->from_address,
-            'to_address' => $envelope->to_address,
-            'to_local_part' => $to->localPart,
-            'to_server_id' => $to->serverId,
-            'body' => json_encode($envelope->body, JSON_THROW_ON_ERROR),
-            'refs' => json_encode($envelope->refs, JSON_THROW_ON_ERROR),
-            'message_id' => $envelope->message_id,
-            'signature' => $envelope->signature,
-            'signing_key_id' => $envelope->signing_key_id,
-            'status' => $to->isLocal($serverId) ? MessageStatus::Pending->value : MessageStatus::PendingRelay->value,
-            'received_at' => $now,
-            'created_at' => $envelope->created_at,
-            'updated_at' => $now,
-        ]);
-    }
-
-    /**
-     * Acks are scoped by inbox ownership, so a spoke that has stopped advertising an inbox
-     * can still acknowledge the batch it already received.
-     *
-     * @param  list<string>  $acks
-     */
-    private function processAcks(string $actorId, array $acks, string $serverId, CarbonImmutable $now): void
-    {
-        foreach (array_chunk(array_values(array_unique($acks)), self::QUERY_CHUNK) as $chunk) {
-            Envelope::query()
-                ->whereIn('message_id', $chunk)
-                ->where('to_server_id', $serverId)
-                ->whereIn('to_local_part', $this->ownedLocalParts($actorId))
-                ->where('status', '!=', MessageStatus::Acked->value)
-                ->update([
-                    'status' => MessageStatus::Acked->value,
-                    'acked_at' => $now,
-                ]);
-        }
-    }
-
     /**
      * Delivery is scoped by this spoke's persisted routing rows, restricted to inboxes
      * its user owns. Server-assigned `received_at` is the priority key on every driver.
@@ -513,14 +466,6 @@ class PollController extends Controller
             Envelope::query()->whereIn('id', $ids)->whereNull('delivered_at')->update(['delivered_at' => $now]);
             Envelope::query()->whereIn('id', $ids)->where('status', MessageStatus::Pending->value)->update(['status' => MessageStatus::Delivered->value]);
         }
-    }
-
-    /** @return \Closure(QueryBuilder): void */
-    private function ownedLocalParts(string $actorId): \Closure
-    {
-        return function (QueryBuilder $query) use ($actorId): void {
-            $query->select('local_part')->from('inboxes')->where('actor_id', $actorId);
-        };
     }
 
     /** @return \Closure(QueryBuilder): void */
