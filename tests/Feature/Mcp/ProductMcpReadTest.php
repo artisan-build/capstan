@@ -331,7 +331,7 @@ test('reading spokes performs no writes with the production database cache store
     }
 
     config(['cache.default' => 'database']);
-    app('cache')->setDefaultDriver('database');
+    resolve('cache')->setDefaultDriver('database');
     expect(DB::table('cache')->count())->toBe(0);
     $credential = Credential::query()->where('secret_hash', hash('sha256', $token))->firstOrFail();
     $credential->forceFill(['user_id' => (string) $owner->id]);
