@@ -17,6 +17,13 @@ return [
 
     'dashboard' => DashboardController::class,
 
+    'mcp' => [
+        'path' => '/mcp',
+        'write_path' => null,
+        'destructive_path' => null,
+        'delegated' => true,
+    ],
+
     'credentials' => [
         'guard' => env('BUILT_FOR_CLOUD_CREDENTIAL_GUARD', 'bfc'),
         'declaration' => CapstanCredentialDeclaration::class,
