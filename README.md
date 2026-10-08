@@ -31,6 +31,16 @@ per person.
 what it needs on your Laravel Cloud account, and deploys it. The repository and the infrastructure end
 up yours either way — the difference is who spends the afternoon on the steps below.
 
+Installed that way there is **nothing to set** for either capability:
+
+- `CAPSTAN_ARTIFACT_RENDER_ORIGIN` is filled in for you with the environment's own
+  `laravel.cloud` address.
+- **Artifact hosting turns itself on once you add a custom domain in Laravel Cloud.** `APP_URL`
+  follows that domain, so the app and the artifact origin stop being the same host and the isolation
+  the feature depends on exists. Until then artifacts stay off and the rest of the app is unaffected.
+  Remove the custom domain and they switch back off on their own.
+- Postmaster's signing root is **ensured on every deploy**, so there is no key to create by hand.
+
 Running it yourself is free of licence cost; Capstan is MIT licensed. You still pay for the
 infrastructure it runs on, and you do the provisioning, deployment and upgrade work described here.
 
@@ -125,8 +135,8 @@ creates an Admin.
 > Some Built for Cloud commands can act on your **deployed Laravel Cloud environment** instead of your
 > machine. They behave differently, so it is worth knowing which is which:
 >
-> - **`bfc:credential:*` and `bfc:signing-root:provision` refuse to run without `--local`.** They print
->   an error and exit. You cannot reach production by forgetting the flag.
+> - **`bfc:credential:*` and `bfc:signing-root:{ensure,provision}` refuse to run without `--local`.**
+>   They print an error and exit. You cannot reach production by forgetting the flag.
 > - **`create-admin` asks.** With `--local` it acts locally, with `--environment=<env>` it acts on that
 >   Cloud environment, and with neither it shows a chooser that defaults to this machine.
 > - **`bfc:ownership:mint-claim` and `bfc:ownership:remint-owner-token` do not ask.** Without `--local`
@@ -157,12 +167,15 @@ macOS resolve anything under `.localhost` to `127.0.0.1`, so this needs no DNS a
 edit. Both names reach the same dev server; Capstan tells them apart by the `Host` header.
 
 ```dotenv
-APP_URL=http://localhost:8000
 CAPSTAN_FEATURE_ARTIFACTS=true
 CAPSTAN_ARTIFACT_RENDER_ORIGIN=http://artifacts.localhost:8000
 ```
 
-`.env.example` ships a placeholder render origin. Replace it — do not leave it.
+Leave `APP_URL` alone — the value `.env.example` ships is already the right one for local work, and
+what matters is only that the render origin is a *different* host from it. The render origin
+`.env.example` ships is a placeholder that resolves nowhere, so replace it with the `.localhost`
+form above. If the two ever name the same host, Capstan treats artifact hosting as switched off
+rather than serving artifacts on the app's own origin.
 
 **Postmaster** needs the flag plus the key Capstan signs messages with:
 
@@ -171,11 +184,14 @@ CAPSTAN_FEATURE_POSTMASTER=true
 ```
 
 ```bash
-php artisan bfc:signing-root:provision --local
+php artisan bfc:signing-root:ensure --local
 ```
 
-That prints `Provisioned installation signing root <id>. No secret was exported.` The key never leaves
-the server and cannot be read back, which is the point. Without it Capstan refuses to deliver messages.
+That prints `Installation signing root is present. No secret was exported.` The key never leaves the
+server and cannot be read back, which is the point. Without it Capstan refuses to deliver messages.
+
+`ensure` is safe to run as often as you like — it creates the root only if there isn't one. (The older
+`bfc:signing-root:provision` refuses once a root exists, which is why deploy scripts use `ensure`.)
 
 Restart the app after changing `.env`. A **Postmaster** link appears in the sidebar once that flag is on.
 
@@ -257,18 +273,16 @@ The `cloud` CLI is pre-1.0 and its flags move between releases. Confirm any comm
    cloud environment:variables --json -n --action=set --key=APP_ENV   --value=production
    cloud environment:variables --json -n --action=set --key=APP_DEBUG --value=false
    cloud environment:variables --json -n --action=set --key=APP_NAME  --value=Capstan
-   cloud environment:variables --json -n --action=set --key=APP_URL   --value=https://<app-host>
    # plus the CAPSTAN_* keys from the Configuration table
    ```
 
    Let Cloud generate `APP_KEY`.
 
-   **Set `APP_URL` yourself, to your app hostname, exactly as above.** It is app configuration, not a
-   provisioned resource, so the rule above does not cover it. Get it wrong and both capabilities break
-   quietly while the deployment stays green: the artifact policy names the wrong page as allowed to
-   frame artifacts, and Postmaster hands agents a `http://localhost` poll address. Cloud may also
-   derive this value from the environment's *primary* domain — which is a separate step from creating
-   a domain — so confirm the final value in step 7 whatever you do here.
+   **Do not set `APP_URL`.** Cloud injects it, and it injects your custom domain once one is attached
+   and verified — a value you set yourself shadows that and then stops tracking the domain. `APP_URL`
+   is load-bearing for both capabilities (it names the only page allowed to frame artifacts, and it is
+   the base of the poll and token URLs handed to Postmaster agents), so read it back in step 7 rather
+   than writing it.
 
 5. **Add your hostnames and point DNS at Cloud.**
 
@@ -285,9 +299,9 @@ The `cloud` CLI is pre-1.0 and its flags move between releases. Confirm any comm
    cloud domain:verify <domain-id> -n --json
    ```
 
-   If you want Cloud to derive `APP_URL` from this hostname, make it the environment's **primary**
-   domain — a separate action in the Cloud dashboard. Setting `APP_URL` in step 4 does not depend on
-   it.
+   Once the app hostname is attached and verified, `APP_URL` becomes that hostname on the next
+   deploy. You do not have to nominate a primary domain to make that happen, and you do not have to
+   set `APP_URL` yourself — confirm it in step 7.
 
    **Leave `SESSION_DOMAIN` unset.** If the app and artifact hostnames are neighbours under one domain,
    a shared `SESSION_DOMAIN` hands your login cookie to the artifact origin and removes the isolation
@@ -315,7 +329,7 @@ The `cloud` CLI is pre-1.0 and its flags move between releases. Confirm any comm
    cloud tinker <env> --code="echo config('database.default');"        # your database engine, e.g. pgsql
    cloud tinker <env> --code="echo config('queue.default');"           # Cloud's managed queue connection
    cloud tinker <env> --code="echo config('filesystems.default');"     # the disk wired to your bucket
-   cloud tinker <env> --code="echo config('app.url');"                 # must equal your app hostname
+   cloud tinker <env> --code="echo config('app.url');"                 # injected: must be your app hostname
    cloud tinker <env> --code="var_dump(config('session.domain'));"     # must be null
    cloud tinker <env> --code="Storage::put('probe.txt','ok'); echo Storage::get('probe.txt'); Storage::delete('probe.txt');"
    ```
@@ -329,11 +343,23 @@ The `cloud` CLI is pre-1.0 and its flags move between releases. Confirm any comm
    # Creates the Owner on <env>. You are prompted for the password here; only its
    # hash is sent. This is the one time you deliberately leave --local off.
    php artisan create-admin --environment=<env> --email=you@example.com --name="Your Name"
+   ```
 
-   # Postmaster only. This command is local-only by design, so run it INSIDE the
-   # environment rather than pointing it at one. Again, no --no-monitor: wait for
-   # it to report success, or you will not know the key exists.
-   cloud command:run <env> --cmd "php artisan bfc:signing-root:provision --local" -n
+   **Postmaster's signing root needs no step of its own if your deploy ensures it.** Built for Cloud
+   v0.19.9 ships `bfc:signing-root:ensure`, which creates the root only when one is missing and is
+   therefore safe to run on every deploy. A Scalpels-installed Capstan already does this. If you wrote
+   your own deploy commands, add it there:
+
+   ```bash
+   php artisan bfc:signing-root:ensure --local
+   ```
+
+   To create it once by hand instead, run it inside the environment rather than pointing it at one —
+   the verb is local-only by design. No `--no-monitor`: wait for the result, or you will not know the
+   key exists.
+
+   ```bash
+   cloud command:run <env> --cmd "php artisan bfc:signing-root:ensure --local" -n
    ```
 
 9. **Check the app answers.** `https://<app-host>` should return `200` with a valid certificate, and
@@ -345,9 +371,9 @@ The settings a self-hosted Capstan normally changes. Laravel's own settings are 
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `APP_URL` | `http://localhost` | The app's own hostname. Load-bearing: it names the only page allowed to frame artifacts, and it is the base of the poll and token URLs handed to Postmaster agents. On Laravel Cloud it is injected from the primary domain — verify it rather than setting it. |
+| `APP_URL` | `http://localhost` | The app's own hostname. Load-bearing: it names the only page allowed to frame artifacts, and it is the base of the poll and token URLs handed to Postmaster agents. **On Laravel Cloud, do not set it** — Cloud injects it, and it becomes your custom domain once one is attached and verified. Setting it shadows the injected value and stops it tracking the domain. Read it back (step 7) instead. |
 | `CAPSTAN_FEATURE_ARTIFACTS` | `false` | Turns artifact hosting on. While off, the artifact API and viewer return `404`. |
-| `CAPSTAN_ARTIFACT_RENDER_ORIGIN` | *(none)* | The second hostname artifact HTML is served from. **Required, and `.env.example` ships a placeholder you must replace.** With no value — or with the app's own host — artifact hosting is simply off: viewing returns `404`, the app itself serves normally, and nothing falls back onto the app hostname. |
+| `CAPSTAN_ARTIFACT_RENDER_ORIGIN` | *(none)* | The second hostname artifact HTML is served from, which must not be the app's own host. **Installed through Scalpels there is nothing to set:** it is filled in with the environment's `laravel.cloud` address, and artifact hosting switches itself on once you add a custom domain in Laravel Cloud, because `APP_URL` follows that domain and the two hosts stop matching. **Self-hosted outside Scalpels:** give it an `https` origin on a hostname different from `APP_URL`'s. With no value — or the app's own host — artifact hosting is off: ingest and viewing both return `404`, the app itself serves normally, and nothing falls back onto the app hostname. |
 | `CAPSTAN_ARTIFACT_MAX_CONTENT_BYTES` | `1048576` | Largest artifact accepted, in bytes. Anything bigger is a `422`. |
 | `CAPSTAN_ARTIFACT_CSP_SCRIPT_SRC` | *(empty)* | Comma-separated extra sources artifact HTML may load scripts from. Empty means none. |
 | `CAPSTAN_ARTIFACT_CSP_STYLE_SRC` | *(empty)* | Same, for stylesheets. |
@@ -582,12 +608,16 @@ at the pinned Built for Cloud version — use the device flow above. Otherwise c
 `X-Capstan-Actor-ID` is *your* id: Capstan compares the header against the token's owner and rejects a
 mismatch before doing anything else.
 
-**Artifact links return `404`.** Common causes, roughly in order: `CAPSTAN_FEATURE_ARTIFACTS` is still
-`false`; `CAPSTAN_ARTIFACT_RENDER_ORIGIN` is empty or names the same host as `APP_URL`; the artifact has
-expired or the id is wrong; or you
-are requesting artifact *content* from the app hostname. Content is served only from the render
-hostname and the viewer page only from the app hostname — each refuses the other's host deliberately,
-so both names must resolve before artifacts work, including locally.
+**Artifact links return `404`, or `POST /api/v1/artifacts` returns `404`.** Common causes, roughly in
+order: `CAPSTAN_FEATURE_ARTIFACTS` is still `false`; `CAPSTAN_ARTIFACT_RENDER_ORIGIN` is empty or names
+the same host as `APP_URL`; the artifact has expired or the id is wrong; or you are requesting artifact
+*content* from the app hostname. Content is served only from the render hostname and the viewer page
+only from the app hostname — each refuses the other's host deliberately, so both names must resolve
+before artifacts work, including locally.
+
+Without a usable second host the feature reports itself **off**, so ingest refuses too rather than
+accept artifacts it could never serve. On Laravel Cloud with no custom domain yet, that is the expected
+state and not a misconfiguration: add the domain and artifacts begin working without touching `.env`.
 
 **Artifact HTML arrives rewritten, or with extra bytes.** A CDN or proxy in front of the render
 hostname is editing it. Capstan sends `Cache-Control: no-transform`, which Cloudflare honours; if you
@@ -595,7 +625,8 @@ have another proxy, turn off its HTML rewriting for that hostname.
 
 **Postmaster messages are never delivered.** The signing root is missing — Capstan signs every envelope
 as it hands it over and refuses rather than deliver an unsigned one. Run
-`php artisan bfc:signing-root:provision --local`, or inside a deployed environment as shown in step 8.
+`php artisan bfc:signing-root:ensure --local`, or inside a deployed environment as shown in step 8. A
+deploy that ensures the root (as a Scalpels install does) should make this impossible.
 
 **The app refuses to boot with Postmaster on**, saying `Postmaster requires app.timezone to be UTC`.
 Something changed `timezone` in `config/app.php`. Put `'UTC'` back. Message signatures are computed
