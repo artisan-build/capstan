@@ -347,7 +347,7 @@ The settings a self-hosted Capstan normally changes. Laravel's own settings are 
 | --- | --- | --- |
 | `APP_URL` | `http://localhost` | The app's own hostname. Load-bearing: it names the only page allowed to frame artifacts, and it is the base of the poll and token URLs handed to Postmaster agents. On Laravel Cloud it is injected from the primary domain — verify it rather than setting it. |
 | `CAPSTAN_FEATURE_ARTIFACTS` | `false` | Turns artifact hosting on. While off, the artifact API and viewer return `404`. |
-| `CAPSTAN_ARTIFACT_RENDER_ORIGIN` | *(none)* | The second hostname artifact HTML is served from. **Required, and `.env.example` ships a placeholder you must replace.** With no value, artifact viewing returns `404` rather than falling back to the app hostname. |
+| `CAPSTAN_ARTIFACT_RENDER_ORIGIN` | *(none)* | The second hostname artifact HTML is served from. **Required, and `.env.example` ships a placeholder you must replace.** With no value — or with the app's own host — artifact hosting is simply off: viewing returns `404`, the app itself serves normally, and nothing falls back onto the app hostname. |
 | `CAPSTAN_ARTIFACT_MAX_CONTENT_BYTES` | `1048576` | Largest artifact accepted, in bytes. Anything bigger is a `422`. |
 | `CAPSTAN_ARTIFACT_CSP_SCRIPT_SRC` | *(empty)* | Comma-separated extra sources artifact HTML may load scripts from. Empty means none. |
 | `CAPSTAN_ARTIFACT_CSP_STYLE_SRC` | *(empty)* | Same, for stylesheets. |
@@ -583,7 +583,8 @@ at the pinned Built for Cloud version — use the device flow above. Otherwise c
 mismatch before doing anything else.
 
 **Artifact links return `404`.** Common causes, roughly in order: `CAPSTAN_FEATURE_ARTIFACTS` is still
-`false`; `CAPSTAN_ARTIFACT_RENDER_ORIGIN` is empty; the artifact has expired or the id is wrong; or you
+`false`; `CAPSTAN_ARTIFACT_RENDER_ORIGIN` is empty or names the same host as `APP_URL`; the artifact has
+expired or the id is wrong; or you
 are requesting artifact *content* from the app hostname. Content is served only from the render
 hostname and the viewer page only from the app hostname — each refuses the other's host deliberately,
 so both names must resolve before artifacts work, including locally.
