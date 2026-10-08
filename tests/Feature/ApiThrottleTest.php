@@ -31,7 +31,11 @@ test('product api routes authenticate their fixed purpose before sharing the api
 });
 
 test('subject mismatch cannot consume the shared actor api throttle', function (): void {
-    config(['capstan.features.artifacts' => true]);
+    config([
+        'app.url' => 'https://app.capstan.test',
+        'capstan.features.artifacts' => true,
+        'capstan.artifacts.render_origin' => 'https://artifacts.capstan.test',
+    ]);
     Feature::flushCache();
     $actor = capstanUser();
     $other = capstanUser();

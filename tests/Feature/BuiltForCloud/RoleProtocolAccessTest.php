@@ -11,7 +11,9 @@ use Laravel\Pennant\Feature;
 test('every package role can complete bound artifact ingest and Postmaster poll', function (UserRole $role): void {
     config([
         'app.key' => 'base64:'.base64_encode(str_repeat('r', 32)),
+        'app.url' => 'https://app.capstan.test',
         'capstan.features.artifacts' => true,
+        'capstan.artifacts.render_origin' => 'https://artifacts.capstan.test',
         'capstan.features.postmaster' => true,
         'capstan.postmaster.server_id' => '01ARZ3NDEKTSV4RRFFQ69G5FAV',
     ]);
@@ -41,7 +43,9 @@ test('every package role can complete bound artifact ingest and Postmaster poll'
 test('package role changes preserve Capstan product access at the new role', function (): void {
     config([
         'app.key' => 'base64:'.base64_encode(str_repeat('r', 32)),
+        'app.url' => 'https://app.capstan.test',
         'capstan.features.artifacts' => true,
+        'capstan.artifacts.render_origin' => 'https://artifacts.capstan.test',
         'capstan.features.postmaster' => true,
         'capstan.postmaster.server_id' => '01ARZ3NDEKTSV4RRFFQ69G5FAV',
     ]);
