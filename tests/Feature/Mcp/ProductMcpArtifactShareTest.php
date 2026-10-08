@@ -435,3 +435,33 @@ test('returns a bounded redacted share whose signed viewer reaches isolated cont
     $this->travelTo('2026-09-30T11:00:01Z');
     $this->get($contentUrl)->assertNotFound()->assertDontSee('Isolated artifact');
 });
+
+test('refuses the write tool when there is no isolated render origin to serve the artifact from', function (): void {
+    $user = capstanUser();
+    $token = artifactMcpToken($user);
+
+    // Same host as APP_URL: a derived render origin on an install with no
+    // custom domain. The flag is left ON throughout to prove the origin alone
+    // closes the tool.
+    config(['capstan.artifacts.render_origin' => 'https://app.capstan.test']);
+    Feature::flushCache();
+
+    artifactMcpCall(artifactMcpArguments('same-host'), $token)
+        ->assertOk()
+        ->assertJsonPath('result.isError', true)
+        ->assertJsonPath('result.content.0.text', 'Artifacts are unavailable.');
+
+    config(['capstan.artifacts.render_origin' => null]);
+    Feature::flushCache();
+
+    artifactMcpCall(artifactMcpArguments('unset-origin'), $token)
+        ->assertOk()
+        ->assertJsonPath('result.isError', true)
+        ->assertJsonPath('result.content.0.text', 'Artifacts are unavailable.');
+
+    expect(Feature::active(App\Features\Artifacts::class))->toBeFalse()
+        ->and(DB::table('mcp_write_claims')->count())->toBe(0)
+        ->and(DB::table('mcp_write_effects')->count())->toBe(0)
+        ->and(Artifact::query()->count())->toBe(0)
+        ->and(Storage::disk()->allFiles())->toBe([]);
+});
