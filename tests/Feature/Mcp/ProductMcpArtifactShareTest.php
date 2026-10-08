@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\ArtifactVisibility;
+use App\Features\Artifacts;
 use App\Mcp\WriteFaultInjector;
 use App\Models\Artifact;
 use App\Models\Team;
@@ -459,7 +460,7 @@ test('refuses the write tool when there is no isolated render origin to serve th
         ->assertJsonPath('result.isError', true)
         ->assertJsonPath('result.content.0.text', 'Artifacts are unavailable.');
 
-    expect(Feature::active(App\Features\Artifacts::class))->toBeFalse()
+    expect(Feature::active(Artifacts::class))->toBeFalse()
         ->and(DB::table('mcp_write_claims')->count())->toBe(0)
         ->and(DB::table('mcp_write_effects')->count())->toBe(0)
         ->and(Artifact::query()->count())->toBe(0)

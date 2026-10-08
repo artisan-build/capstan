@@ -5,6 +5,7 @@ use App\Enums\ArtifactVisibility;
 use App\Features\Artifacts as ArtifactsFeature;
 use App\Models\Artifact;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Testing\TestResponse;
 use Laravel\Pennant\Feature;
 
 beforeEach(function (): void {
@@ -39,7 +40,7 @@ function ingestHeaders(): array
     return capstanBearerHeaders(capstanUser(), CapstanCredentialDeclaration::ARTIFACT_INGEST);
 }
 
-function postArtifact(): Illuminate\Testing\TestResponse
+function postArtifact(): TestResponse
 {
     return test()->withHeaders(ingestHeaders())->postJson('/api/v1/artifacts', [
         'content' => '<html><body>ingest attempt</body></html>',
