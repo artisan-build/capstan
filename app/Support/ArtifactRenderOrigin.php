@@ -14,7 +14,7 @@ class ArtifactRenderOrigin
 
     public function appHost(): string
     {
-        return (string) parse_url($this->appOrigin(), PHP_URL_HOST);
+        return $this->normaliseHost(parse_url($this->appOrigin(), PHP_URL_HOST));
     }
 
     public function renderOrigin(): string
@@ -24,16 +24,25 @@ class ArtifactRenderOrigin
         return $this->originFromUrl((string) $origin);
     }
 
+    /**
+     * A render origin on the app's own host is not an isolated origin, so it
+     * counts as unconfigured: artifact hosting stays off and the app serves
+     * normally. Laravel Cloud injects the vanity host as APP_URL until a custom
+     * domain is attached, which makes a derived render origin equal the app
+     * origin on every install without one.
+     */
     public function isConfigured(): bool
     {
         $origin = config('capstan.artifacts.render_origin');
 
-        return is_string($origin) && $origin !== '';
+        return is_string($origin)
+            && $origin !== ''
+            && $this->renderHost() !== $this->appHost();
     }
 
     public function renderHost(): string
     {
-        return (string) parse_url($this->renderOrigin(), PHP_URL_HOST);
+        return $this->normaliseHost(parse_url($this->renderOrigin(), PHP_URL_HOST));
     }
 
     public function renderHostFor(Artifact $artifact): string
@@ -98,6 +107,15 @@ class ArtifactRenderOrigin
         $sources = array_merge($defaults, is_array($configured) ? array_values($configured) : []);
 
         return $name.' '.(count($sources) > 0 ? implode(' ', $sources) : "'none'");
+    }
+
+    /**
+     * Hosts are case-insensitive and the DNS root dot is not part of the name,
+     * so both must be folded away before two hosts can be compared.
+     */
+    private function normaliseHost(mixed $host): string
+    {
+        return rtrim(mb_strtolower(is_string($host) ? $host : ''), '.');
     }
 
     private function originFromUrl(string $url): string
