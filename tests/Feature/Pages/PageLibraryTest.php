@@ -447,6 +447,10 @@ test('unexpected library failures remain noindex', function (): void {
     $this->get('https://app.library.test/pages')
         ->assertServerError()
         ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
+
+    $this->post('https://app.library.test/pages')
+        ->assertStatus(405)
+        ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
 });
 
 test('delete rejects unavailable principals malformed ids and render-host requests without private detail', function (): void {
