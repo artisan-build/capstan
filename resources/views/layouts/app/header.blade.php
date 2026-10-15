@@ -13,6 +13,11 @@
                 <flux:navbar.item icon="layout-grid" :href="route('bfc.dashboard')" :current="request()->routeIs('bfc.dashboard')" wire:navigate>
                     {{ __('Dashboard') }}
                 </flux:navbar.item>
+                @if (\Laravel\Pennant\Feature::active(\App\Features\Artifacts::class))
+                    <flux:navbar.item data-testid="pages-navigation" icon="document-text" :href="route('pages.index')" :current="request()->routeIs('pages.*')" wire:navigate>
+                        {{ __('Pages') }}
+                    </flux:navbar.item>
+                @endif
             </flux:navbar>
 
             <flux:spacer />
@@ -56,6 +61,11 @@
                     <flux:sidebar.item icon="layout-grid" :href="route('bfc.dashboard')" :current="request()->routeIs('bfc.dashboard')" wire:navigate>
                         {{ __('Dashboard')  }}
                     </flux:sidebar.item>
+                    @if (\Laravel\Pennant\Feature::active(\App\Features\Artifacts::class))
+                        <flux:sidebar.item data-testid="pages-navigation" icon="document-text" :href="route('pages.index')" :current="request()->routeIs('pages.*')" wire:navigate>
+                            {{ __('Pages') }}
+                        </flux:sidebar.item>
+                    @endif
                 </flux:sidebar.group>
             </flux:sidebar.nav>
 

@@ -26,7 +26,9 @@ class RenderOriginIsolation
             return $next($request);
         }
 
-        abort_unless($request->is(...self::ALLOWED_PATTERNS), 404);
+        if (! $request->is(...self::ALLOWED_PATTERNS)) {
+            return response('', 404)->header('X-Robots-Tag', 'noindex, nofollow, noarchive');
+        }
 
         $response = $next($request);
 

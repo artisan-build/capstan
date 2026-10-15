@@ -22,6 +22,12 @@
                         </flux:sidebar.item>
                     @endif
 
+                    @if (\Laravel\Pennant\Feature::active(\App\Features\Artifacts::class))
+                        <flux:sidebar.item data-testid="pages-navigation" icon="document-text" :href="route('pages.index')" :current="request()->routeIs('pages.*')" wire:navigate>
+                            {{ __('Pages') }}
+                        </flux:sidebar.item>
+                    @endif
+
                     <flux:sidebar.item icon="layout-grid" href="/bfc/ui">
                         {{ __('Account') }}
                     </flux:sidebar.item>
