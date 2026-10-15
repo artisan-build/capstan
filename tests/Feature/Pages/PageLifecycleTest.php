@@ -97,8 +97,8 @@ test('owner sees latest and prior immutable versions while another user sees nei
     $priorContent = $this->get(resolve(ArtifactRenderOrigin::class)->signedPageContentUrl($page, $first))
         ->assertOk()
         ->assertStreamed();
-    expect($latestContent->streamedContent())->toBe($secondHtml)
-        ->and($priorContent->streamedContent())->toBe($firstHtml)
+    expect($latestContent->streamedContent())->toContain($secondHtml, 'data-capstan-brand="applied"')
+        ->and($priorContent->streamedContent())->toContain($firstHtml, 'data-capstan-brand="applied"')
         ->and($first->fresh()?->only(array_keys($immutable)))->toBe($immutable);
 
     $siblingHtml = '<html><body>sibling private '.Str::random(12).'</body></html>';
@@ -266,7 +266,7 @@ test('page content is signed short lived private streamed and confined to the re
         ->assertHeader('X-Content-Type-Options', 'nosniff')
         ->assertHeader('Referrer-Policy', 'no-referrer')
         ->assertHeaderMissing('Set-Cookie');
-    expect($response->streamedContent())->toBe($html)
+    expect($response->streamedContent())->toContain($html, 'data-capstan-brand="applied"')
         ->and($response->headers->get('Cache-Control'))->toContain('private', 'no-store', 'no-transform')
         ->and($response->headers->get('Content-Security-Policy'))
         ->toContain("default-src 'none'", "connect-src 'none'", 'frame-ancestors https://app.pages.test')

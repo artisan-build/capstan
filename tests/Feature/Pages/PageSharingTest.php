@@ -297,7 +297,7 @@ test('one public viewer and render grant always serves latest then revocation st
         ->assertHeader('X-Content-Type-Options', 'nosniff')
         ->assertHeader('Referrer-Policy', 'no-referrer')
         ->assertHeaderMissing('Set-Cookie');
-    expect($first->streamedContent())->toBe($firstHtml)
+    expect($first->streamedContent())->toContain($firstHtml, 'data-capstan-brand="applied"')
         ->and($first->headers->get('Cache-Control'))->toContain('private', 'no-store', 'no-transform')
         ->and($first->headers->get('Content-Security-Policy'))->toContain("default-src 'none'", "connect-src 'none'");
 
@@ -310,7 +310,7 @@ test('one public viewer and render grant always serves latest then revocation st
         contentType: 'text/html',
     );
     expect($this->get($viewerUrl)->assertOk()->content())->toContain($page->title);
-    expect($this->get($contentUrl)->assertOk()->streamedContent())->toBe($secondHtml);
+    expect($this->get($contentUrl)->assertOk()->streamedContent())->toContain($secondHtml, 'data-capstan-brand="applied"');
 
     $share->forceFill(['revoked_at' => now()])->save();
     $this->get($viewerUrl)->assertNotFound()->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
