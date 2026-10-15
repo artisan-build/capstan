@@ -12,6 +12,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Str;
 use Laravel\Pennant\Feature;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 final class PageExportController extends Controller
 {
@@ -22,7 +23,7 @@ final class PageExportController extends Controller
         string $page,
         ArtifactRenderOrigin $origin,
         PageExporter $exporter,
-    ): Response {
+    ): Response|StreamedResponse {
         if (! Feature::active(Artifacts::class)
             || ! $origin->isConfigured()
             || $request->getHost() === $origin->renderHost()) {
@@ -52,7 +53,9 @@ final class PageExportController extends Controller
             return $this->notFound();
         }
 
-        return response($html, 200, [
+        return response()->stream(static function () use ($html): void {
+            echo $html;
+        }, 200, [
             'Content-Type' => 'text/html; charset=UTF-8',
             'Content-Disposition' => 'attachment; filename="page-'.$ownedPage->id.'.html"',
             'Cache-Control' => 'private, no-store, no-transform',

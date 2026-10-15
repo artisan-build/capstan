@@ -23,6 +23,8 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Laravel\Pennant\Feature;
+use Livewire\Livewire;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 beforeEach(function (): void {
     config([
@@ -382,15 +384,19 @@ test('owner exports the current self-contained html while every other principal 
     );
 
     $guestResponse = $this->get(route('pages.export', ['page' => $page]))->assertNotFound();
+    Livewire::forceAssetInjection();
     $export = $this->actingAsVersioned($owner)->get(route('pages.export', ['page' => $page]))
         ->assertOk()
         ->assertHeader('Content-Type', 'text/html; charset=UTF-8')
         ->assertHeader('Content-Disposition', 'attachment; filename="page-'.$page->id.'.html"')
         ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
-    expect($export->getContent())->toBe($second)
-        ->and($export->getContent())->not->toContain('app.sharing.test')
-        ->and($export->getContent())->not->toContain('render.sharing.test')
-        ->and($export->getContent())->not->toContain('/build/assets/');
+    $exportedHtml = $export->baseResponse instanceof StreamedResponse
+        ? $export->streamedContent()
+        : $export->getContent();
+    expect($exportedHtml)->toBe($second)
+        ->and($exportedHtml)->not->toContain('app.sharing.test')
+        ->and($exportedHtml)->not->toContain('render.sharing.test')
+        ->and($exportedHtml)->not->toContain('/build/assets/');
 
     $foreignResponse = $this->actingAsVersioned($foreign)->get(route('pages.export', ['page' => $page]))->assertNotFound();
     $malformedResponse = $this->actingAsVersioned($owner)->get('/pages/not-a-uuid/export')->assertNotFound();
