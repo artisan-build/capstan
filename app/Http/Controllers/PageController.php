@@ -6,6 +6,7 @@ use App\Features\Artifacts;
 use App\Models\Page;
 use App\Models\PageVersion;
 use App\Support\ArtifactRenderOrigin;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -13,9 +14,12 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Laravel\Pennant\Feature;
 use Symfony\Component\HttpFoundation\StreamedResponse;
+use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 
 class PageController extends Controller
 {
+    public function __construct(private readonly EnsureUserIsAuthenticated $admission) {}
+
     public function show(Request $request, string $page, ArtifactRenderOrigin $origin): Response
     {
         return $this->viewer($request, $page, null, $origin);
@@ -68,6 +72,10 @@ class PageController extends Controller
             return $this->pageNotFound();
         }
 
+        if (! $this->admitted($request)) {
+            return $this->pageNotFound();
+        }
+
         $user = $request->user();
 
         if (! $user instanceof User
@@ -107,5 +115,21 @@ class PageController extends Controller
     private function pageNotFound(): Response
     {
         return response('', 404);
+    }
+
+    private function admitted(Request $request): bool
+    {
+        $marker = response('', 204);
+
+        try {
+            $result = $this->admission->handle(
+                $request,
+                static fn (Request $request): Response => $marker,
+            );
+        } catch (HttpExceptionInterface) {
+            return false;
+        }
+
+        return $result === $marker;
     }
 }

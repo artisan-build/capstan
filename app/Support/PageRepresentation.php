@@ -122,11 +122,11 @@ final readonly class PageRepresentation
             'latest_version' => $version,
             'created_at' => $timestamp,
             'updated_at' => $timestamp,
-            'versions' => [$version],
+            'versions' => array_fill(0, GetPageLimit::MAX, $version),
             'version_count' => PHP_INT_MAX,
             'next_version_cursor' => str_repeat('x', 2048),
             'has_more_versions' => true,
-            'version_limit' => GetPageLimit::DEFAULT,
+            'version_limit' => GetPageLimit::MAX,
             'content' => $content,
         ]]);
     }

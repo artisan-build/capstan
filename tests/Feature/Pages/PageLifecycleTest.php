@@ -6,6 +6,9 @@ use App\Http\Middleware\NoIndexArtifactPaths;
 use App\Models\Page;
 use App\Support\ArtifactRenderOrigin;
 use App\Support\PagePublisher;
+use ArtisanBuild\BuiltForCloud\OffboardedSubject;
+use ArtisanBuild\BuiltForCloud\StandaloneAccess;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
@@ -98,6 +101,22 @@ test('owner sees latest and prior immutable versions while another user sees nei
         ->and($priorContent->streamedContent())->toBe($firstHtml)
         ->and($first->fresh()?->only(array_keys($immutable)))->toBe($immutable);
 
+    $siblingHtml = '<html><body>sibling private '.Str::random(12).'</body></html>';
+    $siblingRecipe = 'Sibling recipe '.Str::random(12);
+    $sibling = ownedPage($alice, $siblingHtml, $siblingRecipe, 'Sibling page '.Str::random(8));
+    $siblingVersion = $sibling->latestVersion()->firstOrFail();
+    $wrongParent = $this->actingAsVersioned($alice)
+        ->get(route('pages.versions.show', ['page' => $page, 'version' => $siblingVersion]))
+        ->assertNotFound();
+    $missingVersion = $this->actingAsVersioned($alice)
+        ->get(route('pages.versions.show', ['page' => $page, 'version' => Str::uuid()]))
+        ->assertNotFound();
+    expect($wrongParent->getContent())->toBe($missingVersion->getContent());
+
+    foreach ([$sibling->id, $siblingVersion->id, $siblingHtml, $siblingRecipe] as $privateValue) {
+        expect($wrongParent->getContent())->not->toContain($privateValue);
+    }
+
     foreach ([
         route('pages.show', ['page' => $page]),
         route('pages.versions.show', ['page' => $page, 'version' => $first]),
@@ -163,6 +182,66 @@ test('guest viewer lookups are opaque before page or version queries', function 
     $this->actingAsVersioned($owner)
         ->get(route('pages.versions.show', ['page' => $page->id, 'version' => 'not-a-uuid']))
         ->assertNotFound();
+
+    expect($privateLookups)->toBe([]);
+});
+
+test('viewer preserves authoritative account admission behind its opaque boundary', function (): void {
+    $healthy = capstanUser(['name' => 'Healthy viewer']);
+    $stale = capstanUser(['name' => 'Stale viewer']);
+    $inactive = capstanUser(['name' => 'Inactive viewer', 'status' => 'inactive']);
+    $offboarded = capstanUser(['name' => 'Offboarded viewer']);
+    $healthyPage = ownedPage($healthy, '<html><body>healthy private</body></html>', 'Healthy recipe', 'Healthy page');
+    $stalePage = ownedPage($stale, '<html><body>stale private</body></html>', 'Stale recipe', 'Stale page');
+    $inactivePage = ownedPage($inactive, '<html><body>inactive private</body></html>', 'Inactive recipe', 'Inactive page');
+    $offboardedPage = ownedPage($offboarded, '<html><body>offboarded private</body></html>', 'Offboarded recipe', 'Offboarded page');
+    OffboardedSubject::query()->create([
+        'subject_type' => SubjectType::UserPrincipal,
+        'subject_ref' => 'capstan-user:'.$offboarded->getKey(),
+        'user_id' => (string) $offboarded->getKey(),
+        'offboarded_at' => now(),
+    ]);
+    $privateLookups = [];
+    DB::listen(function ($query) use (&$privateLookups): void {
+        if (str_contains($query->sql, 'from "pages"') || str_contains($query->sql, 'from "page_versions"')) {
+            $privateLookups[] = $query->sql;
+        }
+    });
+
+    $healthyResponse = $this->actingAsVersioned($healthy)
+        ->get(route('pages.show', ['page' => $healthyPage]))
+        ->assertOk()
+        ->assertSee('Healthy page');
+    expect($healthyResponse->getContent())
+        ->toContain("https://render.pages.test/pages/{$healthyPage->id}/versions/")
+        ->toContain('signature=', 'expires=');
+    $privateLookups = [];
+
+    $staleResponse = $this->actingAs($stale)
+        ->withSession([StandaloneAccess::SESSION_VERSION_KEY => $stale->auth_session_version + 1])
+        ->get(route('pages.show', ['page' => $stalePage]))
+        ->assertNotFound()
+        ->assertSessionMissing(StandaloneAccess::SESSION_VERSION_KEY);
+    $inactiveResponse = $this->actingAsVersioned($inactive)
+        ->get(route('pages.show', ['page' => $inactivePage]))
+        ->assertNotFound()
+        ->assertSessionMissing(StandaloneAccess::SESSION_VERSION_KEY);
+    $offboardedResponse = $this->actingAsVersioned($offboarded)
+        ->get(route('pages.show', ['page' => $offboardedPage]))
+        ->assertNotFound()
+        ->assertSessionMissing(StandaloneAccess::SESSION_VERSION_KEY);
+
+    foreach ([
+        [$staleResponse, $stalePage, 'stale private', 'Stale recipe', 'Stale page'],
+        [$inactiveResponse, $inactivePage, 'inactive private', 'Inactive recipe', 'Inactive page'],
+        [$offboardedResponse, $offboardedPage, 'offboarded private', 'Offboarded recipe', 'Offboarded page'],
+    ] as [$response, $page, $html, $recipe, $title]) {
+        expect($response->getContent())->toBe('');
+
+        foreach ([$page->id, $html, $recipe, $title, 'signature=', 'expires='] as $privateValue) {
+            expect($response->getContent())->not->toContain($privateValue);
+        }
+    }
 
     expect($privateLookups)->toBe([]);
 });

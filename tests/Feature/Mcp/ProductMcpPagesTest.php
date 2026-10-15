@@ -140,6 +140,7 @@ test('publish and update are durable idempotent and retain immutable version met
     $title = 'Published '.Str::random(8);
     $firstRecipe = 'Use source one '.Str::random(8);
     $secondRecipe = 'Use source two '.Str::random(8);
+    $secondDescription = 'Description v2 '.Str::random(8);
     $firstHtml = '<html><body>first '.Str::random(10).'</body></html>';
     $secondHtml = '<html><body>second '.Str::random(10).'</body></html>';
     $publish = publishPageArguments('publish-once', $title, $firstRecipe, $firstHtml);
@@ -175,7 +176,7 @@ test('publish and update are durable idempotent and retain immutable version met
         'idempotency_key' => 'update-once',
         'page_id' => $page->id,
         'title' => $title.' v2',
-        'description' => '',
+        'description' => $secondDescription,
         'recipe' => $secondRecipe,
         'layout' => PageLayout::Dashboard->value,
         'content' => $secondHtml,
@@ -189,7 +190,7 @@ test('publish and update are durable idempotent and retain immutable version met
     expect($updated['outcome'])->toBe('accepted')
         ->and($updateReplay['outcome'])->toBe('already_accepted')
         ->and($page->title)->toBe($title.' v2')
-        ->and($page->description)->toBe('')
+        ->and($page->description)->toBe($secondDescription)
         ->and($page->refresh_recipe)->toBe($secondRecipe)
         ->and($page->layout)->toBe(PageLayout::Dashboard)
         ->and($page->version_count)->toBe(2)
@@ -225,7 +226,7 @@ test('publish and update are durable idempotent and retain immutable version met
     expect($carried['outcome'])->toBe('accepted')
         ->and($carriedReplay['outcome'])->toBe('already_accepted')
         ->and($page->title)->toBe($title.' v2')
-        ->and($page->description)->toBe('')
+        ->and($page->description)->toBe($secondDescription)
         ->and($page->refresh_recipe)->toBe($secondRecipe)
         ->and($page->layout)->toBe(PageLayout::Dashboard)
         ->and($third->version_number)->toBe(3)
@@ -509,9 +510,34 @@ test('page writes reject real response overflow before durable state and accept 
         $largeHtml,
     ), $token));
     $page = Page::query()->sole();
-    expect($accepted['outcome'])->toBe('accepted')
-        ->and(data_get(pagesMcpStructured(pagesMcpCall('get_page', ['page_id' => $page->id], $token, '/mcp')), 'page.content'))
-        ->toBe($largeHtml);
+    expect($accepted['outcome'])->toBe('accepted');
+
+    foreach (range(2, 24) as $versionNumber) {
+        $page = resolve(PagePublisher::class)->update(
+            pageId: $page->id,
+            ownerUserId: (string) $owner->getKey(),
+            versionId: (string) Str::uuid(),
+            replacements: [],
+            content: '<html><body>boundary filler '.$versionNumber.'</body></html>',
+            contentType: 'text/html',
+        );
+    }
+
+    $boundaryUpdate = pagesMcpStructured(pagesMcpCall('update_page', [
+        'idempotency_key' => 'large-boundary-v25',
+        'page_id' => $page->id,
+        'content' => $largeHtml,
+        'content_type' => 'text/html',
+    ], $token));
+    $boundaryDetail = pagesMcpStructured(pagesMcpCall('get_page', [
+        'page_id' => $page->id,
+        'version_limit' => 25,
+    ], $token, '/mcp'));
+    expect($boundaryUpdate['outcome'])->toBe('accepted')
+        ->and(data_get($boundaryDetail, 'page.content'))->toBe($largeHtml)
+        ->and(data_get($boundaryDetail, 'page.version_count'))->toBe(25)
+        ->and(data_get($boundaryDetail, 'page.versions'))->toHaveCount(25)
+        ->and(data_get($boundaryDetail, 'page.has_more_versions'))->toBeFalse();
 
     $counts = [
         PageVersion::query()->count(),
