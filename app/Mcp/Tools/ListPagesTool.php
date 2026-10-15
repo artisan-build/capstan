@@ -2,6 +2,7 @@
 
 namespace App\Mcp\Tools;
 
+use App\Enums\PageShareKind;
 use App\Features\Artifacts;
 use App\Mcp\OwnerSubjectResolver;
 use App\Mcp\SignedCursor;
@@ -26,7 +27,7 @@ use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 use Laravel\Pennant\Feature;
 
 #[Name('list_pages')]
-#[Description('Lists only the authenticated principal owned private pages.')]
+#[Description('Lists pages owned by or internally shared with the authenticated principal.')]
 #[IsReadOnly]
 #[ToolClassification(Classification::Metadata)]
 #[ToolEffect(Effect::Read)]
@@ -64,7 +65,7 @@ final class ListPagesTool extends CapstanTool
         $owner = $owners->resolve();
         $limit = (int) ($validated['limit'] ?? 10);
         $actorBinding = $owner->type.':'.$owner->ref;
-        $queryBinding = hash('sha256', 'list_pages:v1:'.$limit);
+        $queryBinding = hash('sha256', 'list_pages:v2:'.$limit);
         $after = isset($validated['cursor'])
             ? $cursors->decode($validated['cursor'], $actorBinding, $queryBinding)
             : null;
@@ -75,7 +76,17 @@ final class ListPagesTool extends CapstanTool
         }
 
         $candidates = Page::query()
-            ->where('owner_user_id', $owner->actorId)
+            ->where(function ($query) use ($owner): void {
+                $query->where('owner_user_id', $owner->actorId)
+                    ->orWhereHas('shares', function ($query) use ($owner): void {
+                        $query->whereNull('revoked_at')
+                            ->where(function ($query): void {
+                                $query->whereNull('expires_at')->orWhere('expires_at', '>', now());
+                            })
+                            ->where('kind', PageShareKind::Internal->value)
+                            ->where('internal_recipient_user_id', $owner->actorId);
+                    });
+            })
             ->when($lastId !== null, fn ($query) => $query->where('id', '>', $lastId))
             ->orderBy('id')
             ->limit($limit + 1)

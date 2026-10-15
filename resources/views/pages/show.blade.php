@@ -15,21 +15,95 @@
                     @if ($page->description !== null && $page->description !== '')
                         <p class="mt-1 text-sm text-neutral-300">{{ $page->description }}</p>
                     @endif
-                    <p class="mt-2 whitespace-pre-wrap text-xs text-neutral-400">{{ $selectedVersion->refresh_recipe }}</p>
+                    @if ($isOwner)
+                        <p class="mt-2 whitespace-pre-wrap text-xs text-neutral-400">{{ $selectedVersion->refresh_recipe }}</p>
+                    @endif
                 </div>
-                <nav aria-label="Page versions" class="flex flex-wrap gap-2">
-                    @foreach ($page->versions as $version)
-                        <a
-                            href="{{ route('pages.versions.show', ['page' => $page, 'version' => $version]) }}"
-                            @class([
-                                'rounded px-2 py-1 text-sm',
-                                'bg-white text-neutral-950' => $version->is($selectedVersion),
-                                'bg-neutral-800 text-neutral-100' => ! $version->is($selectedVersion),
-                            ])
-                        >Version {{ $version->version_number }}</a>
-                    @endforeach
-                </nav>
+                @if ($isOwner)
+                    <nav aria-label="Page versions" class="flex flex-wrap gap-2">
+                        @foreach ($page->versions as $version)
+                            <a
+                                href="{{ route('pages.versions.show', ['page' => $page, 'version' => $version]) }}"
+                                @class([
+                                    'rounded px-2 py-1 text-sm',
+                                    'bg-white text-neutral-950' => $version->is($selectedVersion),
+                                    'bg-neutral-800 text-neutral-100' => ! $version->is($selectedVersion),
+                                ])
+                            >Version {{ $version->version_number }}</a>
+                        @endforeach
+                    </nav>
+                @endif
             </header>
+
+            @if ($isOwner)
+                <section data-testid="page-sharing" id="page-sharing" class="rounded-xl border border-neutral-800 bg-neutral-900 p-4">
+                    <div class="grid gap-4 lg:grid-cols-3">
+                        <form method="POST" action="{{ route('pages.shares.store', ['page' => $page]) }}" class="space-y-2">
+                            @csrf
+                            <input type="hidden" name="kind" value="internal">
+                            <label for="internal-email" class="block text-sm">Internal user email</label>
+                            <input id="internal-email" type="email" name="internal_email" required class="w-full rounded bg-neutral-800 px-3 py-2">
+                            <button type="submit" class="rounded bg-white px-3 py-2 text-sm text-neutral-950">Share internally</button>
+                        </form>
+                        <form method="POST" action="{{ route('pages.shares.store', ['page' => $page]) }}" class="space-y-2">
+                            @csrf
+                            <input type="hidden" name="kind" value="external">
+                            <label for="external-email" class="block text-sm">External recipient email</label>
+                            <input id="external-email" type="email" name="recipient_email" required class="w-full rounded bg-neutral-800 px-3 py-2">
+                            <label for="external-expiry" class="block text-sm">Expiry (optional)</label>
+                            <input id="external-expiry" type="datetime-local" name="expires_at" class="w-full rounded bg-neutral-800 px-3 py-2">
+                            <button type="submit" class="rounded bg-white px-3 py-2 text-sm text-neutral-950">Email share</button>
+                        </form>
+                        <form method="POST" action="{{ route('pages.shares.store', ['page' => $page]) }}" class="space-y-2">
+                            @csrf
+                            <input type="hidden" name="kind" value="link">
+                            <label for="link-expiry" class="block text-sm">Link expiry (optional)</label>
+                            <input id="link-expiry" type="datetime-local" name="expires_at" class="w-full rounded bg-neutral-800 px-3 py-2">
+                            <button type="submit" class="rounded bg-white px-3 py-2 text-sm text-neutral-950">Create link</button>
+                        </form>
+                    </div>
+
+                    <div data-testid="page-shares" class="mt-4 space-y-2">
+                        @foreach ($shares as $share)
+                            <article data-testid="page-share-record" class="rounded border border-neutral-700 p-3 text-sm">
+                                <p>{{ $share->kind->value }}</p>
+                                @if ($share->internalRecipient !== null)
+                                    <p>{{ $share->internalRecipient->email }}</p>
+                                @elseif ($share->recipient_email !== null)
+                                    <p>{{ $share->recipient_email }}</p>
+                                @endif
+                                @if ($share->expires_at !== null)
+                                    <time datetime="{{ $share->expires_at->toIso8601String() }}">{{ $share->expires_at->toIso8601String() }}</time>
+                                @endif
+                                <p>
+                                    @if ($share->revoked_at !== null)
+                                        revoked
+                                    @elseif ($share->expires_at !== null && $share->expires_at->isPast())
+                                        expired
+                                    @else
+                                        active
+                                    @endif
+                                </p>
+                                @if ($shareUrls->get($share->id) !== null)
+                                    <a href="{{ $shareUrls->get($share->id) }}" rel="nofollow">{{ $shareUrls->get($share->id) }}</a>
+                                @endif
+                                @if ($share->revoked_at === null)
+                                    <form method="POST" action="{{ route('pages.shares.destroy', ['page' => $page, 'share' => $share]) }}">
+                                        @csrf
+                                        @method('DELETE')
+                                        <button type="submit" class="rounded bg-neutral-700 px-2 py-1">Revoke</button>
+                                    </form>
+                                @endif
+                            </article>
+                        @endforeach
+                        {{ $shares->links() }}
+                    </div>
+                </section>
+
+                <section data-testid="page-export">
+                    <a href="{{ route('pages.export', ['page' => $page]) }}" class="inline-flex rounded bg-neutral-800 px-3 py-2 text-sm">Export HTML</a>
+                </section>
+            @endif
 
             <iframe
                 title="{{ $page->title }} version {{ $selectedVersion->version_number }}"

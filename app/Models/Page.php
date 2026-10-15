@@ -23,6 +23,7 @@ use Illuminate\Support\Carbon;
  * @property Carbon $updated_at
  * @property-read PageVersion|null $latestVersion
  * @property-read Collection<int, PageVersion> $versions
+ * @property-read Collection<int, PageShare> $shares
  *
  * @mixin IdeHelperPage
  */
@@ -58,5 +59,11 @@ class Page extends Model
     public function versions(): HasMany
     {
         return $this->hasMany(PageVersion::class)->orderBy('version_number');
+    }
+
+    /** @return HasMany<PageShare, $this> */
+    public function shares(): HasMany
+    {
+        return $this->hasMany(PageShare::class)->latest();
     }
 }

@@ -1,8 +1,10 @@
 <?php
 
 use App\Enums\PageLayout;
+use App\Enums\PageShareKind;
 use App\Features\Artifacts;
 use App\Models\Page;
+use App\Models\PageShare;
 use App\Models\PageVersion;
 use App\Support\PagePublisher;
 use ArtisanBuild\BuiltForCloud\Credential;
@@ -295,6 +297,81 @@ test('list get and update disclose no private page data to another principal', f
         ->and(DB::table('mcp_write_claims')->count())->toBe($claims)
         ->and(DB::table('mcp_write_effects')->count())->toBe($effects)
         ->and(Storage::disk()->allFiles('artifacts'))->toHaveCount(1);
+});
+
+test('internal grants paginate through list and allow get but never update then disappear on revoke', function (): void {
+    $alice = capstanUser();
+    $bob = capstanUser();
+    $aliceToken = pagesMcpToken($alice);
+    $bobToken = pagesMcpToken($bob);
+    $publisher = resolve(PagePublisher::class);
+    $owned = $publisher->publish(
+        pageId: (string) Str::uuid(),
+        ownerUserId: (string) $alice->getKey(),
+        title: 'Alice owned '.Str::random(8),
+        description: null,
+        refreshRecipe: 'Alice owned recipe',
+        layout: PageLayout::Plain,
+        content: '<html><body>Alice owned content</body></html>',
+        contentType: 'text/html',
+    );
+    $sharedPages = collect(range(1, 2))->map(fn (int $number): Page => $publisher->publish(
+        pageId: (string) Str::uuid(),
+        ownerUserId: (string) $bob->getKey(),
+        title: 'Bob shared '.$number.' '.Str::random(8),
+        description: 'Shared description '.$number,
+        refreshRecipe: 'Shared recipe '.$number,
+        layout: PageLayout::Plain,
+        content: '<html><body>Shared content '.$number.'</body></html>',
+        contentType: 'text/html',
+    ));
+    $shares = $sharedPages->map(fn (Page $page): PageShare => PageShare::query()->create([
+        'page_id' => $page->id,
+        'created_by_user_id' => (string) $bob->getKey(),
+        'kind' => PageShareKind::Internal,
+        'internal_recipient_user_id' => (string) $alice->getKey(),
+    ]));
+    $seen = [];
+    $cursor = null;
+
+    do {
+        $arguments = ['limit' => 1];
+        if ($cursor !== null) {
+            $arguments['cursor'] = $cursor;
+        }
+        $result = pagesMcpStructured(pagesMcpCall('list_pages', $arguments, $aliceToken, '/mcp'));
+        $seen = [...$seen, ...collect($result['items'])->pluck('id')->all()];
+        $cursor = $result['next_cursor'];
+    } while ($cursor !== null);
+
+    $expected = [$owned->id, ...$sharedPages->pluck('id')->all()];
+    sort($expected);
+    expect($seen)->toBe($expected)->and(array_unique($seen))->toHaveCount(3);
+
+    $shared = $sharedPages->firstOrFail();
+    $detail = pagesMcpStructured(pagesMcpCall('get_page', ['page_id' => $shared->id], $aliceToken, '/mcp'));
+    expect(data_get($detail, 'page.recipe'))->toBe('Shared recipe 1')
+        ->and(data_get($detail, 'page.content'))->toBe('<html><body>Shared content 1</body></html>');
+
+    $versionCount = PageVersion::query()->count();
+    expect(pagesMcpStructured(pagesMcpCall('update_page', [
+        'idempotency_key' => 'internal-share-cannot-update',
+        'page_id' => $shared->id,
+        'content' => '<html><body>forbidden update</body></html>',
+        'content_type' => 'text/html',
+    ], $aliceToken)))->toBe(['outcome' => 'refused', 'reason' => 'page_not_found'])
+        ->and(PageVersion::query()->count())->toBe($versionCount);
+
+    $shares->firstOrFail()->forceFill(['revoked_at' => now()])->save();
+    $afterList = pagesMcpStructured(pagesMcpCall('list_pages', ['limit' => 25], $aliceToken, '/mcp'));
+    $afterGet = pagesMcpCall('get_page', ['page_id' => $shared->id], $aliceToken, '/mcp')->assertOk();
+    expect(collect($afterList['items'])->pluck('id')->all())->not->toContain($shared->id);
+    $afterGet->assertJsonPath('result.isError', true)->assertJsonPath('result.content.0.text', 'Page not found.');
+
+    expect(data_get(pagesMcpStructured(pagesMcpCall('get_page', ['page_id' => $sharedPages->last()->id], $aliceToken, '/mcp')), 'page.id'))
+        ->toBe($sharedPages->last()->id);
+    expect(data_get(pagesMcpStructured(pagesMcpCall('get_page', ['page_id' => $shared->id], $bobToken, '/mcp')), 'page.id'))
+        ->toBe($shared->id);
 });
 
 test('list pages paginates every owned compact item with actor and query bound cursors', function (): void {

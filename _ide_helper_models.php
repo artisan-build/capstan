@@ -98,6 +98,8 @@ namespace App\Models{
  * @property Carbon $updated_at
  * @property-read PageVersion|null $latestVersion
  * @property-read Collection<int, PageVersion> $versions
+ * @property-read Collection<int, PageShare> $shares
+ * @property-read int|null $shares_count
  * @property-read int|null $versions_count
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Page newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Page newQuery()
@@ -106,6 +108,30 @@ namespace App\Models{
  */
 	#[\AllowDynamicProperties]
 	class IdeHelperPage {}
+}
+
+namespace App\Models{
+/**
+ * @property string $id
+ * @property string $page_id
+ * @property string $created_by_user_id
+ * @property PageShareKind $kind
+ * @property string|null $internal_recipient_user_id
+ * @property string|null $recipient_email
+ * @property Carbon|null $expires_at
+ * @property Carbon|null $revoked_at
+ * @property Carbon $created_at
+ * @property Carbon $updated_at
+ * @property-read Page $page
+ * @property-read User|null $internalRecipient
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|PageShare active()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|PageShare newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|PageShare newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|PageShare query()
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperPageShare {}
 }
 
 namespace App\Models{
