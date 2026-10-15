@@ -6,9 +6,9 @@ use App\Models\Page;
 use App\Models\PageVersion;
 use Illuminate\Support\Facades\Storage;
 
-final class PageRepresentation
+final readonly class PageRepresentation
 {
-    public function __construct(private readonly ArtifactRenderOrigin $origin) {}
+    public function __construct(private ArtifactRenderOrigin $origin) {}
 
     /** @return array<string, mixed> */
     public function summary(Page $page): array
