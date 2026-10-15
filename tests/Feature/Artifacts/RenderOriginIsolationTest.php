@@ -38,15 +38,25 @@ function isolationArtifact(string $content, ArtifactVisibility $visibility = Art
     ]);
 }
 
-test('the app is unreachable on the render host', function (): void {
-    $this->get('https://render.test/')->assertNotFound();
-    $this->get('https://render.test/dashboard')->assertNotFound();
-    $this->get('https://render.test/login')->assertNotFound();
-    $this->post('https://render.test/register')->assertNotFound();
-    $this->get('https://render.test/cli/authorize')->assertNotFound();
-    $this->get('https://render.test/settings/profile')->assertNotFound();
-    $this->post('https://render.test'.route('default-livewire.update', absolute: false))->assertNotFound();
-    $this->get('https://render.test/artifacts')->assertNotFound();
+test('the app is unreachable with empty noindex responses on the render host', function (): void {
+    $responses = [
+        $this->get('https://render.test/'),
+        $this->get('https://render.test/dashboard'),
+        $this->get('https://render.test/login'),
+        $this->post('https://render.test/register'),
+        $this->get('https://render.test/cli/authorize'),
+        $this->get('https://render.test/settings/profile'),
+        $this->post('https://render.test'.route('default-livewire.update', absolute: false)),
+        $this->get('https://render.test/artifacts'),
+    ];
+
+    foreach ($responses as $response) {
+        $response->assertNotFound()
+            ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive')
+            ->assertHeaderMissing('Set-Cookie');
+        expect($response->getContent())->toBe('')
+            ->and($response->headers->getCookies())->toBe([]);
+    }
 });
 
 test('the health probe responds on both hosts', function (): void {

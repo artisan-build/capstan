@@ -59,6 +59,27 @@ function libraryShare(Page $page, User $owner, PageShareKind $kind, array $attri
     ], $attributes));
 }
 
+function libraryRow(string $html, string $testId, string $title): string
+{
+    $matched = preg_match(
+        '/<article[^>]*data-testid="'.preg_quote($testId, '/').'"[^>]*>'
+            .'(?:(?!<\/article>).)*'.preg_quote($title, '/').'(?:(?!<\/article>).)*<\/article>/s',
+        $html,
+        $matches,
+    );
+    expect($matched)->toBe(1);
+
+    return $matches[0];
+}
+
+/** @return list<string> */
+function pagesNavigationTags(string $html): array
+{
+    preg_match_all('/<a\b[^>]*data-testid="pages-navigation"[^>]*>/s', $html, $matches);
+
+    return $matches[0];
+}
+
 test('library separates owned and active internal pages without leaking private metadata', function (): void {
     $this->travelTo('2026-10-16T12:00:00Z');
     $viewer = capstanUser();
@@ -123,12 +144,16 @@ test('library separates owned and active internal pages without leaking private 
         ->assertDontSee($shared->latestVersion->storage_key)
         ->assertDontSee($shared->latestVersion->content_hash);
 
+    $inactiveOwnerRow = libraryRow($response->content(), 'pages-my-row', $inactiveOwnerTitle);
+    $sharedOwnerRow = libraryRow($response->content(), 'pages-my-row', $sharedOwnerTitle);
+    $sharedRecipientRow = libraryRow($response->content(), 'pages-shared-row', $sharedTitle);
+
     expect(substr_count($response->content(), 'data-testid="pages-my-row"'))->toBe(3)
         ->and(substr_count($response->content(), 'data-testid="pages-shared-row"'))->toBe(1)
         ->and(substr_count($response->content(), $sharedTitle))->toBe(1)
-        ->and($response->content())->toMatch('/'.preg_quote($inactiveOwnerTitle, '/').'.*Private/s')
-        ->and($response->content())->toMatch('/'.preg_quote($sharedOwnerTitle, '/').'.*Shared/s')
-        ->and($response->content())->toMatch('/'.preg_quote($sharedTitle, '/').'.*Shared with you/s');
+        ->and($inactiveOwnerRow)->toMatch('/>\s*Private\s*</')
+        ->and($sharedOwnerRow)->toMatch('/>\s*Shared\s*</')
+        ->and($sharedRecipientRow)->toMatch('/>\s*Shared with you\s*</');
 });
 
 test('owned and shared lists paginate independently with deterministic tie ordering', function (): void {
@@ -234,8 +259,15 @@ test('pages navigation is feature gated and current in sidebar and header varian
         ->assertOk()
         ->assertSee('data-testid="pages-navigation"', false)
         ->assertSee('href="'.route('pages.index').'"', false);
-    expect(substr_count($sidebar->content(), 'data-testid="pages-navigation"'))->toBe(1)
-        ->and($sidebar->content())->toContain('data-current');
+    $sidebarPagesTags = pagesNavigationTags($sidebar->content());
+    expect($sidebarPagesTags)->toHaveCount(1)
+        ->and($sidebarPagesTags[0])->toContain('data-current="data-current"');
+
+    $dashboardPagesTags = pagesNavigationTags(
+        $this->actingAsVersioned($user)->get(route('bfc.dashboard'))->assertOk()->content(),
+    );
+    expect($dashboardPagesTags)->toHaveCount(1)
+        ->and($dashboardPagesTags[0])->not->toContain('data-current="data-current"');
 
     Route::get('/_tests/pages-header', fn () => view('layouts.app.header', [
         'slot' => new HtmlString('<main data-testid="header-test-body"></main>'),
@@ -243,8 +275,11 @@ test('pages navigation is feature gated and current in sidebar and header varian
     $header = $this->actingAsVersioned($user)->get('/_tests/pages-header')
         ->assertOk()
         ->assertSee('data-testid="header-test-body"', false);
-    expect(substr_count($header->content(), 'data-testid="pages-navigation"'))->toBe(2)
-        ->and(substr_count($header->content(), 'data-current'))->toBeGreaterThanOrEqual(2);
+    $headerPagesTags = pagesNavigationTags($header->content());
+    expect($headerPagesTags)->toHaveCount(2);
+    foreach ($headerPagesTags as $tag) {
+        expect($tag)->toContain('data-current="data-current"');
+    }
 
     config(['capstan.features.artifacts' => false]);
     Feature::flushCache();
@@ -398,8 +433,20 @@ test('only the owner can delete and deletion cascades access without deleting sh
 
     foreach ([...$appResponses, ...$renderResponses] as $response) {
         $response->assertNotFound();
-        expect($response->getContent())->not->toContain($title, $recipe, $storageKey, $currentVersion->content_hash);
+        foreach ([$title, $recipe, $storageKey, $currentVersion->content_hash] as $privateValue) {
+            expect($response->getContent())->not->toContain($privateValue);
+        }
     }
+});
+
+test('unexpected library failures remain noindex', function (): void {
+    config(['app.debug' => false]);
+    Route::get('/pages', fn () => throw new RuntimeException('Test-created library failure'))
+        ->middleware('capstan.noindex_artifacts');
+
+    $this->get('https://app.library.test/pages')
+        ->assertServerError()
+        ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
 });
 
 test('delete rejects unavailable principals malformed ids and render-host requests without private detail', function (): void {
