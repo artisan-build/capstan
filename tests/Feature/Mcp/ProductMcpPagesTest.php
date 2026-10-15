@@ -4,6 +4,7 @@ use App\Enums\PageLayout;
 use App\Features\Artifacts;
 use App\Models\Page;
 use App\Models\PageVersion;
+use App\Support\PagePublisher;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
@@ -70,6 +71,21 @@ function pagesMcpStructured(TestResponse $response): array
     return $structured;
 }
 
+function pagesMcpError(TestResponse $response): string
+{
+    if ($response->status() === 200) {
+        $response->assertJsonPath('result.isError', true);
+        $message = $response->json('result.content.0.text');
+    } else {
+        $response->assertBadRequest();
+        $message = $response->json('error.message');
+    }
+
+    expect($message)->toBeString();
+
+    return $message;
+}
+
 /** @return array<string, mixed> */
 function publishPageArguments(string $key, string $title, string $recipe, string $html): array
 {
@@ -108,7 +124,10 @@ test('advertises the four exact page tools through their effect doors', function
     ])->and(data_get($write->get('publish_page'), '_meta.effect'))->toBe('write')
         ->and(data_get($write->get('update_page'), 'inputSchema.additionalProperties'))->toBeFalse()
         ->and(data_get($read->get('list_pages'), '_meta.effect'))->toBe('read')
-        ->and(data_get($read->get('get_page'), '_meta.classification'))->toBe('content');
+        ->and(data_get($read->get('get_page'), '_meta.classification'))->toBe('content')
+        ->and(data_get($write->get('publish_page'), 'inputSchema.properties.layout.default'))->toBeNull()
+        ->and(data_get($read->get('list_pages'), 'inputSchema.properties.limit.default'))->toBe(10)
+        ->and(data_get($read->get('get_page'), 'inputSchema.properties.version_limit.default'))->toBe(10);
 
     pagesMcpCall('publish_page', (object) [], $token, '/mcp')
         ->assertBadRequest()
@@ -191,10 +210,40 @@ test('publish and update are durable idempotent and retain immutable version met
         ->and(DB::table('mcp_write_claims')->count())->toBe(2)
         ->and(DB::table('mcp_write_effects')->count())->toBe(2);
 
+    $thirdHtml = '<html><body>third carry-forward '.Str::random(10).'</body></html>';
+    $carryUpdate = [
+        'idempotency_key' => 'update-carry-forward',
+        'page_id' => $page->id,
+        'content' => $thirdHtml,
+        'content_type' => 'text/html',
+    ];
+    $carried = pagesMcpStructured(pagesMcpCall('update_page', $carryUpdate, $token));
+    $carriedReplay = pagesMcpStructured(pagesMcpCall('update_page', $carryUpdate, $token));
+    $page->refresh();
+    $third = $page->latestVersion()->firstOrFail();
+
+    expect($carried['outcome'])->toBe('accepted')
+        ->and($carriedReplay['outcome'])->toBe('already_accepted')
+        ->and($page->title)->toBe($title.' v2')
+        ->and($page->description)->toBe('')
+        ->and($page->refresh_recipe)->toBe($secondRecipe)
+        ->and($page->layout)->toBe(PageLayout::Dashboard)
+        ->and($third->version_number)->toBe(3)
+        ->and($third->refresh_recipe)->toBe($secondRecipe)
+        ->and($third->layout)->toBe(PageLayout::Dashboard)
+        ->and(Storage::disk()->get($third->storage_key))->toBe($thirdHtml)
+        ->and(Page::query()->count())->toBe(1)
+        ->and(PageVersion::query()->count())->toBe(3)
+        ->and(DB::table('mcp_write_claims')->count())->toBe(3)
+        ->and(DB::table('mcp_write_effects')->count())->toBe(3)
+        ->and(Storage::disk()->allFiles('artifacts'))->toHaveCount(3);
+
     $detail = pagesMcpStructured(pagesMcpCall('get_page', ['page_id' => $page->id], $token, '/mcp'));
-    expect(data_get($detail, 'page.content'))->toBe($secondHtml)
-        ->and(collect(data_get($detail, 'page.versions'))->pluck('number')->all())->toBe([1, 2])
-        ->and(collect(data_get($detail, 'page.versions'))->pluck('recipe')->all())->toBe([$firstRecipe, $secondRecipe]);
+    expect(data_get($detail, 'page.content'))->toBe($thirdHtml)
+        ->and(data_get($detail, 'page.recipe'))->toBe($secondRecipe)
+        ->and(data_get($detail, 'page.version_count'))->toBe(3)
+        ->and(collect(data_get($detail, 'page.versions'))->pluck('number')->all())->toBe([1, 2, 3])
+        ->and(collect(data_get($detail, 'page.versions'))->every(fn (array $version): bool => ! array_key_exists('recipe', $version)))->toBeTrue();
 });
 
 test('list get and update disclose no private page data to another principal', function (): void {
@@ -213,9 +262,11 @@ test('list get and update disclose no private page data to another principal', f
     $aliceList = pagesMcpStructured(pagesMcpCall('list_pages', (object) [], $aliceToken, '/mcp'));
     $aliceGet = pagesMcpStructured(pagesMcpCall('get_page', ['page_id' => $page->id], $aliceToken, '/mcp'));
     expect(data_get($aliceList, 'items.0.id'))->toBe($page->id)
+        ->and($aliceList['limit'])->toBe(10)
+        ->and($aliceList['has_more'])->toBeFalse()
         ->and(data_get($aliceGet, 'page.content'))->toBe($html)
         ->and(data_get($aliceGet, 'page.recipe'))->toBe($recipe)
-        ->and(data_get($aliceGet, 'page.versions.0.recipe'))->toBe($recipe);
+        ->and(data_get($aliceGet, 'page.version_limit'))->toBe(10);
 
     $bobList = pagesMcpCall('list_pages', (object) [], $bobToken, '/mcp')->assertOk();
     $bobGet = pagesMcpCall('get_page', ['page_id' => $page->id], $bobToken, '/mcp')->assertOk();
@@ -234,13 +285,258 @@ test('list get and update disclose no private page data to another principal', f
     ]);
 
     foreach ([$bobList, $bobGet, $foreignUpdate] as $response) {
-        expect($response->getContent())->not->toContain($page->id, $title, $recipe, $html);
+        foreach ([$page->id, $title, $recipe, $html] as $privateValue) {
+            expect($response->getContent())->not->toContain($privateValue);
+        }
     }
 
     expect(PageVersion::query()->count())->toBe(1)
         ->and(DB::table('mcp_write_claims')->count())->toBe($claims)
         ->and(DB::table('mcp_write_effects')->count())->toBe($effects)
         ->and(Storage::disk()->allFiles('artifacts'))->toHaveCount(1);
+});
+
+test('list pages paginates every owned compact item with actor and query bound cursors', function (): void {
+    $alice = capstanUser();
+    $bob = capstanUser();
+    $aliceToken = pagesMcpToken($alice);
+    $bobToken = pagesMcpToken($bob);
+    $publisher = resolve(PagePublisher::class);
+    $ownedIds = [];
+
+    foreach (range(1, 7) as $index) {
+        $page = $publisher->publish(
+            pageId: (string) Str::uuid(),
+            ownerUserId: (string) $alice->getKey(),
+            title: 'Owned list page '.$index,
+            description: str_repeat('description-'.$index, 100),
+            refreshRecipe: str_repeat('recipe-'.$index, 200),
+            layout: PageLayout::Plain,
+            content: '<html><body>Owned '.$index.'</body></html>',
+            contentType: 'text/html',
+        );
+        $ownedIds[] = $page->id;
+    }
+
+    $foreign = $publisher->publish(
+        pageId: (string) Str::uuid(),
+        ownerUserId: (string) $bob->getKey(),
+        title: 'Foreign list page',
+        description: 'Foreign description',
+        refreshRecipe: 'Foreign recipe',
+        layout: PageLayout::Plain,
+        content: '<html><body>Foreign list content</body></html>',
+        contentType: 'text/html',
+    );
+    $seen = [];
+    $cursor = null;
+    $firstCursor = null;
+    $pageQueries = [];
+    DB::listen(function ($query) use (&$pageQueries): void {
+        if (str_contains($query->sql, 'from "pages"')) {
+            $pageQueries[] = $query->sql;
+        }
+    });
+
+    do {
+        $arguments = ['limit' => 2];
+
+        if ($cursor !== null) {
+            $arguments['cursor'] = $cursor;
+        }
+
+        $result = pagesMcpStructured(pagesMcpCall('list_pages', $arguments, $aliceToken, '/mcp'));
+        $items = $result['items'];
+        expect($items)->toHaveCount($result['has_more'] ? 2 : 1);
+
+        foreach ($items as $item) {
+            expect(array_keys($item))->toBe(['id', 'url', 'title', 'layout', 'version_count', 'created_at', 'updated_at']);
+            $seen[] = $item['id'];
+        }
+
+        $cursor = $result['next_cursor'];
+        $firstCursor ??= $cursor;
+    } while ($cursor !== null);
+
+    sort($ownedIds);
+    expect($seen)->toBe($ownedIds)
+        ->and(array_unique($seen))->toHaveCount(7)
+        ->and($seen)->not->toContain($foreign->id)
+        ->and($pageQueries)->not->toBeEmpty()
+        ->and(collect($pageQueries)->every(fn (string $sql): bool => str_contains($sql, 'limit 3')))->toBeTrue()
+        ->and($firstCursor)->toBeString();
+
+    expect(pagesMcpError(pagesMcpCall('list_pages', ['limit' => 2, 'cursor' => $firstCursor.'x'], $aliceToken, '/mcp')))
+        ->toBe('The cursor is invalid for this request.')
+        ->and(pagesMcpError(pagesMcpCall('list_pages', ['limit' => 3, 'cursor' => $firstCursor], $aliceToken, '/mcp')))
+        ->toBe('The cursor is invalid for this request.')
+        ->and(pagesMcpError(pagesMcpCall('list_pages', ['limit' => 2, 'cursor' => $firstCursor], $bobToken, '/mcp')))
+        ->toBe('The cursor is invalid for this request.');
+});
+
+test('get page paginates complete compact history while repeating current rebuild data', function (): void {
+    $alice = capstanUser();
+    $bob = capstanUser();
+    $aliceToken = pagesMcpToken($alice);
+    $bobToken = pagesMcpToken($bob);
+    $publisher = resolve(PagePublisher::class);
+    $recipe = str_repeat('history recipe '.Str::random(4), 2_000);
+    $page = $publisher->publish(
+        pageId: (string) Str::uuid(),
+        ownerUserId: (string) $alice->getKey(),
+        title: 'History page '.Str::random(8),
+        description: 'History description',
+        refreshRecipe: $recipe,
+        layout: PageLayout::Report,
+        content: '<html><body>history 1</body></html>',
+        contentType: 'text/html',
+    );
+
+    foreach (range(2, 12) as $number) {
+        $page = $publisher->update(
+            pageId: $page->id,
+            ownerUserId: (string) $alice->getKey(),
+            versionId: (string) Str::uuid(),
+            replacements: [],
+            content: '<html><body>history '.$number.'</body></html>',
+            contentType: 'text/html',
+        );
+    }
+
+    $otherPage = $publisher->publish(
+        pageId: (string) Str::uuid(),
+        ownerUserId: (string) $alice->getKey(),
+        title: 'Other Alice page',
+        description: null,
+        refreshRecipe: 'Other recipe',
+        layout: PageLayout::Plain,
+        content: '<html><body>other</body></html>',
+        contentType: 'text/html',
+    );
+    $bobPage = $publisher->publish(
+        pageId: (string) Str::uuid(),
+        ownerUserId: (string) $bob->getKey(),
+        title: 'Bob cursor page',
+        description: null,
+        refreshRecipe: 'Bob recipe',
+        layout: PageLayout::Plain,
+        content: '<html><body>bob</body></html>',
+        contentType: 'text/html',
+    );
+    $seen = [];
+    $cursor = null;
+    $firstCursor = null;
+
+    do {
+        $arguments = ['page_id' => $page->id, 'version_limit' => 3];
+
+        if ($cursor !== null) {
+            $arguments['version_cursor'] = $cursor;
+        }
+
+        $result = pagesMcpStructured(pagesMcpCall('get_page', $arguments, $aliceToken, '/mcp'))['page'];
+        expect($result['content'])->toBe('<html><body>history 12</body></html>')
+            ->and($result['recipe'])->toBe($recipe)
+            ->and($result['version_count'])->toBe(12)
+            ->and($result['version_limit'])->toBe(3);
+
+        foreach ($result['versions'] as $version) {
+            expect($version)->not->toHaveKey('recipe');
+            $seen[] = $version['number'];
+        }
+
+        $cursor = $result['next_version_cursor'];
+        $firstCursor ??= $cursor;
+    } while ($cursor !== null);
+
+    expect($seen)->toBe(range(1, 12))
+        ->and(array_unique($seen))->toHaveCount(12)
+        ->and($firstCursor)->toBeString();
+
+    expect(pagesMcpError(pagesMcpCall('get_page', [
+        'page_id' => $page->id,
+        'version_limit' => 3,
+        'version_cursor' => $firstCursor.'x',
+    ], $aliceToken, '/mcp')))->toBe('The cursor is invalid for this request.')
+        ->and(pagesMcpError(pagesMcpCall('get_page', [
+            'page_id' => $page->id,
+            'version_limit' => 4,
+            'version_cursor' => $firstCursor,
+        ], $aliceToken, '/mcp')))->toBe('The cursor is invalid for this request.')
+        ->and(pagesMcpError(pagesMcpCall('get_page', [
+            'page_id' => $otherPage->id,
+            'version_limit' => 3,
+            'version_cursor' => $firstCursor,
+        ], $aliceToken, '/mcp')))->toBe('The cursor is invalid for this request.')
+        ->and(pagesMcpError(pagesMcpCall('get_page', [
+            'page_id' => $bobPage->id,
+            'version_limit' => 3,
+            'version_cursor' => $firstCursor,
+        ], $bobToken, '/mcp')))->toBe('The cursor is invalid for this request.');
+});
+
+test('page writes reject real response overflow before durable state and accept a retrievable large boundary', function (): void {
+    $owner = capstanUser();
+    $token = pagesMcpToken($owner);
+    $overflow = publishPageArguments(
+        'overflow-publish',
+        'Overflow title '.Str::random(8),
+        str_repeat("\x01", 60_000),
+        '<html><body>'.str_repeat('"\\', 1_000).'</body></html>',
+    );
+    $overflow['description'] = str_repeat("\x01", 60_000);
+    pagesMcpCall('publish_page', $overflow, $token)
+        ->assertOk()
+        ->assertJsonPath('result.isError', true)
+        ->assertJsonPath('result.content.0.text', 'The page exceeds the MCP response budget.');
+
+    $multibyte = publishPageArguments('multibyte-metadata', 'Multibyte', str_repeat('🙂', 20_000), 'test');
+    pagesMcpCall('publish_page', $multibyte, $token)
+        ->assertOk()
+        ->assertJsonPath('result.isError', true);
+
+    expect(Page::query()->count())->toBe(0)
+        ->and(PageVersion::query()->count())->toBe(0)
+        ->and(DB::table('mcp_write_claims')->count())->toBe(0)
+        ->and(DB::table('mcp_write_effects')->count())->toBe(0)
+        ->and(Storage::disk()->allFiles())->toBe([]);
+
+    $largeHtml = '<html><body>'.str_repeat('a', 250_000).'</body></html>';
+    $accepted = pagesMcpStructured(pagesMcpCall('publish_page', publishPageArguments(
+        'large-boundary',
+        'Large retrievable page',
+        'Large page recipe',
+        $largeHtml,
+    ), $token));
+    $page = Page::query()->sole();
+    expect($accepted['outcome'])->toBe('accepted')
+        ->and(data_get(pagesMcpStructured(pagesMcpCall('get_page', ['page_id' => $page->id], $token, '/mcp')), 'page.content'))
+        ->toBe($largeHtml);
+
+    $counts = [
+        PageVersion::query()->count(),
+        DB::table('mcp_write_claims')->count(),
+        DB::table('mcp_write_effects')->count(),
+        count(Storage::disk()->allFiles('artifacts')),
+    ];
+    pagesMcpCall('update_page', [
+        'idempotency_key' => 'overflow-update',
+        'page_id' => $page->id,
+        'description' => str_repeat("\x01", 60_000),
+        'recipe' => str_repeat("\x01", 60_000),
+        'content' => '<html><body>'.str_repeat('"\\', 1_000).'</body></html>',
+        'content_type' => 'text/html',
+    ], $token)
+        ->assertOk()
+        ->assertJsonPath('result.isError', true)
+        ->assertJsonPath('result.content.0.text', 'The page exceeds the MCP response budget.');
+
+    expect([
+        PageVersion::query()->count(),
+        DB::table('mcp_write_claims')->count(),
+        DB::table('mcp_write_effects')->count(),
+        count(Storage::disk()->allFiles('artifacts')),
+    ])->toBe($counts);
 });
 
 test('invalid page writes and unavailable feature configurations leave no durable or blob state', function (): void {

@@ -10,23 +10,19 @@ use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Laravel\Pennant\Feature;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class PageController extends Controller
 {
-    public function show(Request $request, Page $page, ArtifactRenderOrigin $origin): Response
+    public function show(Request $request, string $page, ArtifactRenderOrigin $origin): Response
     {
-        $version = $page->latestVersion;
-        abort_unless($version instanceof PageVersion, 404);
-
-        return $this->viewer($request, $page, $version, $origin);
+        return $this->viewer($request, $page, null, $origin);
     }
 
-    public function version(Request $request, Page $page, PageVersion $version, ArtifactRenderOrigin $origin): Response
+    public function version(Request $request, string $page, string $version, ArtifactRenderOrigin $origin): Response
     {
-        abort_unless($version->page_id === $page->id, 404);
-
         return $this->viewer($request, $page, $version, $origin);
     }
 
@@ -62,15 +58,40 @@ class PageController extends Controller
 
     private function viewer(
         Request $request,
-        Page $page,
-        PageVersion $version,
+        string $pageId,
+        ?string $versionId,
         ArtifactRenderOrigin $origin,
     ): Response {
-        abort_unless(Feature::active(Artifacts::class), 404);
-        abort_unless($origin->isConfigured(), 404);
-        abort_if($request->getHost() === $origin->renderHost(), 404);
+        if (! Feature::active(Artifacts::class)
+            || ! $origin->isConfigured()
+            || $request->getHost() === $origin->renderHost()) {
+            return $this->pageNotFound();
+        }
+
         $user = $request->user();
-        abort_unless($user instanceof User && hash_equals($page->owner_user_id, (string) $user->getKey()), 404);
+
+        if (! $user instanceof User
+            || ! Str::isUuid($pageId)
+            || ($versionId !== null && ! Str::isUuid($versionId))) {
+            return $this->pageNotFound();
+        }
+
+        $page = Page::query()
+            ->whereKey($pageId)
+            ->where('owner_user_id', (string) $user->getKey())
+            ->first();
+
+        if (! $page instanceof Page) {
+            return $this->pageNotFound();
+        }
+
+        $version = $versionId === null
+            ? $page->latestVersion
+            : PageVersion::query()->whereKey($versionId)->where('page_id', $page->id)->first();
+
+        if (! $version instanceof PageVersion) {
+            return $this->pageNotFound();
+        }
 
         $page->loadMissing('versions');
 
@@ -81,5 +102,10 @@ class PageController extends Controller
                 'contentUrl' => $origin->signedPageContentUrl($page, $version),
             ])
             ->header('X-Frame-Options', 'DENY');
+    }
+
+    private function pageNotFound(): Response
+    {
+        return response('', 404);
     }
 }

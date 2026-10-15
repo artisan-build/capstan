@@ -12,6 +12,7 @@ use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Routing\Router;
 use Illuminate\Session\Middleware\StartSession;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -102,8 +103,68 @@ test('owner sees latest and prior immutable versions while another user sees nei
         route('pages.versions.show', ['page' => $page, 'version' => $first]),
     ] as $url) {
         $response = $this->actingAsVersioned($bob)->get($url)->assertNotFound();
-        expect($response->getContent())->not->toContain($title, $firstHtml, $secondHtml, $firstRecipe, $secondRecipe);
+
+        foreach ([$title, $firstHtml, $secondHtml, $firstRecipe, $secondRecipe] as $privateValue) {
+            expect($response->getContent())->not->toContain($privateValue);
+        }
     }
+});
+
+test('guest viewer lookups are opaque before page or version queries', function (): void {
+    $owner = capstanUser();
+    $title = 'Guest-private title '.Str::random(10);
+    $recipe = 'Guest-private recipe '.Str::random(10);
+    $html = '<html><body>Guest-private HTML '.Str::random(10).'</body></html>';
+    $page = ownedPage($owner, $html, $recipe, $title);
+    $version = $page->latestVersion()->firstOrFail();
+    $missingPage = (string) Str::uuid();
+    $missingVersion = (string) Str::uuid();
+    $urls = [
+        route('pages.show', ['page' => $page]),
+        route('pages.show', ['page' => $missingPage]),
+        route('pages.show', ['page' => 'not-a-uuid']),
+        route('pages.versions.show', ['page' => $page, 'version' => $version]),
+        route('pages.versions.show', ['page' => $page, 'version' => $missingVersion]),
+        route('pages.versions.show', ['page' => $missingPage, 'version' => $missingVersion]),
+        route('pages.versions.show', ['page' => 'not-a-uuid', 'version' => 'also-not-a-uuid']),
+    ];
+    $privateLookups = [];
+    DB::listen(function ($query) use (&$privateLookups): void {
+        if (str_contains($query->sql, 'from "pages"') || str_contains($query->sql, 'from "page_versions"')) {
+            $privateLookups[] = $query->sql;
+        }
+    });
+
+    foreach (['text/html', 'application/json'] as $accept) {
+        $responses = collect($urls)->map(
+            fn (string $url) => $this->get($url, ['Accept' => $accept])->assertNotFound(),
+        );
+        $expectedBody = $responses->firstOrFail()->getContent();
+        $expectedCookieNames = collect($responses->firstOrFail()->headers->getCookies())
+            ->map(fn ($cookie): string => $cookie->getName())
+            ->sort()
+            ->values()
+            ->all();
+
+        foreach ($responses as $response) {
+            expect($response->getContent())->toBe($expectedBody)
+                ->and(collect($response->headers->getCookies())->map(fn ($cookie): string => $cookie->getName())->sort()->values()->all())
+                ->toBe($expectedCookieNames);
+
+            foreach ([$page->id, $version->id, $title, $recipe, $html] as $privateValue) {
+                expect($response->getContent())->not->toContain($privateValue);
+            }
+        }
+    }
+
+    $this->actingAsVersioned($owner)
+        ->get(route('pages.show', ['page' => 'not-a-uuid']))
+        ->assertNotFound();
+    $this->actingAsVersioned($owner)
+        ->get(route('pages.versions.show', ['page' => $page->id, 'version' => 'not-a-uuid']))
+        ->assertNotFound();
+
+    expect($privateLookups)->toBe([]);
 });
 
 test('page content is signed short lived private streamed and confined to the render host', function (): void {
@@ -134,7 +195,8 @@ test('page content is signed short lived private streamed and confined to the re
         ->and($response->baseResponse->isRedirection())->toBeFalse();
 
     $servingSource = file_get_contents(app_path('Http/Controllers/PageController.php'));
-    expect($servingSource)->not->toContain('temporaryUrl(', '->url(');
+    expect($servingSource)->not->toContain('temporaryUrl(')
+        ->and($servingSource)->not->toContain('->url(');
 
     $unsigned = "https://render.pages.test/pages/{$page->id}/versions/{$version->id}/content";
     $missing = $this->get('https://render.pages.test/pages/'.Str::uuid().'/versions/'.Str::uuid().'/content')
@@ -149,8 +211,11 @@ test('page content is signed short lived private streamed and confined to the re
 
     foreach ([$missing, $unsignedResponse, $tamperedResponse] as $refusal) {
         expect($refusal->getContent())->toBe($missing->getContent())
-            ->not->toContain($html, $recipe, $title, $version->storage_key, $version->content_hash)
             ->and($refusal->headers->getCookies())->toBe([]);
+
+        foreach ([$html, $recipe, $title, $version->storage_key, $version->content_hash] as $privateValue) {
+            expect($refusal->getContent())->not->toContain($privateValue);
+        }
     }
 
     $this->get("https://app.pages.test/pages/{$page->id}/versions/{$version->id}/content")
@@ -172,13 +237,18 @@ test('page render route stays sessionless and missing blobs fail closed', functi
 
     expect($middleware)
         ->toContain(SubstituteBindings::class, NoIndexArtifactPaths::class)
-        ->not->toContain(StartSession::class, EncryptCookies::class, ValidateCsrfToken::class);
+        ->not->toContain(StartSession::class);
+
+    foreach ([EncryptCookies::class, ValidateCsrfToken::class] as $statefulMiddleware) {
+        expect($middleware)->not->toContain($statefulMiddleware);
+    }
 
     Storage::disk()->delete($version->storage_key);
     $failed = $this->get(resolve(ArtifactRenderOrigin::class)->signedPageContentUrl($page, $version))
         ->assertNotFound();
-    expect($failed->getContent())
-        ->not->toContain($version->storage_key, $version->content_hash, 'UnableToRetrieveMetadata', 'UnableToReadFile');
+    foreach ([$version->storage_key, $version->content_hash, 'UnableToRetrieveMetadata', 'UnableToReadFile'] as $privateValue) {
+        expect($failed->getContent())->not->toContain($privateValue);
+    }
 });
 
 test('page viewers and content fail closed when the shared feature or isolated origin is unavailable', function (): void {

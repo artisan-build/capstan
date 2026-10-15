@@ -13,9 +13,8 @@ Route::get('artifacts/{artifact}/share', [ArtifactShareController::class, 'show'
     ->middleware('capstan.noindex_artifacts')
     ->name('artifacts.share');
 
-Route::middleware(['bfc.auth', 'capstan.noindex_artifacts'])->group(function (): void {
+Route::middleware('capstan.noindex_artifacts')->group(function (): void {
     Route::get('pages/{page}', [PageController::class, 'show'])->name('pages.show');
     Route::get('pages/{page}/versions/{version}', [PageController::class, 'version'])
-        ->scopeBindings()
         ->name('pages.versions.show');
 });
