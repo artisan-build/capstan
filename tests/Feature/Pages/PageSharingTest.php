@@ -128,7 +128,7 @@ test('owner creates distinct internal external and link grants with exact extern
         'kind' => 'link',
     ])->assertRedirect();
 
-    $shares = PageShare::query()->orderBy('created_at')->get();
+    $shares = PageShare::query()->oldest()->get();
     $external = $shares->where('kind', PageShareKind::External)->values();
     $firstExternal = $external->firstWhere('recipient_email', 'first-recipient@example.test');
     $secondExternal = $external->firstWhere('recipient_email', 'second-recipient@example.test');

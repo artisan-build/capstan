@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\PageShareKind;
 use ArtisanBuild\BuiltForCloud\User;
+use Illuminate\Database\Eloquent\Attributes\Scope;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
@@ -23,6 +24,8 @@ use Illuminate\Support\Carbon;
  * @property Carbon $updated_at
  * @property-read Page $page
  * @property-read User|null $internalRecipient
+ *
+ * @mixin IdeHelperPageShare
  */
 class PageShare extends Model
 {
@@ -60,7 +63,8 @@ class PageShare extends Model
     }
 
     /** @param Builder<PageShare> $query */
-    public function scopeActive(Builder $query): void
+    #[Scope]
+    protected function active(Builder $query): void
     {
         $query->whereNull('revoked_at')
             ->where(function (Builder $query): void {

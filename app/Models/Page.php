@@ -64,6 +64,6 @@ class Page extends Model
     /** @return HasMany<PageShare, $this> */
     public function shares(): HasMany
     {
-        return $this->hasMany(PageShare::class)->orderByDesc('created_at');
+        return $this->hasMany(PageShare::class)->latest();
     }
 }

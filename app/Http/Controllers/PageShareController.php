@@ -88,7 +88,7 @@ final class PageShareController extends Controller
             );
         }
 
-        return redirect()->route('pages.show', ['page' => $ownedPage]);
+        return to_route('pages.show', ['page' => $ownedPage]);
     }
 
     public function destroy(Request $request, string $page, string $share, ArtifactRenderOrigin $origin): RedirectResponse|Response
@@ -118,7 +118,7 @@ final class PageShareController extends Controller
             $grant->forceFill(['revoked_at' => now()->startOfSecond()])->save();
         }
 
-        return redirect()->route('pages.show', ['page' => $ownedPage]);
+        return to_route('pages.show', ['page' => $ownedPage]);
     }
 
     private function owner(Request $request, string $page, ArtifactRenderOrigin $origin): ?User
