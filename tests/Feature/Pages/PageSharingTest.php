@@ -90,7 +90,7 @@ test('page shares use uuid relations indexes and database-enforced exclusive tar
             'page_shares_internal_active_index',
         );
 
-    expect(fn () => DB::table('page_shares')->insert([
+    expect(fn () => DB::transaction(fn () => DB::table('page_shares')->insert([
         'id' => (string) Str::uuid(),
         'page_id' => $page->id,
         'created_by_user_id' => $owner->getKey(),
@@ -100,7 +100,7 @@ test('page shares use uuid relations indexes and database-enforced exclusive tar
         'expires_at' => now()->addDay(),
         'created_at' => now(),
         'updated_at' => now(),
-    ]))->toThrow(QueryException::class);
+    ])))->toThrow(QueryException::class);
 
     $page->delete();
     $this->assertDatabaseMissing('page_shares', ['id' => $share->id]);
