@@ -36,7 +36,7 @@ class PageController extends Controller
         abort_unless($origin->isConfigured(), 404);
         abort_unless($request->getHost() === $origin->renderHost(), 404);
         abort_unless($version->page_id === $page->id, 404);
-        abort_unless($request->hasValidSignature(false), 403);
+        abort_unless($request->hasValidSignature(false), 404);
 
         $disk = Storage::disk();
         $stream = rescue(fn () => $disk->readStream($version->storage_key), null, false);

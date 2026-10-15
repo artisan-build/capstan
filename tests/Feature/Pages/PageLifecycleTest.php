@@ -110,7 +110,9 @@ test('page content is signed short lived private streamed and confined to the re
     $this->travelTo('2026-10-15T12:00:00Z');
     $owner = capstanUser();
     $html = '<html><body><script>window.pageProof=true</script>'.Str::random(10).'</body></html>';
-    $page = ownedPage($owner, $html, 'Render recipe '.Str::random(8), 'Render page '.Str::random(8));
+    $recipe = 'Render recipe '.Str::random(8);
+    $title = 'Render page '.Str::random(8);
+    $page = ownedPage($owner, $html, $recipe, $title);
     $version = $page->latestVersion()->firstOrFail();
     $url = resolve(ArtifactRenderOrigin::class)->signedPageContentUrl($page, $version);
     parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
@@ -135,8 +137,22 @@ test('page content is signed short lived private streamed and confined to the re
     expect($servingSource)->not->toContain('temporaryUrl(', '->url(');
 
     $unsigned = "https://render.pages.test/pages/{$page->id}/versions/{$version->id}/content";
-    $this->get($unsigned)->assertForbidden()->assertDontSee($html);
-    $this->get($url.'&tampered=1')->assertForbidden()->assertDontSee($html);
+    $missing = $this->get('https://render.pages.test/pages/'.Str::uuid().'/versions/'.Str::uuid().'/content')
+        ->assertNotFound()
+        ->assertHeaderMissing('Set-Cookie');
+    $unsignedResponse = $this->get($unsigned)
+        ->assertNotFound()
+        ->assertHeaderMissing('Set-Cookie');
+    $tamperedResponse = $this->get($url.'&tampered=1')
+        ->assertNotFound()
+        ->assertHeaderMissing('Set-Cookie');
+
+    foreach ([$missing, $unsignedResponse, $tamperedResponse] as $refusal) {
+        expect($refusal->getContent())->toBe($missing->getContent())
+            ->not->toContain($html, $recipe, $title, $version->storage_key, $version->content_hash)
+            ->and($refusal->headers->getCookies())->toBe([]);
+    }
+
     $this->get("https://app.pages.test/pages/{$page->id}/versions/{$version->id}/content")
         ->assertNotFound()
         ->assertDontSee($html);
