@@ -15,14 +15,40 @@
                     @if ($page->description !== null && $page->description !== '')
                         <p class="mt-1 text-sm text-neutral-300">{{ $page->description }}</p>
                     @endif
-                    @if ($isOwner)
-                        <p class="mt-2 whitespace-pre-wrap text-xs text-neutral-400">{{ $selectedVersion->refresh_recipe }}</p>
-                    @endif
                 </div>
-                @if ($isOwner)
-                    <nav aria-label="Page versions" class="flex flex-wrap gap-2">
-                        @foreach ($page->versions as $version)
+            </header>
+
+            @if ($isOwner)
+                <section data-testid="page-owner-metadata" class="rounded-xl border border-neutral-800 bg-neutral-900 p-4">
+                    <dl class="grid gap-3 text-sm sm:grid-cols-3">
+                        <div>
+                            <dt class="text-neutral-400">Layout</dt>
+                            <dd>{{ $page->layout->value }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-neutral-400">Current version</dt>
+                            <dd>{{ $page->latestVersion?->version_number }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-neutral-400">Updated</dt>
+                            <dd>
+                                <time datetime="{{ $page->updated_at->toIso8601String() }}">{{ $page->updated_at->toIso8601String() }}</time>
+                            </dd>
+                        </div>
+                    </dl>
+                </section>
+
+                <section data-testid="page-refresh-recipe" class="rounded-xl border border-neutral-800 bg-neutral-900 p-4">
+                    <h2 class="font-medium">Refresh recipe</h2>
+                    <p class="mt-2 whitespace-pre-wrap text-sm text-neutral-300">{{ $selectedVersion->refresh_recipe }}</p>
+                </section>
+
+                <section data-testid="page-version-history" class="rounded-xl border border-neutral-800 bg-neutral-900 p-4">
+                    <h2 class="font-medium">Version history</h2>
+                    <nav aria-label="Page versions" class="mt-3 flex flex-wrap gap-2">
+                        @foreach ($versions as $version)
                             <a
+                                data-testid="page-version-record"
                                 href="{{ route('pages.versions.show', ['page' => $page, 'version' => $version]) }}"
                                 @class([
                                     'rounded px-2 py-1 text-sm',
@@ -32,11 +58,11 @@
                             >Version {{ $version->version_number }}</a>
                         @endforeach
                     </nav>
-                @endif
-            </header>
+                    {{ $versions->links() }}
+                </section>
 
-            @if ($isOwner)
                 <section data-testid="page-sharing" id="page-sharing" class="rounded-xl border border-neutral-800 bg-neutral-900 p-4">
+                    <h2 class="mb-3 font-medium">Share</h2>
                     <div class="grid gap-4 lg:grid-cols-3">
                         <form method="POST" action="{{ route('pages.shares.store', ['page' => $page]) }}" class="space-y-2">
                             @csrf
@@ -102,6 +128,14 @@
 
                 <section data-testid="page-export">
                     <a href="{{ route('pages.export', ['page' => $page]) }}" class="inline-flex rounded bg-neutral-800 px-3 py-2 text-sm">Export HTML</a>
+                </section>
+
+                <section data-testid="page-delete">
+                    <form method="POST" action="{{ route('pages.destroy', ['page' => $page]) }}">
+                        @csrf
+                        @method('DELETE')
+                        <button type="submit" class="rounded bg-red-700 px-3 py-2 text-sm text-white">Delete page</button>
+                    </form>
                 </section>
             @endif
 

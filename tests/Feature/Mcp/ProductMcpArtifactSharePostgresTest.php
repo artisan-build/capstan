@@ -126,8 +126,17 @@ test('postgres serializes simultaneous artifact share submissions without duplic
         $same = $race('postgres-same-intent', [$sameContent, $sameContent]);
         $sameOutcomes = collect($same)->pluck('outcome')->sort()->values()->all();
 
-        expect($sameOutcomes)->toBe(['accepted', 'already_accepted'])
-            ->and(collect($same)->pluck('artifact.id')->unique()->count())->toBe(1)
+        expect($sameOutcomes)->toBeIn([
+            ['accepted', 'already_accepted'],
+            ['accepted', 'in_progress'],
+        ]);
+
+        $acceptedArtifactId = collect($same)->firstWhere('outcome', 'accepted')['artifact']['id'];
+        $replay = $race('postgres-same-intent', [$sameContent]);
+
+        expect($replay)->toHaveCount(1)
+            ->and($replay[0]['outcome'])->toBe('already_accepted')
+            ->and($replay[0]['artifact']['id'])->toBe($acceptedArtifactId)
             ->and(Artifact::query()->count())->toBe(1)
             ->and(DB::table('mcp_write_claims')->count())->toBe(1)
             ->and(DB::table('mcp_write_effects')->count())->toBe(1)

@@ -16,9 +16,11 @@ Route::get('artifacts/{artifact}/share', [ArtifactShareController::class, 'show'
     ->name('artifacts.share');
 
 Route::middleware('capstan.noindex_artifacts')->group(function (): void {
+    Route::get('pages', [PageController::class, 'index'])->name('pages.index');
     Route::post('pages/{page}/shares', [PageShareController::class, 'store'])->name('pages.shares.store');
     Route::delete('pages/{page}/shares/{share}', [PageShareController::class, 'destroy'])->name('pages.shares.destroy');
     Route::get('pages/{page}/export', PageExportController::class)->name('pages.export');
+    Route::delete('pages/{page}', [PageController::class, 'destroy'])->name('pages.destroy');
     Route::get('pages/{page}', [PageController::class, 'show'])->name('pages.show');
     Route::get('pages/{page}/versions/{version}', [PageController::class, 'version'])
         ->name('pages.versions.show');
