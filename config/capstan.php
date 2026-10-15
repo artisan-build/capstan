@@ -48,4 +48,15 @@ return [
             'application/xhtml+xml',
         ],
     ],
+
+    'pages' => [
+        // get_page returns current HTML through MCP, so leave room for the
+        // protocol envelope beneath its established response budget.
+        'max_content_bytes' => 256 * 1024,
+        'max_metadata_bytes' => 65_535,
+        'allowed_content_types' => [
+            'text/html',
+            'application/xhtml+xml',
+        ],
+    ],
 ];

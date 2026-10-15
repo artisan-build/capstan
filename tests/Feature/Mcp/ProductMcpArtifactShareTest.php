@@ -108,9 +108,13 @@ test('advertises the exact artifact share contract only through the write door',
         ->and($write->keys()->sort()->values()->all())->toBe([
             'ack_postmaster_messages',
             'create_artifact_share',
+            'get_page',
+            'list_pages',
             'postmaster_messages',
             'postmaster_spokes',
+            'publish_page',
             'send_postmaster_message',
+            'update_page',
         ])
         ->and(data_get($tool, '_meta.effect'))->toBe('write')
         ->and(data_get($tool, '_meta.classification'))->toBe('content')

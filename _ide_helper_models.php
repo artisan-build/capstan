@@ -86,6 +86,56 @@ namespace App\Models{
 
 namespace App\Models{
 /**
+ * @property string $id
+ * @property string $owner_user_id
+ * @property string $title
+ * @property string|null $description
+ * @property string $refresh_recipe
+ * @property PageLayout $layout
+ * @property string|null $latest_version_id
+ * @property int $version_count
+ * @property Carbon $created_at
+ * @property Carbon $updated_at
+ * @property-read PageVersion|null $latestVersion
+ * @property-read Collection<int, PageVersion> $versions
+ * @property-read int|null $versions_count
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Page newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Page newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Page query()
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperPage {}
+}
+
+namespace App\Models{
+/**
+ * @property string $id
+ * @property string $page_id
+ * @property int $version_number
+ * @property string $content_type
+ * @property int $size_bytes
+ * @property string $content_hash
+ * @property string $storage_key
+ * @property string $publisher_user_id
+ * @property string $publisher_source
+ * @property string $publisher_tool
+ * @property string $refresh_recipe
+ * @property PageLayout $layout
+ * @property Carbon $created_at
+ * @property Carbon $updated_at
+ * @property-read Page $page
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|PageVersion newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|PageVersion newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|PageVersion query()
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperPageVersion {}
+}
+
+namespace App\Models{
+/**
  * @property int $id
  * @property string $actor_id
  * @property string $credential_id
