@@ -1,0 +1,191 @@
+<?php
+
+use App\Enums\PageLayout;
+use App\Features\Artifacts;
+use App\Http\Middleware\NoIndexArtifactPaths;
+use App\Models\Page;
+use App\Support\ArtifactRenderOrigin;
+use App\Support\PagePublisher;
+use ArtisanBuild\BuiltForCloud\User;
+use Illuminate\Cookie\Middleware\EncryptCookies;
+use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
+use Illuminate\Routing\Middleware\SubstituteBindings;
+use Illuminate\Routing\Router;
+use Illuminate\Session\Middleware\StartSession;
+use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use Laravel\Pennant\Feature;
+
+beforeEach(function (): void {
+    config([
+        'app.key' => 'base64:'.base64_encode(str_repeat('p', 32)),
+        'app.url' => 'https://app.pages.test',
+        'capstan.features.artifacts' => true,
+        'capstan.artifacts.render_origin' => 'https://render.pages.test',
+    ]);
+    Feature::flushCache();
+    Storage::fake();
+});
+
+function ownedPage(User $owner, string $html, string $recipe, string $title): Page
+{
+    return resolve(PagePublisher::class)->publish(
+        pageId: (string) Str::uuid(),
+        ownerUserId: (string) $owner->getKey(),
+        title: $title,
+        description: 'Test-created description',
+        refreshRecipe: $recipe,
+        layout: PageLayout::Plain,
+        content: $html,
+        contentType: 'text/html',
+    );
+}
+
+test('owner sees latest and prior immutable versions while another user sees neither', function (): void {
+    $alice = capstanUser(['name' => 'Alice']);
+    $bob = capstanUser(['name' => 'Bob']);
+    $title = 'Owner-only test page '.Str::random(8);
+    $firstHtml = '<html><body>private first '.Str::random(12).'</body></html>';
+    $secondHtml = '<html><body>private second '.Str::random(12).'</body></html>';
+    $firstRecipe = 'First recipe '.Str::random(12);
+    $secondRecipe = 'Second recipe '.Str::random(12);
+    $page = ownedPage($alice, $firstHtml, $firstRecipe, $title);
+    $first = $page->latestVersion()->firstOrFail();
+    $immutable = $first->only(['id', 'version_number', 'content_hash', 'storage_key', 'refresh_recipe', 'layout']);
+
+    $page = resolve(PagePublisher::class)->update(
+        pageId: $page->id,
+        ownerUserId: (string) $alice->getKey(),
+        versionId: (string) Str::uuid(),
+        replacements: ['refresh_recipe' => $secondRecipe, 'layout' => PageLayout::Report],
+        content: $secondHtml,
+        contentType: 'text/html',
+    );
+    $second = $page->latestVersion()->firstOrFail();
+
+    $latestViewer = $this->actingAsVersioned($alice)
+        ->get(route('pages.show', ['page' => $page]))
+        ->assertOk()
+        ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive')
+        ->assertSee($title)
+        ->assertSee('data-testid="page-viewer"', false)
+        ->assertSee('sandbox="allow-scripts"', false)
+        ->assertDontSee('allow-same-origin', false)
+        ->assertSee('<meta name="robots" content="noindex, nofollow, noarchive">', false);
+
+    expect(substr_count($latestViewer->content(), 'data-testid="page-viewer"'))->toBe(1)
+        ->and($latestViewer->content())->toContain("https://render.pages.test/pages/{$page->id}/versions/{$second->id}/content")
+        ->and($second->version_number)->toBe(2)
+        ->and($page->version_count)->toBe(2)
+        ->and($page->refresh_recipe)->toBe($secondRecipe)
+        ->and($page->layout)->toBe(PageLayout::Report);
+
+    $priorViewer = $this->actingAsVersioned($alice)
+        ->get(route('pages.versions.show', ['page' => $page, 'version' => $first]))
+        ->assertOk()
+        ->assertSee($title);
+    expect($priorViewer->content())->toContain("https://render.pages.test/pages/{$page->id}/versions/{$first->id}/content");
+
+    $latestContent = $this->get(resolve(ArtifactRenderOrigin::class)->signedPageContentUrl($page, $second))
+        ->assertOk()
+        ->assertStreamed();
+    $priorContent = $this->get(resolve(ArtifactRenderOrigin::class)->signedPageContentUrl($page, $first))
+        ->assertOk()
+        ->assertStreamed();
+    expect($latestContent->streamedContent())->toBe($secondHtml)
+        ->and($priorContent->streamedContent())->toBe($firstHtml)
+        ->and($first->fresh()?->only(array_keys($immutable)))->toBe($immutable);
+
+    foreach ([
+        route('pages.show', ['page' => $page]),
+        route('pages.versions.show', ['page' => $page, 'version' => $first]),
+    ] as $url) {
+        $response = $this->actingAsVersioned($bob)->get($url)->assertNotFound();
+        expect($response->getContent())->not->toContain($title, $firstHtml, $secondHtml, $firstRecipe, $secondRecipe);
+    }
+});
+
+test('page content is signed short lived private streamed and confined to the render host', function (): void {
+    $this->travelTo('2026-10-15T12:00:00Z');
+    $owner = capstanUser();
+    $html = '<html><body><script>window.pageProof=true</script>'.Str::random(10).'</body></html>';
+    $page = ownedPage($owner, $html, 'Render recipe '.Str::random(8), 'Render page '.Str::random(8));
+    $version = $page->latestVersion()->firstOrFail();
+    $url = resolve(ArtifactRenderOrigin::class)->signedPageContentUrl($page, $version);
+    parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+
+    expect((int) $query['expires'])->toBe(now()->addMinutes(5)->timestamp);
+
+    $response = $this->get($url)
+        ->assertOk()
+        ->assertStreamed()
+        ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive')
+        ->assertHeader('X-Content-Type-Options', 'nosniff')
+        ->assertHeader('Referrer-Policy', 'no-referrer')
+        ->assertHeaderMissing('Set-Cookie');
+    expect($response->streamedContent())->toBe($html)
+        ->and($response->headers->get('Cache-Control'))->toContain('private', 'no-store', 'no-transform')
+        ->and($response->headers->get('Content-Security-Policy'))
+        ->toContain("default-src 'none'", "connect-src 'none'", 'frame-ancestors https://app.pages.test')
+        ->and($response->headers->getCookies())->toBe([])
+        ->and($response->baseResponse->isRedirection())->toBeFalse();
+
+    $servingSource = file_get_contents(app_path('Http/Controllers/PageController.php'));
+    expect($servingSource)->not->toContain('temporaryUrl(', '->url(');
+
+    $unsigned = "https://render.pages.test/pages/{$page->id}/versions/{$version->id}/content";
+    $this->get($unsigned)->assertForbidden()->assertDontSee($html);
+    $this->get($url.'&tampered=1')->assertForbidden()->assertDontSee($html);
+    $this->get("https://app.pages.test/pages/{$page->id}/versions/{$version->id}/content")
+        ->assertNotFound()
+        ->assertDontSee($html);
+
+    foreach (['/', '/dashboard', "/pages/{$page->id}", "/pages/{$page->id}/versions/{$version->id}", '/pages/not/content'] as $path) {
+        $this->get('https://render.pages.test'.$path)->assertNotFound();
+    }
+});
+
+test('page render route stays sessionless and missing blobs fail closed', function (): void {
+    $owner = capstanUser();
+    $html = '<html><body>missing page blob '.Str::random(8).'</body></html>';
+    $page = ownedPage($owner, $html, 'Missing recipe '.Str::random(8), 'Missing page '.Str::random(8));
+    $version = $page->latestVersion()->firstOrFail();
+    $route = Route::getRoutes()->getByName('pages.content');
+    $middleware = resolve(Router::class)->gatherRouteMiddleware($route);
+
+    expect($middleware)
+        ->toContain(SubstituteBindings::class, NoIndexArtifactPaths::class)
+        ->not->toContain(StartSession::class, EncryptCookies::class, ValidateCsrfToken::class);
+
+    Storage::disk()->delete($version->storage_key);
+    $failed = $this->get(resolve(ArtifactRenderOrigin::class)->signedPageContentUrl($page, $version))
+        ->assertNotFound();
+    expect($failed->getContent())
+        ->not->toContain($version->storage_key, $version->content_hash, 'UnableToRetrieveMetadata', 'UnableToReadFile');
+});
+
+test('page viewers and content fail closed when the shared feature or isolated origin is unavailable', function (): void {
+    $owner = capstanUser();
+    $html = '<html><body>closed page '.Str::random(8).'</body></html>';
+    $page = ownedPage($owner, $html, 'Closed recipe '.Str::random(8), 'Closed page '.Str::random(8));
+    $version = $page->latestVersion()->firstOrFail();
+
+    config(['capstan.features.artifacts' => false]);
+    Feature::flushCache();
+    $this->actingAsVersioned($owner)->get(route('pages.show', ['page' => $page]))->assertNotFound();
+
+    config([
+        'capstan.features.artifacts' => true,
+        'capstan.artifacts.render_origin' => 'https://app.pages.test',
+    ]);
+    Feature::flushCache();
+    expect(Feature::active(Artifacts::class))->toBeFalse();
+    $this->actingAsVersioned($owner)->get(route('pages.show', ['page' => $page]))->assertNotFound();
+
+    config(['capstan.artifacts.render_origin' => null]);
+    Feature::flushCache();
+    $this->get("https://render.pages.test/pages/{$page->id}/versions/{$version->id}/content")
+        ->assertNotFound()
+        ->assertDontSee($html);
+});

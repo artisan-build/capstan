@@ -124,13 +124,17 @@ test('mounts the complete write family behind the write ceiling', function (): v
     $read = collect(capstanMcpWriteList($token, '/mcp')->assertOk()->json('result.tools'))->keyBy('name');
     $write = collect(capstanMcpWriteList($token)->assertOk()->json('result.tools'))->keyBy('name');
 
-    expect($read->keys()->sort()->values()->all())->toBe(['postmaster_messages', 'postmaster_spokes'])
+    expect($read->keys()->sort()->values()->all())->toBe(['get_page', 'list_pages', 'postmaster_messages', 'postmaster_spokes'])
         ->and($write->keys()->sort()->values()->all())->toBe([
             'ack_postmaster_messages',
             'create_artifact_share',
+            'get_page',
+            'list_pages',
             'postmaster_messages',
             'postmaster_spokes',
+            'publish_page',
             'send_postmaster_message',
+            'update_page',
         ]);
 
     foreach ([

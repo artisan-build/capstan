@@ -3,6 +3,8 @@
 namespace App\Support;
 
 use App\Models\Artifact;
+use App\Models\Page;
+use App\Models\PageVersion;
 use Illuminate\Support\Facades\URL;
 
 class ArtifactRenderOrigin
@@ -81,6 +83,18 @@ class ArtifactRenderOrigin
             ['artifact' => $artifact],
             true,
         );
+    }
+
+    public function signedPageContentUrl(Page $page, PageVersion $version): string
+    {
+        $path = URL::temporarySignedRoute(
+            'pages.content',
+            now()->addMinutes(5),
+            ['page' => $page, 'version' => $version],
+            false,
+        );
+
+        return $this->renderOrigin().$path;
     }
 
     public function contentSecurityPolicy(): string
