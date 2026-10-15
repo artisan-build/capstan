@@ -45,7 +45,7 @@ class PageController extends Controller
                         });
                 },
             ])
-            ->orderByDesc('updated_at')
+            ->latest('updated_at')
             ->orderByDesc('id')
             ->paginate(20, ['*'], 'my_pages_page')
             ->withQueryString();
@@ -59,7 +59,7 @@ class PageController extends Controller
                     ->where('kind', PageShareKind::Internal->value)
                     ->where('internal_recipient_user_id', (string) $user->getKey());
             })
-            ->orderByDesc('updated_at')
+            ->latest('updated_at')
             ->orderByDesc('id')
             ->paginate(20, ['*'], 'shared_pages_page')
             ->withQueryString();
