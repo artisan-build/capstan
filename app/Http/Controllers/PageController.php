@@ -2,23 +2,23 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\PageShareKind;
 use App\Features\Artifacts;
 use App\Models\Page;
+use App\Models\PageShare;
 use App\Models\PageVersion;
 use App\Support\ArtifactRenderOrigin;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
-use ArtisanBuild\BuiltForCloud\User;
+use App\Support\HumanPageAccess;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Laravel\Pennant\Feature;
 use Symfony\Component\HttpFoundation\StreamedResponse;
-use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 
 class PageController extends Controller
 {
-    public function __construct(private readonly EnsureUserIsAuthenticated $admission) {}
+    public function __construct(private readonly HumanPageAccess $access) {}
 
     public function show(Request $request, string $page, ArtifactRenderOrigin $origin): Response
     {
@@ -72,13 +72,9 @@ class PageController extends Controller
             return $this->pageNotFound();
         }
 
-        if (! $this->admitted($request)) {
-            return $this->pageNotFound();
-        }
+        $user = $this->access->admittedUser($request);
 
-        $user = $request->user();
-
-        if (! $user instanceof User
+        if ($user === null
             || ! Str::isUuid($pageId)
             || ($versionId !== null && ! Str::isUuid($versionId))) {
             return $this->pageNotFound();
@@ -86,13 +82,27 @@ class PageController extends Controller
 
         $page = Page::query()
             ->whereKey($pageId)
-            ->where('owner_user_id', (string) $user->getKey())
+            ->where(function ($query) use ($user, $versionId): void {
+                $query->where('owner_user_id', (string) $user->getKey());
+
+                if ($versionId === null) {
+                    $query->orWhereHas('shares', function ($query) use ($user): void {
+                        $query->whereNull('revoked_at')
+                            ->where(function ($query): void {
+                                $query->whereNull('expires_at')->orWhere('expires_at', '>', now());
+                            })
+                            ->where('kind', PageShareKind::Internal->value)
+                            ->where('internal_recipient_user_id', (string) $user->getKey());
+                    });
+                }
+            })
             ->first();
 
         if (! $page instanceof Page) {
             return $this->pageNotFound();
         }
 
+        $isOwner = $page->owner_user_id === (string) $user->getKey();
         $version = $versionId === null
             ? $page->latestVersion
             : PageVersion::query()->whereKey($versionId)->where('page_id', $page->id)->first();
@@ -101,13 +111,40 @@ class PageController extends Controller
             return $this->pageNotFound();
         }
 
-        $page->loadMissing('versions');
+        $internalShare = null;
+        $shares = null;
+
+        if ($isOwner) {
+            $page->loadMissing('versions');
+            $shares = $page->shares()->with('internalRecipient')->paginate(25, ['*'], 'shares_page');
+        } else {
+            $internalShare = $page->shares()
+                ->active()
+                ->where('kind', PageShareKind::Internal->value)
+                ->where('internal_recipient_user_id', (string) $user->getKey())
+                ->first();
+
+            if (! $internalShare instanceof PageShare) {
+                return $this->pageNotFound();
+            }
+        }
 
         return response()
             ->view('pages.show', [
                 'page' => $page,
                 'selectedVersion' => $version,
-                'contentUrl' => $origin->signedPageContentUrl($page, $version),
+                'contentUrl' => $internalShare instanceof PageShare
+                    ? $origin->signedPageShareContentUrl($internalShare)
+                    : $origin->signedPageContentUrl($page, $version),
+                'isOwner' => $isOwner,
+                'shares' => $shares,
+                'shareUrls' => $shares !== null
+                    ? $shares->getCollection()->mapWithKeys(fn (PageShare $share): array => [
+                        $share->id => $share->kind === PageShareKind::Internal
+                            ? null
+                            : $origin->signedPageShareViewerUrl($share),
+                    ])
+                    : collect(),
             ])
             ->header('X-Frame-Options', 'DENY');
     }
@@ -115,21 +152,5 @@ class PageController extends Controller
     private function pageNotFound(): Response
     {
         return response('', 404);
-    }
-
-    private function admitted(Request $request): bool
-    {
-        $marker = response('', 204);
-
-        try {
-            $result = $this->admission->handle(
-                $request,
-                static fn (Request $request): Response => $marker,
-            );
-        } catch (HttpExceptionInterface) {
-            return false;
-        }
-
-        return $result === $marker;
     }
 }

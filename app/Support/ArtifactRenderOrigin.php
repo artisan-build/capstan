@@ -4,6 +4,7 @@ namespace App\Support;
 
 use App\Models\Artifact;
 use App\Models\Page;
+use App\Models\PageShare;
 use App\Models\PageVersion;
 use Illuminate\Support\Facades\URL;
 
@@ -91,6 +92,34 @@ class ArtifactRenderOrigin
             'pages.content',
             now()->addMinutes(5),
             ['page' => $page, 'version' => $version],
+            false,
+        );
+
+        return $this->renderOrigin().$path;
+    }
+
+    public function signedPageShareViewerUrl(PageShare $share): string
+    {
+        $path = URL::temporarySignedRoute(
+            'page-shares.show',
+            $share->expires_at ?? now()->addMinutes(5),
+            ['share' => $share->id],
+            false,
+        );
+
+        return $this->appOrigin().$path;
+    }
+
+    public function signedPageShareContentUrl(PageShare $share): string
+    {
+        $ceiling = now()->addMinutes(5);
+        $expiresAt = $share->expires_at !== null && $share->expires_at->isBefore($ceiling)
+            ? $share->expires_at
+            : $ceiling;
+        $path = URL::temporarySignedRoute(
+            'page-shares.content',
+            $expiresAt,
+            ['share' => $share->id],
             false,
         );
 

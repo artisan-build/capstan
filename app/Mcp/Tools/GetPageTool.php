@@ -2,6 +2,7 @@
 
 namespace App\Mcp\Tools;
 
+use App\Enums\PageShareKind;
 use App\Features\Artifacts;
 use App\Mcp\OwnerSubjectResolver;
 use App\Mcp\SignedCursor;
@@ -27,7 +28,7 @@ use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 use Laravel\Pennant\Feature;
 
 #[Name('get_page')]
-#[Description('Reads one owned page, its refresh recipe, ordered immutable versions, and current HTML.')]
+#[Description('Reads one owned or internally shared page, its refresh recipe, ordered immutable versions, and current HTML.')]
 #[IsReadOnly]
 #[ToolClassification(Classification::Content)]
 #[ToolEffect(Effect::Read)]
@@ -65,7 +66,17 @@ final class GetPageTool extends CapstanTool
         $owner = $owners->resolve();
         $page = Page::query()
             ->whereKey($validated['page_id'])
-            ->where('owner_user_id', $owner->actorId)
+            ->where(function ($query) use ($owner): void {
+                $query->where('owner_user_id', $owner->actorId)
+                    ->orWhereHas('shares', function ($query) use ($owner): void {
+                        $query->whereNull('revoked_at')
+                            ->where(function ($query): void {
+                                $query->whereNull('expires_at')->orWhere('expires_at', '>', now());
+                            })
+                            ->where('kind', PageShareKind::Internal->value)
+                            ->where('internal_recipient_user_id', $owner->actorId);
+                    });
+            })
             ->with('latestVersion')
             ->first();
 

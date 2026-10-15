@@ -11,6 +11,7 @@ use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Routing\Middleware\ThrottleRequestsWithRedis;
 use Illuminate\Support\Facades\Route;
 use Symfony\Component\HttpFoundation\Request as SymfonyRequest;
+use Symfony\Component\HttpFoundation\Response;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -48,4 +49,11 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api/*') || $request->expectsJson(),
         );
+        $exceptions->respond(function (Response $response, Throwable $exception, Request $request): Response {
+            if ($request->is('artifacts/*', 'pages/*', 'page-shares/*')) {
+                $response->headers->set('X-Robots-Tag', 'noindex, nofollow, noarchive');
+            }
+
+            return $response;
+        });
     })->create();
