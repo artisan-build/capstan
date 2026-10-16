@@ -9,6 +9,8 @@ use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Session\DatabaseSessionHandler;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Laravel\Pennant\Feature;
@@ -180,7 +182,8 @@ test('settings validation summary names top level and nested fields', function (
         ->assertSee('must be a hexadecimal CSS colour');
 });
 
-test('draft form POST retains rejected input and displays default bag errors without changing the draft', function (string $field, string $rejected, string $label, string $message): void {
+test('draft form POST retains rejected input through database sessions and displays default bag errors without changing the draft', function (string $field, string $rejected, string $label, string $message): void {
+    config(['session.driver' => 'database']);
     $owner = capstanUser(['role' => UserRole::Owner->value]);
     $service = resolve(BrandKitService::class);
     $service->updateDraft($owner, ['display_name' => 'Durable draft '.Str::random(8)]);
@@ -189,14 +192,30 @@ test('draft form POST retains rejected input and displays default bag errors wit
     data_set($input, $field, $rejected);
     $input['_method'] = 'PATCH';
 
-    $this->actingAsVersioned($owner)->post(route('branding.draft.update'), $input)
+    $post = $this->actingAsVersioned($owner)->post(route('branding.draft.update'), $input)
         ->assertStatus(302)
         ->assertRedirect(route('branding.show'))
         ->assertSessionHasErrors([$field => $message], null, 'default')
         ->assertSessionHasInput($field, $rejected);
 
-    $response = $this->withCookie(session()->getName(), session()->getId())
-        ->get(route('branding.show'))->assertOk();
+    expect(session()->getHandler())->toBeInstanceOf(DatabaseSessionHandler::class);
+    $stored = DB::table('sessions')->where('id', session()->getId())->sole();
+    $payload = json_decode(base64_decode($stored->payload), true, flags: JSON_THROW_ON_ERROR);
+    expect(data_get($payload['_old_input'], $field))->toBe($rejected)
+        ->and($payload['errors']['default']['messages'][$field])->toBe([$message]);
+
+    $cookies = $post->headers->getCookies();
+    expect($cookies)->not->toBeEmpty();
+    foreach ($cookies as $cookie) {
+        expect(strlen((string) $cookie))->toBeLessThan(4096);
+        $this->withUnencryptedCookie($cookie->getName(), $cookie->getValue());
+    }
+    // Force the next request to reload persisted data instead of reusing in-memory flash.
+    app('session')->forgetDrivers();
+    app()->forgetInstance('session.store');
+    app()->forgetInstance('redirect');
+
+    $response = $this->get(route('branding.show'))->assertOk();
     $document = new DOMDocument;
     @$document->loadHTML($response->content());
     $xpath = new DOMXPath($document);
