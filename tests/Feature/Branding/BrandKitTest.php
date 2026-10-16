@@ -371,7 +371,9 @@ test('raw text insertion respects the response media type', function (string $el
     $decoy = '<head id=decoy>'.$proof.'</head>';
     $html = '<!doctype html><html><'.$element.$slash.'>'.$decoy.'</'.$element.'><head id=real></head><body>'.$proof.'</body></html>';
     $rendered = resolve(BrandPageRenderer::class)->render($html, $contentType);
-    $styleStart = '<style data-capstan-brand="applied">';
+    $styleStart = $contentType === 'application/xhtml+xml'
+        ? '<style xmlns="http://www.w3.org/1999/xhtml" data-capstan-brand="applied">'
+        : '<style data-capstan-brand="applied">';
 
     if ($contentType === 'application/xhtml+xml' && $slash !== '') {
         // XML closes the preceding element, so this head is no longer raw text.
@@ -384,7 +386,7 @@ test('raw text insertion respects the response media type', function (string $el
     }
 
     expect(substr_count($rendered, 'data-capstan-brand="applied"'))->toBe(1)
-        ->and(preg_replace('/<style data-capstan-brand="applied">.*?<\/style>/s', '', $rendered))->toBe($html);
+        ->and(preg_replace('/'.preg_quote($styleStart, '/').'.*?<\/style>/s', '', $rendered))->toBe($html);
 })->with(['script', 'style', 'textarea', 'title', 'iframe', 'noembed', 'noframes', 'noscript', 'xmp', 'plaintext'])
     ->with(['text/html', 'application/xhtml+xml'])
     ->with(['', ' /']);
@@ -422,9 +424,12 @@ test('owner and public responses pass their media type to insertion and measure 
         $prefix = $contentType === 'application/xhtml+xml'
             ? '<head id=decoy>'
             : ($element === 'plaintext' ? '<!doctype html>' : '<head id=real>');
-        expect($body)->toContain($prefix.'<style data-capstan-brand="applied">', $logo->id)
+        $styleStart = $contentType === 'application/xhtml+xml'
+            ? '<style xmlns="http://www.w3.org/1999/xhtml" data-capstan-brand="applied">'
+            : '<style data-capstan-brand="applied">';
+        expect($body)->toContain($prefix.$styleStart, $logo->id)
             ->and(substr_count($body, 'data-capstan-brand="applied"'))->toBe(1)
-            ->and(preg_replace('/<style data-capstan-brand="applied">.*?<\/style>/s', '', $body))->toBe($html)
+            ->and(preg_replace('/'.preg_quote($styleStart, '/').'.*?<\/style>/s', '', $body))->toBe($html)
             ->and($response->headers->get('Content-Length'))->toBe((string) strlen($body))
             ->and($response->headers->get('Content-Security-Policy'))->toContain("font-src 'none'", "img-src 'self' data:");
     }

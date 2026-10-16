@@ -150,7 +150,7 @@ final class BrandKitSchema
             $this->invalid($path, 'must be an XML-compatible HTML fragment');
         }
         foreach ($document->getElementsByTagName('*') as $element) {
-            if (strtolower($element->tagName) === 'style') {
+            if (strtolower($element->localName) === 'style') {
                 $this->css($element->textContent);
             }
             if ($element->hasAttribute('style')) {

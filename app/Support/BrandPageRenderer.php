@@ -36,9 +36,12 @@ final readonly class BrandPageRenderer
         if ($contentType === 'application/xhtml+xml') {
             $css = htmlspecialchars($css, ENT_XML1 | ENT_NOQUOTES, 'UTF-8');
         }
-        $style = '<style data-capstan-brand="applied">'.$css.'</style>';
+        // A prefixed XHTML root need not establish a default namespace. Give
+        // inserted elements their own default without rewriting authored bytes.
+        $namespace = $contentType === 'application/xhtml+xml' ? ' xmlns="http://www.w3.org/1999/xhtml"' : '';
+        $style = '<style'.$namespace.' data-capstan-brand="applied">'.$css.'</style>';
         if ($layout !== PageLayout::Plain) {
-            $before = '<div data-testid="page-layout-'.$layout->value.'" class="capstan-page capstan-layout-'.$layout->value.'">';
+            $before = '<div'.$namespace.' data-testid="page-layout-'.$layout->value.'" class="capstan-page capstan-layout-'.$layout->value.'">';
             if ($brand['header_html'] !== '') {
                 $before .= '<header data-testid="page-header" class="capstan-header">'.$brand['header_html'].'</header>';
             }

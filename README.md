@@ -531,6 +531,8 @@ Optional chrome uses `capstan-header` and `capstan-footer`. Plain adds no shell,
 Tokens, component rules, and custom CSS remain available in plain pages. Original body bytes stay
 intact inside the shell. Fragments are wrapped; incomplete documents without a closing body retain
 their structure instead of guessing where to close a shell.
+HTML templates and scripts containing comment-open tokens also omit the shell and chrome;
+their parser states are outside the byte-preserving layout scanner.
 
 The installation brand has a `default_layout` of `report`, empty `header_html` and `footer_html`,
 and empty `custom_css` until configured. A version's explicit layout always wins. The default is
@@ -568,7 +570,9 @@ another page version. Custom HTML and CSS never enter the app-host viewer or mai
 Owner export uses the current page version's layout and the current applied brand. It inlines tokens,
 components, custom CSS, chrome, and selected brand images as data URLs. Unresolved Capstan dependencies
 (including build assets or unselected brand images) cause an opaque refusal rather than a download
-that calls back to the installation. The exporter never fetches remote resources.
+that calls back to the installation. Linked `src` or `href` references in applied chrome also cause
+refusal unless they are embedded data or document-local fragments; selected brand images are inlined first.
+The exporter never fetches remote resources.
 
 ### Connecting an agent to Postmaster
 
