@@ -3,6 +3,7 @@
 use App\Models\BrandAsset;
 use App\Models\BrandVersion;
 use App\Notifications\ExternalPageShareNotification;
+use App\Support\BrandKitSchema;
 use App\Support\BrandKitService;
 use ArtisanBuild\BuiltForCloud\Notifications\HumanInvitationNotification;
 use ArtisanBuild\BuiltForCloud\User;
@@ -124,32 +125,44 @@ function appBrandChrome(object $test, User $user): array
     return ['dashboard' => $dashboard, 'header' => $header, 'auth' => $auth];
 }
 
+/**
+ * Pest's negated toContain with several needles passes when ANY one is
+ * missing, so every forbidden value is checked on its own.
+ */
+function expectAbsent(string $haystack, string ...$needles): void
+{
+    foreach ($needles as $needle) {
+        expect($haystack)->not->toContain($needle);
+    }
+}
+
 /** @param array<string, string> $markers */
 function expectNoBrandLeak(string $html, array $markers): void
 {
-    expect($html)->not->toContain($markers['header'], $markers['footer'], $markers['css'], $markers['tone']);
+    expectAbsent($html, $markers['header'], $markers['footer'], $markers['css'], $markers['tone']);
 }
 
 test('without an applied kit app chrome and mail fall back to the configured name, built-in icon and neutral accent', function (): void {
     $owner = capstanUser(['role' => UserRole::Owner->value]);
     $name = (string) config('app.name');
+    $defaultAccent = resolve(BrandKitSchema::class)->defaults()['colours']['light']['accent'];
     $chrome = appBrandChrome($this, $owner);
 
     foreach ([$chrome['dashboard'], $chrome['header'], ...$chrome['auth']] as $html) {
-        expect($html)->toContain('viewBox="0 0 40 42"', e($name))
-            ->not->toContain('data-testid="app-brand-icon"', 'data-testid="app-brand-accent"', '/brand-assets/');
+        expect($html)->toContain('viewBox="0 0 40 42"', e($name));
+        expectAbsent($html, 'data-testid="app-brand-icon"', 'data-testid="app-brand-accent"', '/brand-assets/', $defaultAccent);
     }
     expect($chrome['dashboard'])->toContain('<title>'."\n    Dashboard - ".e($name));
 
     $mails = appBrandMails($owner);
     foreach (['share_html', 'invite_html'] as $key) {
-        expect($mails[$key])->toContain('data-testid="mail-brand-header"', e($name), $mails[$key === 'share_html' ? 'share_url' : 'invite_url'])
-            ->not->toContain('<img', '/brand-assets/', 'laravel.com');
+        expect($mails[$key])->toContain('data-testid="mail-brand-header"', e($name), $mails[$key === 'share_html' ? 'share_url' : 'invite_url']);
+        expectAbsent($mails[$key], '<img', '/brand-assets/', 'laravel.com', $defaultAccent);
         expect(Str::between($mails[$key], 'data-testid="mail-brand-header"', '</td>'))->toContain(e($name));
     }
     foreach (['share_text', 'invite_text'] as $key) {
-        expect($mails[$key])->toContain($name, $mails[$key === 'share_text' ? 'share_url' : 'invite_url'])
-            ->not->toContain('<a ', '<img');
+        expect($mails[$key])->toContain($name, $mails[$key === 'share_text' ? 'share_url' : 'invite_url']);
+        expectAbsent($mails[$key], '<a ', '<img');
     }
 });
 
@@ -163,8 +176,8 @@ test('a draft changes neither app chrome nor notification mail until it is appli
     $chrome = appBrandChrome($this, $owner);
     $mails = appBrandMails($owner);
     foreach ([$chrome['dashboard'], $chrome['header'], ...$chrome['auth'], $mails['share_html'], $mails['share_text'], $mails['invite_html'], $mails['invite_text']] as $html) {
-        expect($html)->toContain(e((string) config('app.name')))
-            ->not->toContain($markers['name'], $markers['light'], $markers['dark'], ...array_values($assets));
+        expect($html)->toContain(e((string) config('app.name')));
+        expectAbsent($html, $markers['name'], $markers['light'], $markers['dark'], ...array_values($assets));
         expectNoBrandLeak($html, $markers);
     }
 });
@@ -183,16 +196,16 @@ test('after apply the app chrome and auth layouts carry the applied name, isolat
     $markUrl = 'https://render.chrome-brand.test/brand-assets/'.$assets['mark'];
     $chrome = appBrandChrome($this, $owner);
     foreach ([$chrome['dashboard'], $chrome['header'], ...$chrome['auth']] as $html) {
-        expect($html)->toContain(e($markers['name']), 'data-testid="app-brand-icon" src="'.$markUrl.'"')
-            ->not->toContain('viewBox="0 0 40 42"', e((string) config('app.name')), $assets['logo_light'], $assets['logo_dark'], $draftMarkers['name'], 'https://app.chrome-brand.test/brand-assets/');
-        expect(substr_count($html, 'data-testid="app-brand-icon"'))->toBeGreaterThan(0);
+        expect($html)->toContain(e($markers['name']), 'data-testid="app-brand-icon" src="'.$markUrl.'"');
+        expectAbsent($html, 'viewBox="0 0 40 42"', e((string) config('app.name')), $assets['logo_light'], $assets['logo_dark'], $draftMarkers['name'], 'https://app.chrome-brand.test/brand-assets/');
         expectNoBrandLeak($html, $markers);
         expectNoBrandLeak($html, $draftMarkers);
         $accent = Str::between($html, '<style data-testid="app-brand-accent">', '</style>');
         expect($accent)->toContain(
             ':root { --color-accent: '.$markers['light'].'; --color-accent-content: '.$markers['light'].';',
             '.dark { --color-accent: '.$markers['dark'].'; --color-accent-content: '.$markers['dark'].';',
-        )->not->toContain($draftMarkers['light'], $draftMarkers['dark']);
+        );
+        expectAbsent($accent, $draftMarkers['light'], $draftMarkers['dark']);
     }
     expect($chrome['dashboard'])->toContain('Dashboard - '.e($markers['name']));
 
@@ -218,14 +231,14 @@ test('after apply both notification mails carry the applied name, logo and accen
         $header = Str::between($html, 'data-testid="mail-brand-header"', '</td>');
         expect($header)->toContain('<img src="'.$logoUrl.'"', 'alt="'.e($markers['name']).'"')
             ->and($html)->toContain('<title>'.e($markers['name']).'</title>', 'href="'.e($mails[$kind.'_url']).'"')
-            ->and($html)->toMatch('/<a href="'.preg_quote(e($mails[$kind.'_url']), '/').'" class="button button-primary"[^>]*style="[^"]*background-color: '.preg_quote($markers['light'], '/').'/')
-            ->and($html)->not->toContain('laravel.com', $assets['mark'], $assets['logo_dark'], $draftMarkers['name'], $draftMarkers['light'], e((string) config('app.name')));
+            ->and($html)->toMatch('/<a href="'.preg_quote(e($mails[$kind.'_url']), '/').'" class="button button-primary"[^>]*style="[^"]*background-color: '.preg_quote($markers['light'], '/').'/');
+        expectAbsent($html, 'laravel.com', $assets['mark'], $assets['logo_dark'], $draftMarkers['name'], $draftMarkers['light'], e((string) config('app.name')));
         expectNoBrandLeak($html, $markers);
         expectNoBrandLeak($html, $draftMarkers);
 
         $text = $mails[$kind.'_text'];
-        expect($text)->toContain($markers['name'], $mails[$kind.'_url'], $action)
-            ->not->toContain('<img', '/brand-assets/', $draftMarkers['name'], (string) config('app.name'));
+        expect($text)->toContain($markers['name'], $mails[$kind.'_url'], $action);
+        expectAbsent($text, '<img', '/brand-assets/', $draftMarkers['name'], (string) config('app.name'));
         expectNoBrandLeak($text, $markers);
     }
     expect($mails['share_url'])->toStartWith('https://app.chrome-brand.test/page-shares/')
@@ -249,17 +262,18 @@ test('switching or reverting the applied version switches app and mail branding 
     expect($chrome)->toContain(e($two['name']), $two['light'], $two['dark'],
         'src="https://render.chrome-brand.test/brand-assets/'.$assets['logo_light'].'"',
         'src="https://render.chrome-brand.test/brand-assets/'.$assets['logo_dark'].'"',
-    )->not->toContain(e($one['name']), $one['light'], $assets['mark'])
-        ->and($mail)->toContain(e($two['name']), $two['light'], $assets['logo_light'])
-        ->not->toContain(e($one['name']), $one['light'], $assets['mark']);
+    );
+    expect($mail)->toContain(e($two['name']), $two['light'], $assets['logo_light']);
+    expectAbsent($chrome, e($one['name']), $one['light'], $assets['mark']);
+    expectAbsent($mail, e($one['name']), $one['light'], $assets['mark']);
 
     $service->revertToVersion($owner, $v1->version_number);
     $chrome = appBrandChrome($this, $owner)['dashboard'];
     $mail = appBrandMails($owner)['invite_html'];
     expect($chrome)->toContain(e($one['name']), $one['light'], $one['dark'], 'src="https://render.chrome-brand.test/brand-assets/'.$assets['mark'].'"')
-        ->not->toContain(e($two['name']), $two['light'], $assets['logo_light'], $assets['logo_dark'])
-        ->and($mail)->toContain(e($one['name']), $one['light'], 'src="https://render.chrome-brand.test/brand-assets/'.$assets['mark'].'"')
-        ->not->toContain(e($two['name']), $two['light'], $assets['logo_light']);
+        ->and($mail)->toContain(e($one['name']), $one['light'], 'src="https://render.chrome-brand.test/brand-assets/'.$assets['mark'].'"');
+    expectAbsent($chrome, e($two['name']), $two['light'], $assets['logo_light'], $assets['logo_dark']);
+    expectAbsent($mail, e($two['name']), $two['light'], $assets['logo_light']);
     expect(BrandVersion::query()->count())->toBe(3)
         ->and(BrandVersion::query()->whereKey(array_keys($snapshots))->orderBy('version_number')->pluck('configuration', 'id')->all())->toBe($snapshots)
         ->and([$v1->fresh()->version_number, $v2->fresh()->version_number])->toBe([1, 2]);
@@ -279,8 +293,8 @@ test('feature-off or an unconfigured render origin falls back without exposing a
     $chrome = appBrandChrome($this, $owner);
     $mails = appBrandMails($owner);
     foreach ([$chrome['dashboard'], $chrome['header'], ...$chrome['auth'], $mails['share_html'], $mails['invite_html'], $mails['share_text'], $mails['invite_text']] as $html) {
-        expect($html)->toContain(e((string) config('app.name')))
-            ->not->toContain($markers['name'], $markers['light'], '/brand-assets/', 'data-testid="app-brand-icon"', 'data-testid="app-brand-accent"', ...array_values($assets));
+        expect($html)->toContain(e((string) config('app.name')));
+        expectAbsent($html, $markers['name'], $markers['light'], '/brand-assets/', 'data-testid="app-brand-icon"', 'data-testid="app-brand-accent"', ...array_values($assets));
     }
     foreach ([$chrome['dashboard'], $chrome['header'], ...$chrome['auth']] as $html) {
         expect($html)->toContain('viewBox="0 0 40 42"');
