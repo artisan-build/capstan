@@ -36,6 +36,57 @@ namespace App\Models{
 namespace App\Models{
 /**
  * @property string $id
+ * @property BrandAssetKind $kind
+ * @property string $content_type
+ * @property int $size_bytes
+ * @property string $content_hash
+ * @property string $storage_key
+ * @property string $created_by_user_id
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandAsset newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandAsset newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandAsset query()
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperBrandAsset {}
+}
+
+namespace App\Models{
+/**
+ * @property string $installation_key
+ * @property string|null $current_version_id
+ * @property int $current_version_number
+ * @property array<string, mixed>|null $draft
+ * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\BrandVersion> $versions
+ * @property-read int|null $versions_count
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandKit newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandKit newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandKit query()
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperBrandKit {}
+}
+
+namespace App\Models{
+/**
+ * @property string $id
+ * @property string $brand_kit_key
+ * @property int $version_number
+ * @property array<string, mixed> $configuration
+ * @property string $applied_by_user_id
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandVersion newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandVersion newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandVersion query()
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperBrandVersion {}
+}
+
+namespace App\Models{
+/**
+ * @property string $id
  * @property MessageType $type
  * @property int $version
  * @property string $from_address

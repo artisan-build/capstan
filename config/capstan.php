@@ -40,7 +40,6 @@ return [
         'csp_allowlist' => [
             'script_src' => $csv('CAPSTAN_ARTIFACT_CSP_SCRIPT_SRC'),
             'style_src' => $csv('CAPSTAN_ARTIFACT_CSP_STYLE_SRC'),
-            'font_src' => $csv('CAPSTAN_ARTIFACT_CSP_FONT_SRC'),
             'img_src' => $csv('CAPSTAN_ARTIFACT_CSP_IMG_SRC'),
         ],
         'allowed_content_types' => [
@@ -58,5 +57,10 @@ return [
             'text/html',
             'application/xhtml+xml',
         ],
+    ],
+
+    'brand' => [
+        // Code defaults keep fresh installations safe without environment setup.
+        'max_image_bytes' => 2 * 1024 * 1024,
     ],
 ];
