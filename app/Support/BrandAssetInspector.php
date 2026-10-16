@@ -7,18 +7,6 @@ use Illuminate\Validation\ValidationException;
 
 final class BrandAssetInspector
 {
-    /** @var list<string> */
-    private const array WOFF2_KNOWN_TAGS = [
-        'cmap', 'head', 'hhea', 'hmtx', 'maxp', 'name', 'OS/2', 'post',
-        'cvt ', 'fpgm', 'glyf', 'loca', 'prep', 'CFF ', 'VORG', 'EBDT',
-        'EBLC', 'gasp', 'hdmx', 'kern', 'LTSH', 'PCLT', 'VDMX', 'vhea',
-        'vmtx', 'BASE', 'GDEF', 'GPOS', 'GSUB', 'EBSC', 'JSTF', 'MATH',
-        'CBDT', 'CBLC', 'COLR', 'CPAL', 'SVG ', 'sbix', 'acnt', 'avar',
-        'bdat', 'bloc', 'bsln', 'cvar', 'fdsc', 'feat', 'fmtx', 'fvar',
-        'gvar', 'hsty', 'just', 'lcar', 'mort', 'morx', 'opbd', 'prop',
-        'trak', 'Zapf', 'Silf', 'Glat', 'Gloc', 'Feat', 'Sill',
-    ];
-
     /** @return array{content_type: string, size_bytes: int, content_hash: string} */
     public function inspect(BrandAssetKind $kind, string $bytes): array
     {
@@ -64,150 +52,164 @@ final class BrandAssetInspector
 
     private function fontType(string $bytes): string
     {
-        if ($this->isStructurallyValidWoff2($bytes)) {
-            return 'font/woff2';
+        if ($this->isStructurallyValidTrueType($bytes)) {
+            return 'font/ttf';
         }
 
-        $this->invalid('The asset is not a structurally valid WOFF2 font.');
+        $this->invalid('The asset is not a structurally valid TrueType font.');
     }
 
     /**
-     * WOFF2 support is deliberately structural: exact header length, a complete
-     * unique table directory with canonical UIntBase128 lengths, legal transform
-     * flags, the reconstructed SFNT size, core font tables, and bounded non-empty
-     * compressed/metadata/private payloads must all agree. Other font containers
-     * are rejected rather than passed to a browser parser on magic bytes alone.
+     * TrueType support is deliberately structural and payload-aware. The SFNT
+     * header/search fields, complete unique table directory, aligned non-
+     * overlapping ranges, every table checksum, whole-file checksum adjustment,
+     * required tables, and the linked glyph/metrics table sizes must all agree.
+     * Compressed containers are rejected rather than trusted on header shape.
      */
-    private function isStructurallyValidWoff2(string $bytes): bool
+    private function isStructurallyValidTrueType(string $bytes): bool
     {
         $length = strlen($bytes);
-        $tables = $this->uint16($bytes, 12);
-        $totalSfntSize = $this->uint32($bytes, 16);
-        $compressedSize = $this->uint32($bytes, 20);
-
-        if ($length < 48
-            || substr($bytes, 0, 4) !== 'wOF2'
-            || $this->uint32($bytes, 8) !== $length
+        $tables = $this->uint16($bytes, 4);
+        if ($length < 28
+            || substr($bytes, 0, 4) !== "\x00\x01\x00\x00"
             || $tables < 1
-            || $tables > 63
-            || $this->uint16($bytes, 14) !== 0
-            || $compressedSize < 1) {
+            || $tables > 128
+            || ! $this->searchFieldsAreValid($bytes, $tables)) {
             return false;
         }
 
-        $cursor = 48;
-        $tags = [];
-        $reconstructedSize = 12 + ($tables * 16);
+        $directoryEnd = 12 + ($tables * 16);
+        if ($directoryEnd > $length) {
+            return false;
+        }
 
+        $records = [];
+        $ranges = [];
         for ($table = 0; $table < $tables; $table++) {
-            if ($cursor >= $length) {
+            $record = 12 + ($table * 16);
+            $tag = substr($bytes, $record, 4);
+            $checksum = $this->uint32($bytes, $record + 4);
+            $offset = $this->uint32($bytes, $record + 8);
+            $tableLength = $this->uint32($bytes, $record + 12);
+            $paddedEnd = $offset + (($tableLength + 3) & ~3);
+
+            if (preg_match('/^[\x20-\x7e]{4}$/D', $tag) !== 1
+                || isset($records[$tag])
+                || $tableLength < 1
+                || $offset < $directoryEnd
+                || $offset % 4 !== 0
+                || $offset + $tableLength > $length
+                || $paddedEnd > $length) {
                 return false;
             }
-            $flags = ord($bytes[$cursor++]);
-            $tagIndex = $flags & 0x3F;
-            $transformVersion = $flags >> 6;
-            if ($tagIndex === 63) {
-                if ($cursor + 4 > $length) {
+
+            $tableBytes = substr($bytes, $offset, $tableLength);
+            if ($tag === 'head') {
+                if ($tableLength < 54) {
                     return false;
                 }
-                $tag = substr($bytes, $cursor, 4);
-                $cursor += 4;
-            } else {
-                $tag = self::WOFF2_KNOWN_TAGS[$tagIndex];
+                $tableBytes = substr_replace($tableBytes, "\0\0\0\0", 8, 4);
             }
-            if ($tag === '' || isset($tags[$tag])) {
+            if ($this->checksum($tableBytes) !== $checksum) {
                 return false;
             }
-            $tags[$tag] = true;
 
-            $originalLength = $this->base128($bytes, $cursor);
-            if ($originalLength === null || $originalLength < 1) {
-                return false;
-            }
-            $reconstructedSize += ($originalLength + 3) & ~3;
+            $records[$tag] = ['offset' => $offset, 'length' => $tableLength];
+            $ranges[] = [$offset, $paddedEnd];
+        }
 
-            $glyfOrLoca = in_array($tag, ['glyf', 'loca'], true);
-            if ($glyfOrLoca && ! in_array($transformVersion, [0, 3], true)) {
+        usort($ranges, static fn (array $left, array $right): int => $left[0] <=> $right[0]);
+        for ($index = 1; $index < count($ranges); $index++) {
+            if ($ranges[$index][0] < $ranges[$index - 1][1]) {
                 return false;
-            }
-            if (($glyfOrLoca && $transformVersion === 0) || (! $glyfOrLoca && $transformVersion !== 0)) {
-                $transformedLength = $this->base128($bytes, $cursor);
-                if ($transformedLength === null || ($tag !== 'loca' && $transformedLength < 1)) {
-                    return false;
-                }
             }
         }
 
-        if ($reconstructedSize !== $totalSfntSize
-            || ! $this->hasRequiredFontTables($tags)
-            || $cursor + $compressedSize > $length
-            || trim(substr($bytes, $cursor, $compressedSize), "\0") === '') {
+        return $this->hasValidRequiredTables($bytes, $records)
+            && $this->checksum($bytes) === 0xB1B0AFBA;
+    }
+
+    private function searchFieldsAreValid(string $bytes, int $tables): bool
+    {
+        $power = 1;
+        $selector = 0;
+        while (($power * 2) <= $tables) {
+            $power *= 2;
+            $selector++;
+        }
+
+        return $this->uint16($bytes, 6) === $power * 16
+            && $this->uint16($bytes, 8) === $selector
+            && $this->uint16($bytes, 10) === ($tables * 16) - ($power * 16);
+    }
+
+    /**
+     * @param  array<string, array{offset: int, length: int}>  $records
+     */
+    private function hasValidRequiredTables(string $bytes, array $records): bool
+    {
+        foreach (['OS/2', 'cmap', 'glyf', 'head', 'hhea', 'hmtx', 'loca', 'maxp', 'name', 'post'] as $required) {
+            if (! isset($records[$required])) {
+                return false;
+            }
+        }
+
+        $head = $records['head'];
+        $maxp = $records['maxp'];
+        $hhea = $records['hhea'];
+        $unitsPerEm = $this->uint16($bytes, $head['offset'] + 18);
+        if ($this->uint32($bytes, $head['offset'] + 12) !== 0x5F0F3CF5
+            || $unitsPerEm < 16
+            || $unitsPerEm > 16384
+            || $maxp['length'] < 6
+            || $hhea['length'] < 36) {
             return false;
         }
 
-        $payloadEnd = $cursor + $compressedSize;
-        $metadataOffset = $this->uint32($bytes, 28);
-        $metadataLength = $this->uint32($bytes, 32);
-        $metadataOriginalLength = $this->uint32($bytes, 36);
-        $privateOffset = $this->uint32($bytes, 40);
-        $privateLength = $this->uint32($bytes, 44);
-        $nextBlock = $length;
-        if ($metadataOffset > 0) {
-            $nextBlock = min($nextBlock, $metadataOffset);
-        }
-        if ($privateOffset > 0) {
-            $nextBlock = min($nextBlock, $privateOffset);
+        $glyphs = $this->uint16($bytes, $maxp['offset'] + 4);
+        $metrics = $this->uint16($bytes, $hhea['offset'] + 34);
+        $locaFormat = $this->int16($bytes, $head['offset'] + 50);
+        if ($glyphs < 1 || $metrics < 1 || $metrics > $glyphs || ! in_array($locaFormat, [0, 1], true)) {
+            return false;
         }
 
-        return $nextBlock >= $payloadEnd
-            && $nextBlock - $payloadEnd <= 3
-            && (($metadataOffset === 0 && $metadataLength === 0 && $metadataOriginalLength === 0)
-                || ($metadataOffset >= $payloadEnd
-                    && $metadataLength > 0
-                    && $metadataOriginalLength > 0
-                    && $metadataOffset + $metadataLength <= $length))
-            && (($privateOffset === 0 && $privateLength === 0)
-                || ($privateOffset >= $payloadEnd
-                    && $privateLength > 0
-                    && $privateOffset + $privateLength <= $length))
-            && ($metadataOffset === 0
-                || $privateOffset === 0
-                || $privateOffset >= $metadataOffset + $metadataLength);
-    }
+        $expectedLocaLength = ($glyphs + 1) * ($locaFormat === 0 ? 2 : 4);
+        $minimumHmtxLength = ($metrics * 4) + (($glyphs - $metrics) * 2);
+        if ($records['loca']['length'] !== $expectedLocaLength
+            || $records['hmtx']['length'] < $minimumHmtxLength) {
+            return false;
+        }
 
-    /** @param array<string, true> $tags */
-    private function hasRequiredFontTables(array $tags): bool
-    {
-        foreach (['cmap', 'head', 'hhea', 'hmtx', 'maxp', 'name'] as $required) {
-            if (! isset($tags[$required])) {
+        $lastGlyphOffset = 0;
+        for ($glyph = 0; $glyph <= $glyphs; $glyph++) {
+            $glyphOffset = $locaFormat === 0
+                ? $this->uint16($bytes, $records['loca']['offset'] + ($glyph * 2)) * 2
+                : $this->uint32($bytes, $records['loca']['offset'] + ($glyph * 4));
+            if ($glyphOffset < $lastGlyphOffset || $glyphOffset > $records['glyf']['length']) {
                 return false;
             }
+            $lastGlyphOffset = $glyphOffset;
         }
 
-        return (isset($tags['glyf']) && isset($tags['loca'])) || isset($tags['CFF ']);
+        return $lastGlyphOffset <= $records['glyf']['length'];
     }
 
-    private function base128(string $bytes, int &$cursor): ?int
+    private function checksum(string $bytes): int
     {
-        $result = 0;
-        for ($index = 0; $index < 5; $index++) {
-            if ($cursor >= strlen($bytes)) {
-                return null;
-            }
-            $byte = ord($bytes[$cursor++]);
-            if ($index === 0 && $byte === 0x80) {
-                return null;
-            }
-            if (($result & 0xFE000000) !== 0) {
-                return null;
-            }
-            $result = ($result << 7) | ($byte & 0x7F);
-            if (($byte & 0x80) === 0) {
-                return $result;
-            }
+        $bytes .= str_repeat("\0", (4 - (strlen($bytes) % 4)) % 4);
+        $sum = 0;
+        for ($offset = 0; $offset < strlen($bytes); $offset += 4) {
+            $sum = ($sum + $this->uint32($bytes, $offset)) & 0xFFFFFFFF;
         }
 
-        return null;
+        return $sum;
+    }
+
+    private function int16(string $bytes, int $offset): int
+    {
+        $value = $this->uint16($bytes, $offset);
+
+        return $value >= 0x8000 ? $value - 0x10000 : $value;
     }
 
     private function uint16(string $bytes, int $offset): int

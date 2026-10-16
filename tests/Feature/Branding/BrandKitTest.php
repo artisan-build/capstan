@@ -55,9 +55,9 @@ function brandPng(): string
     return (string) base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', true);
 }
 
-function brandWoff2(): string
+function brandTtf(): string
 {
-    return (string) file_get_contents(base_path('tests/Fixtures/Brand/instrument-sans-400-latin-ext.woff2'));
+    return (string) file_get_contents(base_path('tests/Fixtures/Brand/instrument-sans-400-latin-ext.ttf'));
 }
 
 /** @return array<string, string> */
@@ -74,7 +74,7 @@ function brandImageSamples(): array
 function brandFontSamples(): array
 {
     return [
-        'font/woff2' => brandWoff2(),
+        'font/ttf' => brandTtf(),
     ];
 }
 
@@ -259,7 +259,7 @@ test('owner and admin select and clear every asset slot while admitted selection
     $admin = capstanUser(['role' => UserRole::Admin->value]);
     $logo = $service->uploadAsset($owner, BrandAssetKind::Logo, brandPng());
     $mark = $service->uploadAsset($admin, BrandAssetKind::Mark, brandPng());
-    $font = $service->uploadAsset($owner, BrandAssetKind::Font, brandWoff2());
+    $font = $service->uploadAsset($owner, BrandAssetKind::Font, brandTtf());
 
     $service->selectAsset($owner, 'logo_light', $logo->id);
     $service->selectAsset($admin, 'logo_dark', $logo->id);
@@ -416,23 +416,30 @@ test('asset uploads sniff bytes enforce limits and leave invalid input side effe
             ->and(@imagecreatefromstring($bytes))->toBeFalse();
     }
 
-    $font = brandWoff2();
-    $headerOnlyWoff2 = 'wOF2'.pack('N', 0x00010000).pack('N', 48).pack('n', 1).str_repeat("\x00", 34);
-    $emptyDirectoryWoff2 = substr_replace($font, pack('n', 0), 12, 2);
-    $truncatedWoff2 = substr($font, 0, -1);
-    $outOfBoundsDirectoryWoff2 = brandReplaceUint32(substr($font, 0, 49), 8, 49);
-    $outOfBoundsPayloadWoff2 = brandReplaceUint32($font, 20, strlen($font));
+    $font = brandTtf();
+    $tableCount = (int) (unpack('ntables', substr($font, 4, 2))['tables'] ?? 0);
+    $directoryEnd = 12 + ($tableCount * 16);
+    $headerOnlyTtf = substr($font, 0, 12);
+    $emptyDirectoryTtf = substr_replace($font, pack('n', 0), 4, 2);
+    $truncatedTtf = substr($font, 0, -1);
+    $outOfBoundsDirectoryTtf = brandReplaceUint32($font, 20, strlen($font) + 4);
+    $zeroLengthTableTtf = brandReplaceUint32($font, 24, 0);
+    $corruptPayloadTtf = substr($font, 0, $directoryEnd).str_repeat('A', strlen($font) - $directoryEnd);
+    expect(substr($corruptPayloadTtf, 0, $directoryEnd))->toBe(substr($font, 0, $directoryEnd))
+        ->and(substr($corruptPayloadTtf, $directoryEnd))->not->toBe(substr($font, $directoryEnd));
     $invalid = [
         ...array_map(fn (string $bytes): array => [BrandAssetKind::Logo, $bytes], array_values($truncatedImages)),
-        [BrandAssetKind::Logo, brandWoff2()],
+        [BrandAssetKind::Logo, brandTtf()],
         [BrandAssetKind::Font, brandPng()],
-        [BrandAssetKind::Font, $headerOnlyWoff2],
-        [BrandAssetKind::Font, $emptyDirectoryWoff2],
-        [BrandAssetKind::Font, $truncatedWoff2],
-        [BrandAssetKind::Font, $outOfBoundsDirectoryWoff2],
-        [BrandAssetKind::Font, $outOfBoundsPayloadWoff2],
-        [BrandAssetKind::Font, "\x00\x01\x00\x00".str_repeat("\x00", 24)],
+        [BrandAssetKind::Font, $headerOnlyTtf],
+        [BrandAssetKind::Font, $emptyDirectoryTtf],
+        [BrandAssetKind::Font, $truncatedTtf],
+        [BrandAssetKind::Font, $outOfBoundsDirectoryTtf],
+        [BrandAssetKind::Font, $zeroLengthTableTtf],
+        [BrandAssetKind::Font, $corruptPayloadTtf],
+        [BrandAssetKind::Font, 'wOF2'.str_repeat("\x00", 44)],
         [BrandAssetKind::Font, 'wOFF'.str_repeat("\x00", 40)],
+        [BrandAssetKind::Font, 'OTTO'.str_repeat("\x00", 24)],
         [BrandAssetKind::Logo, (string) base64_decode('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', true)],
         ['video', brandPng()],
     ];
@@ -447,8 +454,8 @@ test('asset uploads sniff bytes enforce limits and leave invalid input side effe
         ->and(BrandAsset::query()->count())->toBe($rowCount)
         ->and(Storage::disk()->allFiles())->toBe($files);
 
-    config(['capstan.brand.max_font_bytes' => strlen(brandWoff2()) - 1]);
-    expect(fn () => $service->uploadAsset($owner, BrandAssetKind::Font, brandWoff2()))->toThrow(ValidationException::class)
+    config(['capstan.brand.max_font_bytes' => strlen(brandTtf()) - 1]);
+    expect(fn () => $service->uploadAsset($owner, BrandAssetKind::Font, brandTtf()))->toThrow(ValidationException::class)
         ->and(BrandAsset::query()->count())->toBe($rowCount)
         ->and(Storage::disk()->allFiles())->toBe($files);
 });
@@ -471,7 +478,7 @@ test('page CSP follows applied asset classes while drafts and legacy artifacts s
     $publicUrl = $origin->signedPageShareContentUrl($share);
     $logo = $service->uploadAsset($owner, BrandAssetKind::Logo, brandPng());
     $unreferencedLogo = $service->uploadAsset($owner, BrandAssetKind::Logo, brandPng());
-    $font = $service->uploadAsset($owner, BrandAssetKind::Font, brandWoff2());
+    $font = $service->uploadAsset($owner, BrandAssetKind::Font, brandTtf());
     $service->updateDraft($owner, ['colours' => ['light' => ['primary' => $draftColour]], 'tone_notes' => $tone]);
     $service->selectAsset($owner, 'logo_light', $logo->id);
     $service->selectAsset($owner, 'heading_font', $font->id);
@@ -587,7 +594,7 @@ test('page CSP follows applied asset classes while drafts and legacy artifacts s
     expect($restoredAsset->streamedContent())->toBe(brandPng());
     $this->get('https://render.brand.test/brand-assets/'.$font->id)
         ->assertOk()
-        ->assertHeader('Content-Type', 'font/woff2')
+        ->assertHeader('Content-Type', 'font/ttf')
         ->assertHeader('X-Content-Type-Options', 'nosniff')
         ->assertHeaderMissing('Set-Cookie');
     $this->get('https://render.brand.test/brand-assets/'.$unreferencedLogo->id)
@@ -630,7 +637,7 @@ test('configured CSP sources survive applied page branding without widening lega
         'expires_at' => now()->addHour(),
     ]);
     $logo = $service->uploadAsset($owner, BrandAssetKind::Logo, brandPng());
-    $font = $service->uploadAsset($owner, BrandAssetKind::Font, brandWoff2());
+    $font = $service->uploadAsset($owner, BrandAssetKind::Font, brandTtf());
     $service->selectAsset($owner, 'logo_light', $logo->id);
     $service->selectAsset($owner, 'heading_font', $font->id);
     $service->applyDraft($owner);
