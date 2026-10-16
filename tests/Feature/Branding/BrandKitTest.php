@@ -55,9 +55,9 @@ function brandPng(): string
     return (string) base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', true);
 }
 
-function brandTtf(): string
+function brandWoff2(): string
 {
-    return "\x00\x01\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00".str_repeat("\x00", 16);
+    return (string) file_get_contents(base_path('tests/Fixtures/Brand/instrument-sans-400-latin-ext.woff2'));
 }
 
 /** @return array<string, string> */
@@ -74,11 +74,30 @@ function brandImageSamples(): array
 function brandFontSamples(): array
 {
     return [
-        'font/woff' => 'wOFF'.pack('N', 0x00010000).pack('N', 44).pack('n', 1).str_repeat("\x00", 30),
-        'font/woff2' => 'wOF2'.pack('N', 0x00010000).pack('N', 48).pack('n', 1).str_repeat("\x00", 34),
-        'font/ttf' => brandTtf(),
-        'font/otf' => 'OTTO'."\x00\x01\x00\x00\x00\x00\x00\x00".str_repeat("\x00", 16),
+        'font/woff2' => brandWoff2(),
     ];
+}
+
+function brandReplaceUint32(string $bytes, int $offset, int $value): string
+{
+    return substr_replace($bytes, pack('N', $value), $offset, 4);
+}
+
+function brandRecognizableImageTruncation(string $bytes, string $contentType): string
+{
+    for ($length = 12; $length < strlen($bytes); $length++) {
+        $candidate = substr($bytes, 0, $length);
+        $size = @getimagesizefromstring($candidate);
+        $decoded = function_exists('imagecreatefromstring') ? @imagecreatefromstring($candidate) : false;
+        if ($decoded !== false) {
+            imagedestroy($decoded);
+        }
+        if (is_array($size) && $size['mime'] === $contentType && $decoded === false) {
+            return $candidate;
+        }
+    }
+
+    throw new RuntimeException('The positive image fixture has no recognizable truncated prefix.');
 }
 
 function brandPage(User $owner, string $html): Page
@@ -192,6 +211,92 @@ test('non-admin and unavailable principals are refused before every brand side e
         ->and($this->get($renderUrl)->assertOk()->streamedContent())->toBe($before);
 });
 
+test('select asset authorizes before missing or wrong-kind lookup for every unavailable principal', function (): void {
+    $service = resolve(BrandKitService::class);
+    $owner = brandOwner();
+    $page = brandPage($owner, '<html><head></head><body>select authorization '.Str::random(8).'</body></html>');
+    $service->updateDraft($owner, ['display_name' => 'Applied select baseline '.Str::random(8)]);
+    $service->applyDraft($owner);
+    $wrongKind = $service->uploadAsset($owner, BrandAssetKind::Logo, brandPng());
+    $renderUrl = resolve(ArtifactRenderOrigin::class)->signedPageContentUrl($page, $page->latestVersion);
+    $beforePage = $this->get($renderUrl)->assertOk()->streamedContent();
+    $beforeState = $service->read();
+    $beforeFiles = Storage::disk()->allFiles();
+    $member = capstanUser(['role' => UserRole::Member->value]);
+    $inactiveAdmin = capstanUser(['role' => UserRole::Admin->value, 'status' => 'inactive']);
+    $offboardedAdmin = capstanUser(['role' => UserRole::Admin->value]);
+    OffboardedSubject::query()->create([
+        'subject_type' => SubjectType::UserPrincipal,
+        'subject_ref' => 'capstan-user:'.$offboardedAdmin->getKey(),
+        'user_id' => (string) $offboardedAdmin->getKey(),
+        'offboarded_at' => now(),
+    ]);
+    $refusals = [];
+
+    foreach ([$member, $inactiveAdmin, $offboardedAdmin] as $denied) {
+        foreach ([['logo_light', (string) Str::uuid()], ['heading_font', $wrongKind->id]] as [$slot, $assetId]) {
+            try {
+                $service->selectAsset($denied, $slot, $assetId);
+                throw new LogicException('An unavailable principal selected a brand asset.');
+            } catch (AuthorizationException $exception) {
+                $refusals[] = $exception->getMessage();
+            }
+        }
+    }
+
+    expect($refusals)->toHaveCount(6)
+        ->and(array_values(array_unique($refusals)))->toBe(['Only an admitted Owner or Admin may change branding.'])
+        ->and($service->read())->toBe($beforeState)
+        ->and(BrandVersion::query()->count())->toBe(1)
+        ->and(BrandAsset::query()->count())->toBe(1)
+        ->and(Storage::disk()->allFiles())->toBe($beforeFiles)
+        ->and($this->get($renderUrl)->assertOk()->streamedContent())->toBe($beforePage);
+});
+
+test('owner and admin select and clear every asset slot while admitted selection errors change nothing', function (): void {
+    $service = resolve(BrandKitService::class);
+    $owner = brandOwner();
+    $admin = capstanUser(['role' => UserRole::Admin->value]);
+    $logo = $service->uploadAsset($owner, BrandAssetKind::Logo, brandPng());
+    $mark = $service->uploadAsset($admin, BrandAssetKind::Mark, brandPng());
+    $font = $service->uploadAsset($owner, BrandAssetKind::Font, brandWoff2());
+
+    $service->selectAsset($owner, 'logo_light', $logo->id);
+    $service->selectAsset($admin, 'logo_dark', $logo->id);
+    $service->selectAsset($owner, 'mark', $mark->id);
+    $service->selectAsset($admin, 'heading_font', $font->id);
+    $draft = $service->selectAsset($owner, 'body_font', $font->id);
+    expect($draft['assets'])->toBe(['logo_light' => $logo->id, 'logo_dark' => $logo->id, 'mark' => $mark->id])
+        ->and($draft['fonts']['heading'])->toBe(['type' => 'asset', 'value' => $font->id])
+        ->and($draft['fonts']['body'])->toBe(['type' => 'asset', 'value' => $font->id]);
+
+    $service->selectAsset($admin, 'logo_light', null);
+    $service->selectAsset($owner, 'logo_dark', null);
+    $service->selectAsset($admin, 'mark', null);
+    $service->selectAsset($owner, 'heading_font', null);
+    $cleared = $service->selectAsset($admin, 'body_font', null);
+    expect($cleared['assets'])->toBe(['logo_light' => null, 'logo_dark' => null, 'mark' => null])
+        ->and($cleared['fonts']['heading'])->toBe(['type' => 'stack', 'value' => 'system-sans'])
+        ->and($cleared['fonts']['body'])->toBe(['type' => 'stack', 'value' => 'system-sans']);
+
+    $beforeState = $service->read();
+    $beforeFiles = Storage::disk()->allFiles();
+    $failures = [
+        fn () => $service->selectAsset($owner, 'logo_light', (string) Str::uuid()),
+        fn () => $service->selectAsset($owner, 'unsupported_slot', $logo->id),
+        fn () => $service->selectAsset($owner, 'logo_light', $font->id),
+        fn () => $service->selectAsset($owner, 'heading_font', $logo->id),
+        fn () => $service->selectAsset($owner, 'logo_dark', $mark->id),
+    ];
+    foreach ($failures as $failure) {
+        expect($failure)->toThrow(ValidationException::class);
+        expect($service->read())->toBe($beforeState)
+            ->and(BrandVersion::query()->count())->toBe(0)
+            ->and(BrandAsset::query()->count())->toBe(3)
+            ->and(Storage::disk()->allFiles())->toBe($beforeFiles);
+    }
+});
+
 test('token grammar rejects unknown names css breakouts and unsafe font choices', function (array $changes): void {
     $service = resolve(BrandKitService::class);
 
@@ -224,6 +329,61 @@ test('serialized css uses only fixed declarations and canonical values', functio
         ->not->toContain('toneMustStayOut', '</style>', '<script>', 'https://', 'javascript:', "\n");
 });
 
+test('stylesheet injection ignores comments raw text and quoted tag delimiters', function (): void {
+    $renderer = resolve(BrandPageRenderer::class);
+    $proof = 'head-proof-'.Str::random(12);
+    $cases = [
+        [
+            '<!-- <head> comment decoy '.$proof.' --><html><head><title>'.$proof.'</title></head><body>'.$proof.'</body></html>',
+            '<head><style data-capstan-brand="applied">',
+            '<!-- <head> comment decoy '.$proof.' -->',
+        ],
+        [
+            '<!doctype html><html><head data-x="a>b"><title>'.$proof.'</title></head><body>'.$proof.'</body></html>',
+            '<head data-x="a>b"><style data-capstan-brand="applied">',
+            '<head data-x="a>b">',
+        ],
+        [
+            '<html data-decoy="<head>"><head><title>'.$proof.'</title></head><body>'.$proof.'</body></html>',
+            '<head><style data-capstan-brand="applied">',
+            '<html data-decoy="<head>">',
+        ],
+        [
+            '<html><script>window.decoy="<head> '.$proof.'";</script><head><title>'.$proof.'</title></head><body>'.$proof.'</body></html>',
+            '<head><style data-capstan-brand="applied">',
+            '<script>window.decoy="<head> '.$proof.'";</script>',
+        ],
+        [
+            '<html><style>.decoy::before{content:"<head> '.$proof.'"}</style><head><title>'.$proof.'</title></head><body>'.$proof.'</body></html>',
+            '<head><style data-capstan-brand="applied">',
+            '<style>.decoy::before{content:"<head> '.$proof.'"}</style>',
+        ],
+    ];
+
+    foreach ($cases as [$html, $realHeadWithStyle, $preserved]) {
+        $rendered = $renderer->render($html, 'text/html');
+        expect(substr_count($rendered, 'data-capstan-brand="applied"'))->toBe(1)
+            ->and($rendered)->toContain($realHeadWithStyle, $preserved, '<title>'.$proof.'</title>', '<body>'.$proof.'</body>');
+    }
+});
+
+test('headless documents and fragments receive an effective style without corrupting their opening bytes', function (): void {
+    $renderer = resolve(BrandPageRenderer::class);
+    $proof = 'headless-proof-'.Str::random(12);
+    $document = '<!doctype html><html data-x="a>b"><body>'.$proof.'</body></html>';
+    $fragment = '<section data-proof="'.$proof.'">'.$proof.'</section>';
+
+    $renderedDocument = $renderer->render($document, 'text/html');
+    $renderedFragment = $renderer->render($fragment, 'text/html');
+
+    expect($renderedDocument)->toStartWith('<!doctype html><style data-capstan-brand="applied">')
+        ->toContain('</style><html data-x="a>b"><body>'.$proof.'</body></html>')
+        ->and(substr_count($renderedDocument, 'data-capstan-brand="applied"'))->toBe(1)
+        ->and($renderedFragment)->toStartWith('<style data-capstan-brand="applied">')
+        ->toContain('</style>'.$fragment)
+        ->and(substr_count($renderedFragment, 'data-capstan-brand="applied"'))->toBe(1);
+});
+
 test('asset uploads sniff bytes enforce limits and leave invalid input side effect free', function (): void {
     $owner = brandOwner();
     $service = resolve(BrandKitService::class);
@@ -243,10 +403,36 @@ test('asset uploads sniff bytes enforce limits and leave invalid input side effe
     $rowCount = BrandAsset::query()->count();
     $files = Storage::disk()->allFiles();
 
+    $pngPrefix = substr(brandPng(), 0, 25);
+    $truncatedImages = [
+        'image/png' => $pngPrefix,
+        'image/jpeg' => brandRecognizableImageTruncation(brandImageSamples()['image/jpeg'], 'image/jpeg'),
+        'image/webp' => brandRecognizableImageTruncation(brandImageSamples()['image/webp'], 'image/webp'),
+    ];
+    foreach ($truncatedImages as $contentType => $bytes) {
+        $metadata = @getimagesizefromstring($bytes);
+        expect($metadata)->toBeArray()
+            ->and($metadata['mime'])->toBe($contentType)
+            ->and(@imagecreatefromstring($bytes))->toBeFalse();
+    }
+
+    $font = brandWoff2();
+    $headerOnlyWoff2 = 'wOF2'.pack('N', 0x00010000).pack('N', 48).pack('n', 1).str_repeat("\x00", 34);
+    $emptyDirectoryWoff2 = substr_replace($font, pack('n', 0), 12, 2);
+    $truncatedWoff2 = substr($font, 0, -1);
+    $outOfBoundsDirectoryWoff2 = brandReplaceUint32(substr($font, 0, 49), 8, 49);
+    $outOfBoundsPayloadWoff2 = brandReplaceUint32($font, 20, strlen($font));
     $invalid = [
-        [BrandAssetKind::Logo, "\x89PNG\r\n\x1a\ntruncated"],
-        [BrandAssetKind::Logo, brandTtf()],
+        ...array_map(fn (string $bytes): array => [BrandAssetKind::Logo, $bytes], array_values($truncatedImages)),
+        [BrandAssetKind::Logo, brandWoff2()],
         [BrandAssetKind::Font, brandPng()],
+        [BrandAssetKind::Font, $headerOnlyWoff2],
+        [BrandAssetKind::Font, $emptyDirectoryWoff2],
+        [BrandAssetKind::Font, $truncatedWoff2],
+        [BrandAssetKind::Font, $outOfBoundsDirectoryWoff2],
+        [BrandAssetKind::Font, $outOfBoundsPayloadWoff2],
+        [BrandAssetKind::Font, "\x00\x01\x00\x00".str_repeat("\x00", 24)],
+        [BrandAssetKind::Font, 'wOFF'.str_repeat("\x00", 40)],
         [BrandAssetKind::Logo, (string) base64_decode('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', true)],
         ['video', brandPng()],
     ];
@@ -261,8 +447,8 @@ test('asset uploads sniff bytes enforce limits and leave invalid input side effe
         ->and(BrandAsset::query()->count())->toBe($rowCount)
         ->and(Storage::disk()->allFiles())->toBe($files);
 
-    config(['capstan.brand.max_font_bytes' => strlen(brandTtf()) - 1]);
-    expect(fn () => $service->uploadAsset($owner, BrandAssetKind::Font, brandTtf()))->toThrow(ValidationException::class)
+    config(['capstan.brand.max_font_bytes' => strlen(brandWoff2()) - 1]);
+    expect(fn () => $service->uploadAsset($owner, BrandAssetKind::Font, brandWoff2()))->toThrow(ValidationException::class)
         ->and(BrandAsset::query()->count())->toBe($rowCount)
         ->and(Storage::disk()->allFiles())->toBe($files);
 });
@@ -285,7 +471,7 @@ test('page CSP follows applied asset classes while drafts and legacy artifacts s
     $publicUrl = $origin->signedPageShareContentUrl($share);
     $logo = $service->uploadAsset($owner, BrandAssetKind::Logo, brandPng());
     $unreferencedLogo = $service->uploadAsset($owner, BrandAssetKind::Logo, brandPng());
-    $font = $service->uploadAsset($owner, BrandAssetKind::Font, brandTtf());
+    $font = $service->uploadAsset($owner, BrandAssetKind::Font, brandWoff2());
     $service->updateDraft($owner, ['colours' => ['light' => ['primary' => $draftColour]], 'tone_notes' => $tone]);
     $service->selectAsset($owner, 'logo_light', $logo->id);
     $service->selectAsset($owner, 'heading_font', $font->id);
@@ -383,9 +569,25 @@ test('page CSP follows applied asset classes while drafts and legacy artifacts s
     expect($assetResponse->streamedContent())->toBe(brandPng())
         ->and($assetResponse->headers->get('Cache-Control'))->toContain('private', 'no-store')
         ->and($assetResponse->headers->getCookies())->toBe([]);
+    config(['capstan.features.artifacts' => false]);
+    Feature::flushCache();
+    $featureOffAsset = $this->get('https://render.brand.test/brand-assets/'.$logo->id)
+        ->assertNotFound()
+        ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive')
+        ->assertHeaderMissing('Set-Cookie');
+    expect($featureOffAsset->getContent())->toBe('')
+        ->and($featureOffAsset->headers->getCookies())->toBe([]);
+    config(['capstan.features.artifacts' => true]);
+    Feature::flushCache();
+    $restoredAsset = $this->get('https://render.brand.test/brand-assets/'.$logo->id)
+        ->assertOk()
+        ->assertHeader('Content-Type', 'image/png')
+        ->assertHeader('X-Content-Type-Options', 'nosniff')
+        ->assertHeaderMissing('Set-Cookie');
+    expect($restoredAsset->streamedContent())->toBe(brandPng());
     $this->get('https://render.brand.test/brand-assets/'.$font->id)
         ->assertOk()
-        ->assertHeader('Content-Type', 'font/ttf')
+        ->assertHeader('Content-Type', 'font/woff2')
         ->assertHeader('X-Content-Type-Options', 'nosniff')
         ->assertHeaderMissing('Set-Cookie');
     $this->get('https://render.brand.test/brand-assets/'.$unreferencedLogo->id)
@@ -402,6 +604,76 @@ test('page CSP follows applied asset classes while drafts and legacy artifacts s
         }
     }
     $this->get('https://app.brand.test/brand-assets/'.$logo->id)->assertNotFound()->assertDontSee(brandPng());
+});
+
+test('configured CSP sources survive applied page branding without widening legacy artifacts', function (): void {
+    $suffix = mb_strtolower(Str::random(10));
+    $sources = [
+        'script_src' => 'https://script-'.$suffix.'.allowed.test',
+        'style_src' => 'https://style-'.$suffix.'.allowed.test',
+        'font_src' => 'https://font-'.$suffix.'.allowed.test',
+        'img_src' => 'https://image-'.$suffix.'.allowed.test',
+    ];
+    config([
+        'capstan.artifacts.csp_allowlist.script_src' => [$sources['script_src']],
+        'capstan.artifacts.csp_allowlist.style_src' => [$sources['style_src']],
+        'capstan.artifacts.csp_allowlist.font_src' => [$sources['font_src']],
+        'capstan.artifacts.csp_allowlist.img_src' => [$sources['img_src']],
+    ]);
+    $owner = brandOwner();
+    $service = resolve(BrandKitService::class);
+    $page = brandPage($owner, '<html><head></head><body>configured CSP '.Str::random(8).'</body></html>');
+    $share = PageShare::query()->create([
+        'page_id' => $page->id,
+        'created_by_user_id' => (string) $owner->getKey(),
+        'kind' => PageShareKind::Link,
+        'expires_at' => now()->addHour(),
+    ]);
+    $logo = $service->uploadAsset($owner, BrandAssetKind::Logo, brandPng());
+    $font = $service->uploadAsset($owner, BrandAssetKind::Font, brandWoff2());
+    $service->selectAsset($owner, 'logo_light', $logo->id);
+    $service->selectAsset($owner, 'heading_font', $font->id);
+    $service->applyDraft($owner);
+    $origin = resolve(ArtifactRenderOrigin::class);
+
+    foreach ([
+        $origin->signedPageContentUrl($page, $page->latestVersion),
+        $origin->signedPageShareContentUrl($share),
+    ] as $url) {
+        $csp = $this->get($url)->assertOk()->headers->get('Content-Security-Policy');
+        expect($csp)->toContain(
+            "script-src 'unsafe-inline' ".$sources['script_src'],
+            "style-src 'unsafe-inline' ".$sources['style_src'],
+            "font-src 'self' ".$sources['font_src'],
+            "img-src 'self' data: ".$sources['img_src'],
+            "connect-src 'none'",
+            "form-action 'none'",
+            "base-uri 'none'",
+            'frame-ancestors https://app.brand.test',
+        );
+    }
+
+    $artifactBody = '<html><body>configured legacy '.Str::random(8).'</body></html>';
+    [$artifactHash, $artifactStorageKey] = Artifact::storeBlob($artifactBody);
+    $artifact = Artifact::factory()->create([
+        'visibility' => ArtifactVisibility::SignedUrl,
+        'expires_at' => now()->addHour(),
+        'content_type' => 'text/html',
+        'size_bytes' => strlen($artifactBody),
+        'content_hash' => $artifactHash,
+        'storage_key' => $artifactStorageKey,
+    ]);
+    $legacyCsp = $this->get($origin->signedContentUrl($artifact))->assertOk()->headers->get('Content-Security-Policy');
+    expect($legacyCsp)->toContain(
+        "script-src 'unsafe-inline' ".$sources['script_src'],
+        "style-src 'unsafe-inline' ".$sources['style_src'],
+        'font-src '.$sources['font_src'],
+        'img-src data: '.$sources['img_src'],
+        "connect-src 'none'",
+        "form-action 'none'",
+        "base-uri 'none'",
+        'frame-ancestors https://app.brand.test',
+    )->not->toContain("font-src 'self'", "img-src 'self'");
 });
 
 test('brand asset route is narrowly sessionless and non html bodies are not transformed', function (): void {

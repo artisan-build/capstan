@@ -2,12 +2,14 @@
 
 namespace App\Http\Controllers;
 
+use App\Features\Artifacts;
 use App\Models\BrandAsset;
 use App\Support\ArtifactRenderOrigin;
 use App\Support\BrandKitService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Storage;
+use Laravel\Pennant\Feature;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 final class BrandAssetController extends Controller
@@ -18,7 +20,8 @@ final class BrandAssetController extends Controller
         ArtifactRenderOrigin $origin,
         BrandKitService $brands,
     ): StreamedResponse|Response {
-        if (! $origin->isConfigured()
+        if (! Feature::active(Artifacts::class)
+            || ! $origin->isConfigured()
             || $request->getHost() !== $origin->renderHost()
             || ! in_array($asset, $brands->currentAssetIds(), true)) {
             return $this->notFound();

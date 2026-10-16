@@ -7,6 +7,7 @@ final readonly class BrandPageRenderer
     public function __construct(
         private BrandStylesheet $stylesheet,
         private BrandKitService $brands,
+        private HtmlHeadStyleInjector $injector,
     ) {}
 
     public function render(string $body, string $contentType): string
@@ -29,10 +30,9 @@ final readonly class BrandPageRenderer
 
         $brand = $this->brands->current();
         $style = '<style data-capstan-brand="applied">'.$this->stylesheet->serialize($brand).'</style>';
-        $rendered = preg_replace('/(<head\b[^>]*>)/i', '$1'.$style, $body, 1, $count);
 
         return [
-            'body' => $count === 1 && is_string($rendered) ? $rendered : $style.$body,
+            'body' => $this->injector->inject($body, $style),
             'allow_same_origin_images' => is_string($brand['assets']['logo_light'])
                 || is_string($brand['assets']['logo_dark'])
                 || is_string($brand['assets']['mark']),
