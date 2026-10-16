@@ -338,3 +338,51 @@ test('feature-off or an unconfigured render origin falls back without exposing a
     'render origin unset' => [['capstan.artifacts.render_origin' => null]],
     'render origin on the app host' => [['capstan.artifacts.render_origin' => 'https://app.chrome-brand.test']],
 ]);
+
+/** @return array<string, int> */
+function appBrandMailTags(string $html): array
+{
+    preg_match_all('/<([a-z][a-z0-9]*)\b/i', $html, $matches);
+
+    return array_count_values(array_map(strtolower(...), $matches[1]));
+}
+
+test('an applied display name stays literal text in every Markdown-parsed mail slot', function (string $syntax): void {
+    $owner = capstanUser(['role' => UserRole::Owner->value]);
+    $service = resolve(BrandKitService::class);
+    $service->updateDraft($owner, ['display_name' => 'Plain '.Str::random(8)]);
+    $service->applyDraft($owner);
+    $plain = appBrandMails($owner);
+    $name = 'Hostile '.Str::random(6).' '.$syntax;
+    $service->updateDraft($owner, ['display_name' => $name]);
+    $service->applyDraft($owner);
+
+    $mails = appBrandMails($owner);
+    $year = date('Y');
+    foreach (['share', 'invite'] as $kind) {
+        $html = $mails[$kind.'_html'];
+        expect(appBrandMailTags($html))->toBe(appBrandMailTags($plain[$kind.'_html']));
+        preg_match_all('/<[^>]+>/', $html, $tags);
+        preg_match_all('/\b(href|src)="([^"]*)"/', implode('', $tags[0]), $links, PREG_SET_ORDER);
+        foreach ($links as [, $attribute, $value]) {
+            expect($attribute)->toBe('href')
+                ->and($value)->toBeIn([e((string) config('app.url')), e($mails[$kind.'_url'])]);
+        }
+        $visible = html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        expect($visible)->toContain("Regards,\n".$name."\n", '© '.$year.' '.$name.'.');
+
+        $text = $mails[$kind.'_text'];
+        expect($text)->toContain("Regards,\n".$name."\n", '© '.$year.' '.$name.'. ', $mails[$kind.'_url'])
+            ->and(substr_count($text, $name))->toBe(3);
+        expectAbsent(str_replace($name, '', $text), '&#', '<!--', '\\');
+    }
+})->with([
+    'image' => ['![px](https://tracker.example/p.png)'],
+    'link' => ["[Pay](https://evil.example/pay) [ref][r]\n[r]: https://evil.example/ref"],
+    'emphasis' => ['*em* **strong** _u_ __uu__ ~~s~~'],
+    'code' => ["`code` ``more`` and\n```\nfenced"],
+    'autolink and URL' => ['<https://evil.example/auto> <a@evil.example> https://evil.example/bare www.evil.example a@evil.example'],
+    'backslash' => ['\*x* \\[x](https://evil.example/b) \[y] end\\'],
+    'raw HTML' => ['<img src="https://tracker.example/x.png"> <b>bold</b> <!-- c --> <a href="https://evil.example/r">r</a>'],
+    'entities and blocks' => ["&amp; &#91;x&#93; &lt;b&gt;\n# H\n- item\n> q"],
+]);

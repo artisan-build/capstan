@@ -23,7 +23,7 @@
 {{-- Footer --}}
 <x-slot:footer>
 <x-mail::footer>
-© {{ date('Y') }} {{ $brand->displayName }}. {{ __('All rights reserved.') }}
+© {{ date('Y') }} {!! $brand->markdownDisplayName() !!}. {{ __('All rights reserved.') }}
 </x-mail::footer>
 </x-slot:footer>
 </x-mail::layout>

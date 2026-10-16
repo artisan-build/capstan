@@ -41,7 +41,7 @@
 {{ $salutation }}
 @else
 @lang('Regards,')<br>
-{{ $mailBrand->current()->displayName }}
+{!! $mailBrand->current()->markdownDisplayName() !!}
 @endif
 
 {{-- Subcopy --}}
