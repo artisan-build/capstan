@@ -40,6 +40,7 @@ final readonly class BrandingSettingsController
             'assets' => $this->brands->assets(),
             'contract' => $contract->describe(),
             'previewUrl' => $fingerprint === null ? null : $origin->signedBrandPreviewUrl($fingerprint),
+            'draftFingerprint' => $fingerprint,
         ]);
     }
 
@@ -97,7 +98,10 @@ final readonly class BrandingSettingsController
             return response('', 404);
         }
 
-        $version = $this->brands->applyDraft($actor);
+        $validated = $request->validate([
+            'draft_fingerprint' => ['required', 'string', 'regex:/\A[0-9a-f]{64}\z/D'],
+        ]);
+        $version = $this->brands->applyDraft($actor, (string) $validated['draft_fingerprint']);
 
         return to_route('branding.show')->with('status', 'Brand version '.$version->version_number.' applied.');
     }

@@ -28,7 +28,7 @@ use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 use Laravel\Pennant\Feature;
 
 #[Name('apply_brand_draft')]
-#[Description('Idempotently applies the current draft as a new immutable brand version after explicit user approval. Owner or Admin only.')]
+#[Description('Idempotently applies the explicitly previewed draft fingerprint as a new immutable brand version after user approval. Owner or Admin only.')]
 #[IsReadOnly(false)]
 #[IsDestructive(false)]
 #[IsIdempotent]
@@ -44,6 +44,7 @@ final class ApplyBrandDraftTool extends BrandTool
     {
         return [
             'idempotency_key' => $schema->string()->min(1)->max(255)->required(),
+            'draft_fingerprint' => $schema->string()->min(64)->max(64)->required(),
         ];
     }
 
@@ -53,7 +54,7 @@ final class ApplyBrandDraftTool extends BrandTool
         DurableWriteCoordinator $writes,
         BrandKitService $brands,
     ): Response|ResponseFactory {
-        $this->requireExactArguments($request, ['idempotency_key']);
+        $this->requireExactArguments($request, ['idempotency_key', 'draft_fingerprint']);
         if (! Feature::active(Artifacts::class)) {
             return Response::error('Branding is unavailable.');
         }
@@ -61,17 +62,23 @@ final class ApplyBrandDraftTool extends BrandTool
         [$owner, $actor] = $this->brandActor($owners, $brands, true);
         $validated = $request->validate([
             'idempotency_key' => ['required', 'string', 'min:1', 'max:255'],
+            'draft_fingerprint' => ['required', 'string', 'regex:/\A[0-9a-f]{64}\z/D'],
         ]);
+        $fingerprint = (string) $validated['draft_fingerprint'];
         $outcome = $writes->run(
             owner: $owner,
             tool: 'apply_brand_draft',
             idempotencyKey: (string) $validated['idempotency_key'],
-            intent: ['action' => 'apply_current_brand_draft'],
+            intent: ['action' => 'apply_brand_draft', 'draft_fingerprint' => $fingerprint],
             targetType: 'brand_version',
-            operation: function () use ($actor, $brands): array {
+            operation: function () use ($actor, $brands, $fingerprint): array {
                 try {
-                    $version = $brands->applyDraft($actor);
-                } catch (ValidationException) {
+                    $version = $brands->applyDraft($actor, $fingerprint);
+                } catch (ValidationException $exception) {
+                    if (array_key_exists('draft_fingerprint', $exception->errors())) {
+                        throw new ApiErrorException(409, 'brand_draft_changed', 'The brand draft changed.');
+                    }
+
                     throw new ApiErrorException(409, 'brand_draft_unavailable', 'The brand draft is unavailable.');
                 }
 

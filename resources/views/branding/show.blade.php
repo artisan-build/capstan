@@ -168,6 +168,7 @@
             <flux:heading size="lg">{{ __('Apply draft') }}</flux:heading>
             <form method="POST" action="{{ route('branding.apply') }}">
                 @csrf
+                <input type="hidden" name="draft_fingerprint" value="{{ $draftFingerprint }}">
                 <flux:button type="submit" variant="primary" :disabled="$state['draft'] === null">{{ __('Apply brand draft') }}</flux:button>
             </form>
         </section>

@@ -153,7 +153,9 @@ test('settings upload select remove preview apply and revert append immutable ve
         'colours' => ['light' => ['primary' => '#112233']],
     ]);
     $this->actingAsVersioned($owner)
-        ->post('https://app.brand-ui.test'.route('branding.apply', [], false))
+        ->post('https://app.brand-ui.test'.route('branding.apply', [], false), [
+            'draft_fingerprint' => resolve(BrandKitService::class)->draftFingerprint(),
+        ])
         ->assertRedirect('https://app.brand-ui.test'.route('branding.show', [], false));
     $first = BrandVersion::query()->sole();
     expect($first->configuration['display_name'])->toBe($firstName)
@@ -164,7 +166,9 @@ test('settings upload select remove preview apply and revert append immutable ve
         'colours' => ['light' => ['primary' => '#445566']],
         'assets' => ['logo_light' => null],
     ]);
-    $this->actingAsVersioned($owner)->post('https://app.brand-ui.test'.route('branding.apply', [], false));
+    $this->actingAsVersioned($owner)->post('https://app.brand-ui.test'.route('branding.apply', [], false), [
+        'draft_fingerprint' => resolve(BrandKitService::class)->draftFingerprint(),
+    ]);
     expect(resolve(BrandPageRenderer::class)->render('<html><head></head><body>existing</body></html>', 'text/html'))
         ->toContain('--capstan-color-primary:#445566')
         ->not->toContain('--capstan-color-primary:#112233');
@@ -192,9 +196,30 @@ test('settings upload select remove preview apply and revert append immutable ve
     expect(resolve(BrandPageRenderer::class)->render('<html><head></head><body>existing</body></html>', 'text/html'))
         ->toContain('--capstan-color-primary:#112233')
         ->not->toContain('--capstan-color-primary:#445566');
-    $this->actingAsVersioned($owner)->get('https://app.brand-ui.test'.route('branding.show', [], false))
+    $history = $this->actingAsVersioned($owner)->get('https://app.brand-ui.test'.route('branding.show', [], false))
         ->assertOk()
         ->assertSee('data-testid="branding-history-row"', false)
         ->assertSee($firstName)
         ->assertDontSee($secondName);
+    expect(substr_count($history->content(), 'data-testid="branding-history-row"'))->toBe(3);
+});
+
+test('settings apply refuses a stale rendered draft fingerprint without changing brand state', function (): void {
+    $owner = capstanUser(['role' => UserRole::Owner->value]);
+    $service = resolve(BrandKitService::class);
+    $service->updateDraft($owner, ['display_name' => 'Rendered draft '.Str::random(8)]);
+    $page = $this->actingAsVersioned($owner)->get(route('branding.show'))->assertOk();
+    preg_match('/name="draft_fingerprint" value="([0-9a-f]{64})"/', $page->content(), $matches);
+    expect($matches)->toHaveCount(2);
+    $renderedFingerprint = $matches[1];
+
+    $service->updateDraft($owner, ['display_name' => 'Changed in another tab '.Str::random(8)]);
+    $before = BrandKit::query()->sole()->only(['current_version_id', 'current_version_number', 'draft']);
+
+    $this->from(route('branding.show'))->actingAsVersioned($owner)->post(route('branding.apply'), [
+        'draft_fingerprint' => $renderedFingerprint,
+    ])->assertRedirect(route('branding.show'))->assertSessionHasErrors('draft_fingerprint');
+
+    expect(BrandVersion::query()->count())->toBe(0)
+        ->and(BrandKit::query()->sole()->only(['current_version_id', 'current_version_number', 'draft']))->toBe($before);
 });

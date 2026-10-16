@@ -161,6 +161,22 @@ test('drafts normalize apply atomically and leave monotonic immutable versions',
         ->and(fn () => $first->delete())->toThrow(LogicException::class);
 });
 
+test('ordinary current reads load only the pointed version rather than version history', function (): void {
+    $owner = brandOwner();
+    $service = resolve(BrandKitService::class);
+    foreach (range(1, 30) as $version) {
+        $service->updateDraft($owner, ['display_name' => 'Current query version '.$version]);
+        $service->applyDraft($owner);
+    }
+    $retrieved = 0;
+    BrandVersion::retrieved(function () use (&$retrieved): void {
+        $retrieved++;
+    });
+
+    expect($service->current()['display_name'])->toBe('Current query version 30')
+        ->and($retrieved)->toBe(1);
+});
+
 test('non-admin and unavailable principals are refused before every brand side effect', function (): void {
     $service = resolve(BrandKitService::class);
     $pageOwner = brandOwner();

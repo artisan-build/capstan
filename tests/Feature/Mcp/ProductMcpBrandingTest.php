@@ -2,6 +2,7 @@
 
 use App\Enums\PageLayout;
 use App\Mcp\CapstanServer;
+use App\Mcp\ToolResponse;
 use App\Models\BrandAsset;
 use App\Models\BrandKit;
 use App\Models\BrandVersion;
@@ -119,6 +120,7 @@ test('advertises the complete closed brand tool contract on the correct effect d
     expect(data_get($write->get('update_brand_draft'), 'inputSchema.properties.changes.additionalProperties'))->toBeFalse()
         ->and(data_get($write->get('update_brand_draft'), 'inputSchema.properties.changes.properties.colours.additionalProperties'))->toBeFalse()
         ->and(data_get($write->get('upload_brand_asset'), 'inputSchema.properties.bytes_base64.maxLength'))->toBeInt()
+        ->and(data_get($write->get('apply_brand_draft'), 'inputSchema.required'))->toContain('idempotency_key', 'draft_fingerprint')
         ->and((new ReflectionClass(CapstanServer::class))->getAttributes(Instructions::class)[0]->newInstance()->value)
         ->toContain('Capstan never fetches arbitrary URLs', 'only after the user explicitly approves', 'Font uploads are not supported');
 });
@@ -134,7 +136,7 @@ test('reads a complete brand authoring contract without exposing stored bytes or
 
     $response = brandMcpCall('get_brand_kit', (object) [], $token, '/mcp');
     $kit = brandMcpStructured($response);
-    expect($kit)->toHaveKeys(['defaults', 'current', 'draft', 'current_version', 'versions', 'contract'])
+    expect($kit)->toHaveKeys(['defaults', 'current', 'draft', 'current_version', 'versions', 'next_cursor', 'has_more', 'limit', 'contract'])
         ->and($kit['contract']['colour_tokens'])->toBe(BrandKitSchema::COLOUR_TOKENS)
         ->and($kit['contract']['font_stacks'])->toBe(['system-sans', 'system-serif', 'monospace'])
         ->and(collect($kit['contract']['layouts'])->pluck('name')->all())->toBe(PageLayout::values())
@@ -179,13 +181,48 @@ test('brand writes are idempotent and refuse changed intent without duplicate dr
         'idempotency_key' => 'select-upload',
         'changes' => ['assets' => ['logo_light' => $uploaded['asset']['id']]],
     ], $token));
-    $apply = ['idempotency_key' => 'apply-once'];
+    $apply = [
+        'idempotency_key' => 'apply-once',
+        'draft_fingerprint' => resolve(BrandKitService::class)->draftFingerprint(),
+    ];
     $applied = brandMcpStructured(brandMcpCall('apply_brand_draft', $apply, $token));
     $applyReplay = brandMcpStructured(brandMcpCall('apply_brand_draft', $apply, $token));
     expect($applied['outcome'])->toBe('accepted')
         ->and($applyReplay['outcome'])->toBe('already_accepted')
         ->and($applyReplay['version'])->toBe($applied['version'])
         ->and(BrandVersion::query()->count())->toBe(1);
+
+    brandMcpStructured(brandMcpCall('update_brand_draft', [
+        'idempotency_key' => 'different-draft',
+        'changes' => ['display_name' => 'Different approved intent '.Str::random(8)],
+    ], $token));
+    $differentFingerprint = resolve(BrandKitService::class)->draftFingerprint();
+    expect($differentFingerprint)->not->toBe($apply['draft_fingerprint'])
+        ->and(brandMcpStructured(brandMcpCall('apply_brand_draft', [
+            'idempotency_key' => $apply['idempotency_key'],
+            'draft_fingerprint' => $differentFingerprint,
+        ], $token)))->toBe(['outcome' => 'refused', 'reason' => 'idempotency_key_reused'])
+        ->and(BrandVersion::query()->count())->toBe(1)
+        ->and(resolve(BrandKitService::class)->draftFingerprint())->toBe($differentFingerprint);
+});
+
+test('fresh apply keys refuse stale approved fingerprints without changing brand state', function (): void {
+    $owner = capstanUser(['role' => UserRole::Owner->value]);
+    $token = brandMcpToken($owner);
+    $service = resolve(BrandKitService::class);
+    $service->updateDraft($owner, ['display_name' => 'Approved draft '.Str::random(8)]);
+    $staleFingerprint = $service->draftFingerprint();
+    $service->updateDraft($owner, ['display_name' => 'Changed draft '.Str::random(8)]);
+    $before = BrandKit::query()->sole()->only(['current_version_id', 'current_version_number', 'draft']);
+
+    $outcome = brandMcpStructured(brandMcpCall('apply_brand_draft', [
+        'idempotency_key' => 'fresh-stale-fingerprint',
+        'draft_fingerprint' => $staleFingerprint,
+    ], $token));
+
+    expect($outcome)->toBe(['outcome' => 'refused', 'reason' => 'brand_draft_changed'])
+        ->and(BrandVersion::query()->count())->toBe(0)
+        ->and(BrandKit::query()->sole()->only(['current_version_id', 'current_version_number', 'draft']))->toBe($before);
 });
 
 test('brand preview is signed isolated stale on mutation and shows every layout while ordinary pages use only applied state', function (): void {
@@ -217,6 +254,7 @@ test('brand preview is signed isolated stale on mutation and shows every layout 
     $previewRequest = Request::create($url);
     $fingerprint = basename((string) parse_url($url, PHP_URL_PATH));
     expect(parse_url($url, PHP_URL_HOST))->toBe('render.brand-mcp.test')
+        ->and($preview['draft_fingerprint'])->toBe($fingerprint)
         ->and(URL::hasValidSignature($previewRequest, false))->toBeTrue()
         ->and(resolve(BrandKitService::class)->previewConfiguration($fingerprint))->not->toBeNull();
     $rendered = $this->get($url);
@@ -280,7 +318,7 @@ test('members inactive and offboarded managers are refused before brand claims r
         foreach ([
             ['update_brand_draft', ['idempotency_key' => 'deny-update-'.$actor->id, 'changes' => ['display_name' => 'Denied']]],
             ['upload_brand_asset', ['idempotency_key' => 'deny-upload-'.$actor->id, 'kind' => 'logo', 'bytes_base64' => base64_encode(brandMcpPng())]],
-            ['apply_brand_draft', ['idempotency_key' => 'deny-apply-'.$actor->id]],
+            ['apply_brand_draft', ['idempotency_key' => 'deny-apply-'.$actor->id, 'draft_fingerprint' => str_repeat('a', 64)]],
             ['preview_brand_draft', (object) []],
         ] as [$tool, $arguments]) {
             $response = brandMcpCall($tool, $arguments, $token);
@@ -323,11 +361,70 @@ test('feature off and malformed brand calls fail without mutation or disclosure'
     foreach ([
         ['update_brand_draft', ['idempotency_key' => 'off-update', 'changes' => ['display_name' => 'Off']]],
         ['upload_brand_asset', ['idempotency_key' => 'off-upload', 'kind' => 'logo', 'bytes_base64' => base64_encode(brandMcpPng())]],
-        ['apply_brand_draft', ['idempotency_key' => 'off-apply']],
+        ['apply_brand_draft', ['idempotency_key' => 'off-apply', 'draft_fingerprint' => str_repeat('a', 64)]],
     ] as [$tool, $arguments]) {
         brandMcpCall($tool, $arguments, $token)->assertOk()->assertJsonPath('result.isError', true);
     }
     expect(DB::table('mcp_write_claims')->count())->toBe(0)
         ->and(BrandKit::query()->count())->toBe(0)
         ->and(Storage::disk()->allFiles())->toBe([]);
+});
+
+test('brand history pages stay bounded and signed continuation reaches every older version exactly once', function (): void {
+    $owner = capstanUser(['role' => UserRole::Owner->value]);
+    $token = brandMcpToken($owner);
+    $configuration = resolve(BrandKitSchema::class)->defaults();
+    BrandKit::query()->create([
+        'installation_key' => 'installation',
+        'current_version_number' => 0,
+    ]);
+    $rows = [];
+    $currentId = null;
+    for ($version = 1; $version <= 800; $version++) {
+        $currentId = (string) Str::uuid();
+        $rows[] = [
+            'id' => $currentId,
+            'brand_kit_key' => 'installation',
+            'version_number' => $version,
+            'configuration' => json_encode($configuration, JSON_THROW_ON_ERROR),
+            'applied_by_user_id' => (string) $owner->getKey(),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ];
+        if (count($rows) === 100) {
+            DB::table('brand_versions')->insert($rows);
+            $rows = [];
+        }
+    }
+    BrandKit::query()->whereKey('installation')->update([
+        'current_version_id' => $currentId,
+        'current_version_number' => 800,
+    ]);
+
+    $numbers = [];
+    $cursor = null;
+    $firstCursor = null;
+    do {
+        $arguments = ['limit' => 25];
+        if ($cursor !== null) {
+            $arguments['cursor'] = $cursor;
+        }
+        $page = brandMcpStructured(brandMcpCall('get_brand_kit', $arguments, $token, '/mcp'));
+        expect(ToolResponse::fits($page))->toBeTrue()
+            ->and(count($page['versions']))->toBeLessThanOrEqual(25);
+        $numbers = [...$numbers, ...array_column($page['versions'], 'version_number')];
+        $cursor = $page['next_cursor'];
+        $firstCursor ??= $cursor;
+    } while ($cursor !== null);
+
+    expect($numbers)->toBe(range(800, 1))
+        ->and(array_values(array_unique($numbers)))->toBe($numbers)
+        ->and($firstCursor)->toBeString();
+
+    brandMcpCall('get_brand_kit', ['limit' => 24, 'cursor' => $firstCursor], $token, '/mcp')
+        ->assertOk()
+        ->assertJsonPath('result.isError', true);
+    brandMcpCall('get_brand_kit', ['limit' => 25, 'cursor' => $firstCursor.'x'], $token, '/mcp')
+        ->assertOk()
+        ->assertJsonPath('result.isError', true);
 });

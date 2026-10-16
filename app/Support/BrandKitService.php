@@ -28,25 +28,24 @@ final readonly class BrandKitService
     /** @return array{defaults: array<string, mixed>, current: array<string, mixed>, draft: array<string, mixed>|null, current_version: int|null, versions: list<array<string, mixed>>} */
     public function read(): array
     {
-        $defaults = $this->schema->defaults();
         $kit = BrandKit::query()->find(self::INSTALLATION_KEY);
-        $version = $kit instanceof BrandKit && $kit->current_version_id !== null
-            ? BrandVersion::query()->find($kit->current_version_id)
-            : null;
 
         return [
-            'defaults' => $defaults,
-            'current' => $version instanceof BrandVersion ? $this->schema->normalize($version->configuration) : $defaults,
-            'draft' => $kit?->draft,
-            'current_version' => $version instanceof BrandVersion ? $version->version_number : null,
+            ...$this->state($kit),
             'versions' => $this->versionHistory($kit?->current_version_id),
         ];
+    }
+
+    /** @return array{defaults: array<string, mixed>, current: array<string, mixed>, draft: array<string, mixed>|null, current_version: int|null} */
+    public function readCurrentState(): array
+    {
+        return $this->state(BrandKit::query()->find(self::INSTALLATION_KEY));
     }
 
     /** @return array<string, mixed> */
     public function current(): array
     {
-        return $this->read()['current'];
+        return $this->readCurrentState()['current'];
     }
 
     /** @param array<string, mixed> $changes
@@ -139,16 +138,22 @@ final readonly class BrandKitService
         };
     }
 
-    public function applyDraft(User $actor): BrandVersion
+    public function applyDraft(User $actor, ?string $expectedFingerprint = null): BrandVersion
     {
         $this->authorize($actor);
 
-        return DB::transaction(function () use ($actor): BrandVersion {
+        return DB::transaction(function () use ($actor, $expectedFingerprint): BrandVersion {
             $kit = $this->lockedKit();
             if ($kit->draft === null) {
                 throw ValidationException::withMessages(['draft' => 'There is no brand draft to apply.']);
             }
             $configuration = $this->schema->normalize($kit->draft);
+            if ($expectedFingerprint !== null
+                && ! hash_equals($this->draftFingerprint($configuration), $expectedFingerprint)) {
+                throw ValidationException::withMessages([
+                    'draft_fingerprint' => 'The brand draft changed. Review the current preview before applying.',
+                ]);
+            }
             $this->assertAssetSelections($configuration);
             $next = (int) $kit->versions()->max('version_number') + 1;
             $version = $kit->versions()->create([
@@ -220,6 +225,32 @@ final readonly class BrandKitService
         return is_array($draft) ? hash('sha256', JsonCanonicalizer::encode($draft)) : null;
     }
 
+    /**
+     * @return array{versions: list<array<string, mixed>>, has_more: bool, last_version_number: int|null}
+     */
+    public function versionHistoryPage(int $limit, ?int $beforeVersionNumber = null): array
+    {
+        $kit = BrandKit::query()->find(self::INSTALLATION_KEY);
+        $candidates = BrandVersion::query()
+            ->where('brand_kit_key', self::INSTALLATION_KEY)
+            ->when($beforeVersionNumber !== null, fn ($query) => $query->where('version_number', '<', $beforeVersionNumber))
+            ->orderByDesc('version_number')
+            ->limit($limit + 1)
+            ->get();
+        $versions = $candidates->take($limit);
+        $last = $versions->last();
+        $metadata = [];
+        foreach ($versions as $version) {
+            $metadata[] = $this->versionMetadata($version, $kit?->current_version_id);
+        }
+
+        return [
+            'versions' => $metadata,
+            'has_more' => $candidates->count() > $limit,
+            'last_version_number' => $last instanceof BrandVersion ? $last->version_number : null,
+        ];
+    }
+
     /** @return list<BrandAsset> */
     public function assets(): array
     {
@@ -272,6 +303,22 @@ final readonly class BrandKitService
         return BrandVersion::query()->find($kit->current_version_id)?->configuration;
     }
 
+    /** @return array{defaults: array<string, mixed>, current: array<string, mixed>, draft: array<string, mixed>|null, current_version: int|null} */
+    private function state(?BrandKit $kit): array
+    {
+        $defaults = $this->schema->defaults();
+        $version = $kit instanceof BrandKit && $kit->current_version_id !== null
+            ? BrandVersion::query()->find($kit->current_version_id)
+            : null;
+
+        return [
+            'defaults' => $defaults,
+            'current' => $version instanceof BrandVersion ? $this->schema->normalize($version->configuration) : $defaults,
+            'draft' => $kit?->draft,
+            'current_version' => $version instanceof BrandVersion ? $version->version_number : null,
+        ];
+    }
+
     /** @return list<array<string, mixed>> */
     private function versionHistory(?string $currentVersionId): array
     {
@@ -279,15 +326,21 @@ final readonly class BrandKitService
             ->where('brand_kit_key', self::INSTALLATION_KEY)
             ->orderByDesc('version_number')
             ->get()
-            ->map(fn (BrandVersion $version): array => [
-                'id' => $version->id,
-                'version_number' => $version->version_number,
-                'applied_by_user_id' => $version->applied_by_user_id,
-                'applied_at' => $version->created_at?->toIso8601String(),
-                'is_current' => $version->id === $currentVersionId,
-            ])
+            ->map(fn (BrandVersion $version): array => $this->versionMetadata($version, $currentVersionId))
             ->values()
             ->all());
+    }
+
+    /** @return array<string, mixed> */
+    private function versionMetadata(BrandVersion $version, ?string $currentVersionId): array
+    {
+        return [
+            'id' => $version->id,
+            'version_number' => $version->version_number,
+            'applied_by_user_id' => $version->applied_by_user_id,
+            'applied_at' => $version->created_at?->toIso8601String(),
+            'is_current' => $version->id === $currentVersionId,
+        ];
     }
 
     /** @param array<string, mixed> $configuration */

@@ -25,7 +25,7 @@ use Laravel\Mcp\Server\Tool;
 
 #[Name('Capstan')]
 #[Version('1.0.0')]
-#[Instructions('Read and operate the authenticated actor own Capstan data. When the user asks for a UI, report, dashboard, or brief, read get_brand_kit, build it as a Capstan page with the documented tokens and components, and include a refresh recipe that explains how to rebuild it. To match a website, fetch the site with your own tools because Capstan never fetches arbitrary URLs. Extract its palette, typography, logo, and header/footer feel. Upload only images the team owns, choose the nearest allowed system font stack, update the draft, and show preview_brand_draft. Call apply_brand_draft only after the user explicitly approves the preview. Font uploads are not supported.')]
+#[Instructions('Read and operate the authenticated actor own Capstan data. When the user asks for a UI, report, dashboard, or brief, read get_brand_kit, build it as a Capstan page with the documented tokens and components, and include a refresh recipe that explains how to rebuild it. To match a website, fetch the site with your own tools because Capstan never fetches arbitrary URLs. Extract its palette, typography, logo, and header/footer feel. Upload only images the team owns, choose the nearest allowed system font stack, update the draft, and show preview_brand_draft. Call apply_brand_draft with the returned draft fingerprint only after the user explicitly approves the preview. Font uploads are not supported.')]
 final class CapstanServer extends Server
 {
     /** @var array<int, class-string<Tool>> */

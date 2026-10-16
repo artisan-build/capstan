@@ -24,7 +24,7 @@ use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 use Laravel\Pennant\Feature;
 
 #[Name('preview_brand_draft')]
-#[Description('Creates a temporary signed render-origin URL demonstrating the current draft in all four layouts.')]
+#[Description('Returns the current draft fingerprint and a temporary signed render-origin URL demonstrating it in all four layouts.')]
 #[IsReadOnly]
 #[ToolClassification(Classification::Content)]
 #[ToolEffect(Effect::Read)]
@@ -56,6 +56,7 @@ final class PreviewBrandDraftTool extends BrandTool
         }
 
         return ToolResponse::structured([
+            'draft_fingerprint' => $fingerprint,
             'preview_url' => $origin->signedBrandPreviewUrl($fingerprint),
             'expires_in_seconds' => 300,
             'layouts' => ['plain', 'report', 'dashboard', 'brief'],
