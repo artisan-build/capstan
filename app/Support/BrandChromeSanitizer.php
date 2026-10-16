@@ -56,8 +56,8 @@ final readonly class BrandChromeSanitizer
             $canonical = $this->serializeFragment($parsed['fragment']);
             $reparsed = $this->parseFragment($canonical, $selected);
 
-            if ($parsed['balanced'] !== $reparsed['balanced']
-                || $this->treeFingerprint($parsed['fragment']) !== $this->treeFingerprint($reparsed['fragment'])) {
+            if ($this->normalizeObservedText($parsed['text']) !== $this->normalizeObservedText($reparsed['text'])
+                || ! $this->startTagsSurvive($parsed['start_tags'], $reparsed['start_tags'])) {
                 throw new InvalidArgumentException('is not valid HTML5 chrome');
             }
 
@@ -71,7 +71,7 @@ final readonly class BrandChromeSanitizer
 
     /**
      * @param  array<string, true>  $selectedAssetIds
-     * @return array{fragment: DOMDocumentFragment, balanced: bool}
+     * @return array{fragment: DOMDocumentFragment, text: string, start_tags: array<string, int>}
      */
     private function parseFragment(string $html, array $selectedAssetIds): array
     {
@@ -79,23 +79,21 @@ final readonly class BrandChromeSanitizer
         $startTag = fn (string $name, array $attributes): array => $this->normalizeStartTag($name, $attributes, $selectedAssetIds);
         $endTag = function (string $name): void {
             $name = strtolower($name);
-            if (! in_array($name, self::ALLOWED_ELEMENTS, true) || in_array($name, self::VOID_ELEMENTS, true)) {
+            if (! in_array($name, self::ALLOWED_ELEMENTS, true)) {
                 throw new InvalidArgumentException('contains an element outside the allowlist');
             }
         };
-        $handler = new class($builder, $startTag, $endTag, self::VOID_ELEMENTS) implements EventHandler
+        $handler = new class($builder, $startTag, $endTag) implements EventHandler
         {
-            /** @var list<string> */
-            private array $openElements = [];
+            private string $text = '';
 
-            private bool $balanced = true;
+            /** @var array<string, int> */
+            private array $startTags = [];
 
             public function __construct(
                 private readonly DOMTreeBuilder $builder,
                 private readonly Closure $startTag,
                 private readonly Closure $endTag,
-                /** @var list<string> */
-                private readonly array $voidElements,
             ) {}
 
             public function doctype($name, $idType = 0, $id = null, $quirks = false): never
@@ -110,12 +108,10 @@ final readonly class BrandChromeSanitizer
             public function startTag($name, $attributes = [], $selfClosing = false): int
             {
                 $name = strtolower($name);
-                $result = $this->builder->startTag($name, ($this->startTag)($name, $attributes), $selfClosing);
-                if (! in_array($name, $this->voidElements, true)) {
-                    $this->openElements[] = $name;
-                }
+                $attributes = ($this->startTag)($name, $attributes);
+                $this->startTags[$name] = ($this->startTags[$name] ?? 0) + 1;
 
-                return $result;
+                return $this->builder->startTag($name, $attributes, $selfClosing);
             }
 
             /** @param string $name */
@@ -123,9 +119,6 @@ final readonly class BrandChromeSanitizer
             {
                 $name = strtolower($name);
                 ($this->endTag)($name);
-                if (array_pop($this->openElements) !== $name) {
-                    $this->balanced = false;
-                }
                 $this->builder->endTag($name);
             }
 
@@ -138,6 +131,7 @@ final readonly class BrandChromeSanitizer
             /** @param string $cdata */
             public function text($cdata): void
             {
+                $this->text .= $cdata;
                 $this->builder->text($cdata);
             }
 
@@ -151,9 +145,10 @@ final readonly class BrandChromeSanitizer
              * @param  int  $line
              * @param  int  $col
              */
-            public function parseError($msg, $line, $col): never
+            public function parseError($msg, $line, $col): void
             {
-                throw new InvalidArgumentException('is not valid HTML5 chrome');
+                // HTML5 parse errors are recoverable. Content observations below
+                // decide whether the parser's canonical repair is lossless.
             }
 
             public function cdata($data): never
@@ -166,19 +161,46 @@ final readonly class BrandChromeSanitizer
                 throw new InvalidArgumentException('contains a declaration, comment, or unsupported node');
             }
 
-            public function isBalanced(): bool
+            public function observedText(): string
             {
-                return $this->balanced && $this->openElements === [];
+                return $this->text;
+            }
+
+            /** @return array<string, int> */
+            public function observedStartTags(): array
+            {
+                return $this->startTags;
             }
         };
 
         $parser = new Tokenizer(new Scanner($html, 'UTF-8'), $handler, Tokenizer::CONFORMANT_HTML);
         $parser->parse();
-        if ($builder->getErrors() !== []) {
-            throw new InvalidArgumentException('is not valid HTML5 chrome');
+
+        return [
+            'fragment' => $builder->fragment(),
+            'text' => $handler->observedText(),
+            'start_tags' => $handler->observedStartTags(),
+        ];
+    }
+
+    private function normalizeObservedText(string $text): string
+    {
+        return trim((string) preg_replace('/[ \t\n\f\r]+/', ' ', $text), " \t\n\f\r");
+    }
+
+    /**
+     * @param  array<string, int>  $source
+     * @param  array<string, int>  $canonical
+     */
+    private function startTagsSurvive(array $source, array $canonical): bool
+    {
+        foreach ($source as $name => $count) {
+            if (($canonical[$name] ?? 0) < $count) {
+                return false;
+            }
         }
 
-        return ['fragment' => $builder->fragment(), 'balanced' => $handler->isBalanced()];
+        return true;
     }
 
     /**
@@ -366,36 +388,6 @@ final readonly class BrandChromeSanitizer
         }
 
         return $html;
-    }
-
-    private function treeFingerprint(DOMNode $node): string
-    {
-        if ($node->nodeType === XML_TEXT_NODE) {
-            $value = $node->nodeValue ?? '';
-
-            return 'text:'.strlen($value).':'.$value;
-        }
-
-        $fingerprint = $node instanceof DOMElement ? 'element:'.strlen($node->tagName).':'.strtolower($node->tagName) : 'fragment';
-        if ($node instanceof DOMElement) {
-            $attributes = [];
-            foreach ($node->attributes as $attribute) {
-                $attributes[strtolower($attribute->nodeName)] = $attribute->value;
-            }
-            ksort($attributes);
-            foreach ($attributes as $name => $value) {
-                $fingerprint .= '|attribute:'.strlen($name).':'.$name.':'.strlen($value).':'.$value;
-            }
-        } elseif (! $node instanceof DOMDocumentFragment) {
-            throw new InvalidArgumentException('contains an unsupported node');
-        }
-
-        foreach ($node->childNodes as $child) {
-            $childFingerprint = $this->treeFingerprint($child);
-            $fingerprint .= '|child:'.strlen($childFingerprint).':'.$childFingerprint;
-        }
-
-        return $fingerprint;
     }
 
     private function serializeNode(DOMNode $node): string

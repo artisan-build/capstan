@@ -9,9 +9,6 @@ use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
 use Masterminds\HTML5;
-use Masterminds\HTML5\Parser\DOMTreeBuilder;
-use Masterminds\HTML5\Parser\Scanner;
-use Masterminds\HTML5\Parser\Tokenizer;
 
 const PR5_HTML_URL_ATTRIBUTES = [
     'action', 'archive', 'attributionsrc', 'background', 'cite', 'classid', 'codebase',
@@ -78,16 +75,40 @@ function pr5WriteRefusalCases(): array
     return $cases;
 }
 
-/** @return array<string, array{string}> */
-function pr5MalformedTreeCases(): array
+/** @return array<string, array{string, string}> */
+function pr5ChromeRepairCases(): array
 {
     return [
-        'unmatched end tag' => ['</span>'],
-        'misnested inline element' => ['<div><span>x</div>'],
-        'unclosed nested element' => ['<section><span>x</span>'],
-        'implied paragraph end tag' => ['<p>one<div>two</div></p>'],
-        'implied table-cell end tag' => ['<table><tbody><tr><td>one<td>two</td></tr></tbody></table>'],
-        'balanced source requiring tree-builder recovery' => ['<thead>x<table></table></thead>'],
+        'non-void self close' => ['<div/>x</div>', '<div>x</div>'],
+        'misnested element' => ['<div><span>x</div>', '<div><span>x</span></div>'],
+        'unmatched end tag' => ['</span>', ''],
+        'unclosed nested element' => ['<section><span>x</span>', '<section><span>x</span></section>'],
+        'implied paragraph end tag' => ['<p>one<div>two</div></p>', '<p>one</p><div>two</div>'],
+        'implied table-cell end tag' => [
+            '<table><tbody><tr><td>one<td>two</td></tr></tbody></table>',
+            '<table><tbody><tr><td>one</td><td>two</td></tr></tbody></table>',
+        ],
+        'balanced builder recovery' => ['<thead>x<table></table></thead>', '<thead>x</thead><table></table>'],
+        'unclosed quoted attribute' => ['<b title="unclosed>x</b>', '<b title="unclosed&gt;x&lt;/b&gt;"></b>'],
+    ];
+}
+
+/** @return array<string, array{string}> */
+function pr5ChromeContentLossCases(): array
+{
+    return [
+        'dropped null character reference text' => ['<span>before&#0;after</span>'],
+        'dropped surrogate character reference text' => ['<div>before&#xD800;after</div>'],
+    ];
+}
+
+/** @return array<string, array{array<string, int>, array<string, int>, bool}> */
+function pr5StartTagPreservationCases(): array
+{
+    return [
+        'dropped sole tag' => [['span' => 1], [], false],
+        'dropped repeated tag' => [['section' => 1, 'span' => 2], ['section' => 1, 'span' => 1], false],
+        'repair-added tag' => [['span' => 1], ['div' => 1, 'span' => 1], true],
     ];
 }
 
@@ -178,27 +199,24 @@ test('well formed explicit trees and void elements remain accepted', function (s
     ],
 ]);
 
-test('tree builder errors are load-bearing when recovered input and canonical trees match', function (): void {
-    $html = '<thead>x<table></table></thead>';
-    $builder = new DOMTreeBuilder(true, ['disable_html_ns' => true]);
-    (new Tokenizer(new Scanner($html, 'UTF-8'), $builder, Tokenizer::CONFORMANT_HTML))->parse();
+test('allowlisted malformed chrome is repaired to canonical bytes', function (string $html, string $canonical): void {
+    $sanitizer = resolve(BrandChromeSanitizer::class);
 
-    expect($builder->getErrors())->not->toBe([])
-        ->and(resolve(BrandChromeSanitizer::class)->sanitize('<thead>x</thead><table></table>', []))
-        ->toBe('<thead>x</thead><table></table>')
-        ->and(fn (): string => resolve(BrandChromeSanitizer::class)->sanitize($html, []))
+    expect($sanitizer->sanitize($html, []))->toBe($canonical)
+        ->and($sanitizer->sanitize($canonical, []))->toBe($canonical);
+})->with(pr5ChromeRepairCases());
+
+test('text observation refuses a repair that drops non-whitespace tokenizer text', function (): void {
+    expect(fn (): string => resolve(BrandChromeSanitizer::class)->sanitize('<span>before&#0;after</span>', []))
         ->toThrow(InvalidArgumentException::class, 'is not valid HTML5 chrome');
 });
 
-test('structural backstop is load-bearing when an unclosed tree has no builder errors', function (): void {
-    $html = '<section><span>x</span>';
-    $builder = new DOMTreeBuilder(true, ['disable_html_ns' => true]);
-    (new Tokenizer(new Scanner($html, 'UTF-8'), $builder, Tokenizer::CONFORMANT_HTML))->parse();
+test('start-tag observation requires every source count while permitting repair additions', function (array $source, array $canonical, bool $survives): void {
+    $sanitizer = resolve(BrandChromeSanitizer::class);
+    $startTagsSurvive = new ReflectionMethod($sanitizer, 'startTagsSurvive');
 
-    expect($builder->getErrors())->toBe([])
-        ->and(fn (): string => resolve(BrandChromeSanitizer::class)->sanitize($html, []))
-        ->toThrow(InvalidArgumentException::class, 'is not valid HTML5 chrome');
-});
+    expect($startTagsSurvive->invoke($sanitizer, $source, $canonical))->toBe($survives);
+})->with(pr5StartTagPreservationCases());
 
 test('https links document fragments and data images are the only public URL values', function (string $html, bool $accepted): void {
     $sanitize = fn (): string => resolve(BrandChromeSanitizer::class)->sanitize($html, []);
@@ -239,7 +257,37 @@ test('write-time refusal leaves all draft version asset and storage state unchan
         ->and(Storage::disk()->allFiles())->toBe($files);
 })->with(pr5WriteRefusalCases())->with(['header_html', 'footer_html']);
 
-test('malformed tree write refusal names invalid HTML and leaves every persisted surface unchanged', function (string $html, string $field): void {
+test('repaired chrome writes canonical fields and reports normalization', function (string $html, string $canonical, string $field): void {
+    $owner = capstanUser(['role' => UserRole::Owner->value]);
+    $service = resolve(BrandKitService::class);
+    $service->updateDraft($owner, [
+        'header_html' => '<strong>before header</strong>',
+        'footer_html' => '<i>before footer</i>',
+    ]);
+
+    $result = $service->updateDraft($owner, [$field => $html]);
+    $stored = $service->read()['draft'];
+
+    expect($result)->toHaveKeys(['header_html', 'footer_html', 'normalized'])
+        ->and($result[$field])->toBe($canonical)
+        ->and($result['normalized'])->toBeTrue()
+        ->and($stored[$field])->toBe($canonical)
+        ->and($stored)->not->toHaveKey('normalized');
+})->with(pr5ChromeRepairCases())->with(['header_html', 'footer_html']);
+
+test('canonical chrome writes return both stored fields without a normalization signal', function (): void {
+    $owner = capstanUser(['role' => UserRole::Owner->value]);
+    $result = resolve(BrandKitService::class)->updateDraft($owner, [
+        'header_html' => '<div><span>header</span></div>',
+        'footer_html' => '<p>footer</p>',
+    ]);
+
+    expect($result['header_html'])->toBe('<div><span>header</span></div>')
+        ->and($result['footer_html'])->toBe('<p>footer</p>')
+        ->and($result['normalized'])->toBeFalse();
+});
+
+test('content-loss refusal names invalid HTML and leaves every persisted surface unchanged', function (string $html, string $field): void {
     $owner = capstanUser(['role' => UserRole::Owner->value]);
     $service = resolve(BrandKitService::class);
     $service->updateDraft($owner, ['header_html' => '<b>applied</b>']);
@@ -256,4 +304,4 @@ test('malformed tree write refusal names invalid HTML and leaves every persisted
         ->and($service->read())->toBe($before)
         ->and([BrandKit::query()->count(), BrandVersion::query()->count(), BrandAsset::query()->count()])->toBe($counts)
         ->and(Storage::disk()->allFiles())->toBe($files);
-})->with(pr5MalformedTreeCases())->with(['header_html', 'footer_html']);
+})->with(pr5ChromeContentLossCases())->with(['header_html', 'footer_html']);

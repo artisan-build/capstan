@@ -544,6 +544,12 @@ fragments, at most 32,768 Unicode characters each. Element and attribute names a
 Comments, declarations, processing instructions, custom elements, namespace declarations, and anything
 outside the allowlists are rejected instead of removed.
 
+Malformed input that uses only allowed names is repaired by the HTML5 parser and stored in canonical
+form. For example, `<div/>x</div>` is stored as `<div>x</div>`. A repair is refused if it drops any
+non-whitespace text or allowed start tag seen in the input. A successful draft write returns the stored
+canonical header and footer. Its non-persisted `normalized` flag is `true` when either supplied chrome
+field changed during canonicalization and `false` when supplied chrome was already canonical.
+
 The element allowlist is `a`, `abbr`, `address`, `article`, `aside`, `b`, `bdi`, `bdo`, `blockquote`,
 `br`, `caption`, `cite`, `code`, `col`, `colgroup`, `dd`, `del`, `details`, `dfn`, `div`, `dl`, `dt`,
 `em`, `figcaption`, `figure`, `footer`, `h1`, `h2`, `h3`, `h4`, `h5`, `h6`, `header`, `hr`, `i`,

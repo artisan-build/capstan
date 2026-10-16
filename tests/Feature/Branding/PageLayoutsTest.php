@@ -142,7 +142,6 @@ test('invalid chrome and CSS leave draft versions assets and private storage unc
     'SVG prefixed CSS import footer' => [['footer_html' => '<s:svg xmlns:s="http://www.w3.org/2000/svg"><s:style>@import &quot;https://outside.test/x.css&quot;;</s:style></s:svg>']],
     'HTML CSS url' => [['footer_html' => '<b style="background:url(https://outside.test)">x</b>']],
     'XML declaration' => [['header_html' => '<?xml version="1.0"?>']],
-    'malformed attribute' => [['footer_html' => '<b title="unclosed>x</b>']],
 ]);
 
 test('component public classes and their token driven declarations form the exact authoring contract', function (): void {
