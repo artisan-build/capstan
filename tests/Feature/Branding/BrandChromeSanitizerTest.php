@@ -9,6 +9,9 @@ use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
 use Masterminds\HTML5;
+use Masterminds\HTML5\Parser\DOMTreeBuilder;
+use Masterminds\HTML5\Parser\Scanner;
+use Masterminds\HTML5\Parser\Tokenizer;
 
 const PR5_HTML_URL_ATTRIBUTES = [
     'action', 'archive', 'attributionsrc', 'background', 'cite', 'classid', 'codebase',
@@ -75,6 +78,30 @@ function pr5WriteRefusalCases(): array
     return $cases;
 }
 
+/** @return array<string, array{string}> */
+function pr5MalformedTreeCases(): array
+{
+    return [
+        'unmatched end tag' => ['</span>'],
+        'misnested inline element' => ['<div><span>x</div>'],
+        'unclosed nested element' => ['<section><span>x</span>'],
+        'implied paragraph end tag' => ['<p>one<div>two</div></p>'],
+        'implied table-cell end tag' => ['<table><tbody><tr><td>one<td>two</td></tr></tbody></table>'],
+        'balanced source requiring tree-builder recovery' => ['<thead>x<table></table></thead>'],
+    ];
+}
+
+function pr5ChromeValidationException(Closure $callback): ValidationException
+{
+    try {
+        $callback();
+    } catch (ValidationException $exception) {
+        return $exception;
+    }
+
+    throw new LogicException('Expected malformed brand chrome to be refused.');
+}
+
 beforeEach(function (): void {
     config([
         'app.url' => 'https://app.layouts.test',
@@ -117,7 +144,7 @@ test('unknown event data and namespace attributes are refused', function (string
 
 test('safe structural presentation CSS link and image input becomes idempotent XML compatible chrome', function (): void {
     $assetId = '11111111-1111-4111-8111-111111111111';
-    $input = '<SECTION TITLE="Proof" DIR="ltr" LANG="en" STYLE="color:var(--capstan-color-text)" ROLE="banner" ID="top" CLASS="hero" ARIA-LABEL="Header"><A HREF="HTTPS://example.test/path">Link</A><IMG WIDTH="20" TITLE="Logo" SRC="https://render.layouts.test/brand-assets/'.$assetId.'" HEIGHT="10" ALT="Brand"><BR><B>Tail</SECTION>';
+    $input = '<SECTION TITLE="Proof" DIR="ltr" LANG="en" STYLE="color:var(--capstan-color-text)" ROLE="banner" ID="top" CLASS="hero" ARIA-LABEL="Header"><A HREF="HTTPS://example.test/path">Link</A><IMG WIDTH="20" TITLE="Logo" SRC="https://render.layouts.test/brand-assets/'.$assetId.'" HEIGHT="10" ALT="Brand"><BR><B>Tail</B></SECTION>';
     $expected = '<section aria-label="Header" class="hero" dir="ltr" id="top" lang="en" role="banner" style="color:var(--capstan-color-text)" title="Proof"><a href="https://example.test/path">Link</a><img alt="Brand" height="10" src="/brand-assets/'.$assetId.'" title="Logo" width="20" /><br /><b>Tail</b></section>';
     $sanitizer = resolve(BrandChromeSanitizer::class);
 
@@ -128,6 +155,49 @@ test('safe structural presentation CSS link and image input becomes idempotent X
     expect($xml->loadXML('<root>'.$expected.'</root>', LIBXML_NONET))->toBeTrue();
     $html5 = new HTML5(['disable_html_ns' => true]);
     expect($html5->saveHTML($html5->loadHTMLFragment($expected)))->not->toBe('');
+});
+
+test('well formed explicit trees and void elements remain accepted', function (string $html, string $expected): void {
+    expect(resolve(BrandChromeSanitizer::class)->sanitize($html, []))->toBe($expected);
+})->with([
+    'well-formed nesting' => [
+        '<section><div><span>nested</span></div></section>',
+        '<section><div><span>nested</span></div></section>',
+    ],
+    'void br and img' => [
+        '<div>before<br><img src="data:image/png;base64,iVBORw0KGgo=" alt="Logo">after</div>',
+        '<div>before<br /><img alt="Logo" src="data:image/png;base64,iVBORw0KGgo=" />after</div>',
+    ],
+    'explicit optional end tags' => [
+        '<ul><li>one</li><li>two</li></ul><p>done</p>',
+        '<ul><li>one</li><li>two</li></ul><p>done</p>',
+    ],
+    'no optional-end-tag elements' => [
+        '<section><strong>one</strong><span>two</span></section>',
+        '<section><strong>one</strong><span>two</span></section>',
+    ],
+]);
+
+test('tree builder errors are load-bearing when recovered input and canonical trees match', function (): void {
+    $html = '<thead>x<table></table></thead>';
+    $builder = new DOMTreeBuilder(true, ['disable_html_ns' => true]);
+    (new Tokenizer(new Scanner($html, 'UTF-8'), $builder, Tokenizer::CONFORMANT_HTML))->parse();
+
+    expect($builder->getErrors())->not->toBe([])
+        ->and(resolve(BrandChromeSanitizer::class)->sanitize('<thead>x</thead><table></table>', []))
+        ->toBe('<thead>x</thead><table></table>')
+        ->and(fn (): string => resolve(BrandChromeSanitizer::class)->sanitize($html, []))
+        ->toThrow(InvalidArgumentException::class, 'is not valid HTML5 chrome');
+});
+
+test('structural backstop is load-bearing when an unclosed tree has no builder errors', function (): void {
+    $html = '<section><span>x</span>';
+    $builder = new DOMTreeBuilder(true, ['disable_html_ns' => true]);
+    (new Tokenizer(new Scanner($html, 'UTF-8'), $builder, Tokenizer::CONFORMANT_HTML))->parse();
+
+    expect($builder->getErrors())->toBe([])
+        ->and(fn (): string => resolve(BrandChromeSanitizer::class)->sanitize($html, []))
+        ->toThrow(InvalidArgumentException::class, 'is not valid HTML5 chrome');
 });
 
 test('https links document fragments and data images are the only public URL values', function (string $html, bool $accepted): void {
@@ -168,3 +238,22 @@ test('write-time refusal leaves all draft version asset and storage state unchan
         ->and(BrandAsset::query()->count())->toBe(0)
         ->and(Storage::disk()->allFiles())->toBe($files);
 })->with(pr5WriteRefusalCases())->with(['header_html', 'footer_html']);
+
+test('malformed tree write refusal names invalid HTML and leaves every persisted surface unchanged', function (string $html, string $field): void {
+    $owner = capstanUser(['role' => UserRole::Owner->value]);
+    $service = resolve(BrandKitService::class);
+    $service->updateDraft($owner, ['header_html' => '<b>applied</b>']);
+    $service->applyDraft($owner);
+    $service->updateDraft($owner, ['footer_html' => '<i>pending</i>']);
+
+    $before = $service->read();
+    $counts = [BrandKit::query()->count(), BrandVersion::query()->count(), BrandAsset::query()->count()];
+    $files = Storage::disk()->allFiles();
+    $exception = pr5ChromeValidationException(fn () => $service->updateDraft($owner, [$field => $html]));
+
+    expect($exception->errors())->toHaveKey($field)
+        ->and($exception->errors()[$field])->toBe(['is not valid HTML5 chrome'])
+        ->and($service->read())->toBe($before)
+        ->and([BrandKit::query()->count(), BrandVersion::query()->count(), BrandAsset::query()->count()])->toBe($counts)
+        ->and(Storage::disk()->allFiles())->toBe($files);
+})->with(pr5MalformedTreeCases())->with(['header_html', 'footer_html']);

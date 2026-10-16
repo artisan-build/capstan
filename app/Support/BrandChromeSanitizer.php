@@ -51,20 +51,51 @@ final readonly class BrandChromeSanitizer
             $selected[strtolower($id)] = true;
         }
 
+        try {
+            $parsed = $this->parseFragment($html, $selected);
+            $canonical = $this->serializeFragment($parsed['fragment']);
+            $reparsed = $this->parseFragment($canonical, $selected);
+
+            if ($parsed['balanced'] !== $reparsed['balanced']
+                || $this->treeFingerprint($parsed['fragment']) !== $this->treeFingerprint($reparsed['fragment'])) {
+                throw new InvalidArgumentException('is not valid HTML5 chrome');
+            }
+
+            return $canonical;
+        } catch (InvalidArgumentException $exception) {
+            throw $exception;
+        } catch (\Throwable $exception) {
+            throw new InvalidArgumentException('is not valid HTML5 chrome', previous: $exception);
+        }
+    }
+
+    /**
+     * @param  array<string, true>  $selectedAssetIds
+     * @return array{fragment: DOMDocumentFragment, balanced: bool}
+     */
+    private function parseFragment(string $html, array $selectedAssetIds): array
+    {
         $builder = new DOMTreeBuilder(true, ['disable_html_ns' => true]);
-        $startTag = fn (string $name, array $attributes): array => $this->normalizeStartTag($name, $attributes, $selected);
+        $startTag = fn (string $name, array $attributes): array => $this->normalizeStartTag($name, $attributes, $selectedAssetIds);
         $endTag = function (string $name): void {
             $name = strtolower($name);
             if (! in_array($name, self::ALLOWED_ELEMENTS, true) || in_array($name, self::VOID_ELEMENTS, true)) {
                 throw new InvalidArgumentException('contains an element outside the allowlist');
             }
         };
-        $handler = new readonly class($builder, $startTag, $endTag) implements EventHandler
+        $handler = new class($builder, $startTag, $endTag, self::VOID_ELEMENTS) implements EventHandler
         {
+            /** @var list<string> */
+            private array $openElements = [];
+
+            private bool $balanced = true;
+
             public function __construct(
-                private DOMTreeBuilder $builder,
-                private Closure $startTag,
-                private Closure $endTag,
+                private readonly DOMTreeBuilder $builder,
+                private readonly Closure $startTag,
+                private readonly Closure $endTag,
+                /** @var list<string> */
+                private readonly array $voidElements,
             ) {}
 
             public function doctype($name, $idType = 0, $id = null, $quirks = false): never
@@ -78,13 +109,23 @@ final readonly class BrandChromeSanitizer
              */
             public function startTag($name, $attributes = [], $selfClosing = false): int
             {
-                return $this->builder->startTag($name, ($this->startTag)($name, $attributes), $selfClosing);
+                $name = strtolower($name);
+                $result = $this->builder->startTag($name, ($this->startTag)($name, $attributes), $selfClosing);
+                if (! in_array($name, $this->voidElements, true)) {
+                    $this->openElements[] = $name;
+                }
+
+                return $result;
             }
 
             /** @param string $name */
             public function endTag($name): void
             {
+                $name = strtolower($name);
                 ($this->endTag)($name);
+                if (array_pop($this->openElements) !== $name) {
+                    $this->balanced = false;
+                }
                 $this->builder->endTag($name);
             }
 
@@ -124,18 +165,20 @@ final readonly class BrandChromeSanitizer
             {
                 throw new InvalidArgumentException('contains a declaration, comment, or unsupported node');
             }
+
+            public function isBalanced(): bool
+            {
+                return $this->balanced && $this->openElements === [];
+            }
         };
 
-        try {
-            $parser = new Tokenizer(new Scanner($html, 'UTF-8'), $handler, Tokenizer::CONFORMANT_HTML);
-            $parser->parse();
-
-            return $this->serializeFragment($builder->fragment());
-        } catch (InvalidArgumentException $exception) {
-            throw $exception;
-        } catch (\Throwable $exception) {
-            throw new InvalidArgumentException('is not valid HTML5 chrome', previous: $exception);
+        $parser = new Tokenizer(new Scanner($html, 'UTF-8'), $handler, Tokenizer::CONFORMANT_HTML);
+        $parser->parse();
+        if ($builder->getErrors() !== []) {
+            throw new InvalidArgumentException('is not valid HTML5 chrome');
         }
+
+        return ['fragment' => $builder->fragment(), 'balanced' => $handler->isBalanced()];
     }
 
     /**
@@ -323,6 +366,36 @@ final readonly class BrandChromeSanitizer
         }
 
         return $html;
+    }
+
+    private function treeFingerprint(DOMNode $node): string
+    {
+        if ($node->nodeType === XML_TEXT_NODE) {
+            $value = $node->nodeValue ?? '';
+
+            return 'text:'.strlen($value).':'.$value;
+        }
+
+        $fingerprint = $node instanceof DOMElement ? 'element:'.strlen($node->tagName).':'.strtolower($node->tagName) : 'fragment';
+        if ($node instanceof DOMElement) {
+            $attributes = [];
+            foreach ($node->attributes as $attribute) {
+                $attributes[strtolower($attribute->nodeName)] = $attribute->value;
+            }
+            ksort($attributes);
+            foreach ($attributes as $name => $value) {
+                $fingerprint .= '|attribute:'.strlen($name).':'.$name.':'.strlen($value).':'.$value;
+            }
+        } elseif (! $node instanceof DOMDocumentFragment) {
+            throw new InvalidArgumentException('contains an unsupported node');
+        }
+
+        foreach ($node->childNodes as $child) {
+            $childFingerprint = $this->treeFingerprint($child);
+            $fingerprint .= '|child:'.strlen($childFingerprint).':'.$childFingerprint;
+        }
+
+        return $fingerprint;
     }
 
     private function serializeNode(DOMNode $node): string
