@@ -14,7 +14,8 @@ use Illuminate\Support\Facades\View;
  * built-for-cloud.layout, so every <x-bfc-layout> page (sign-in, invitation,
  * password reset, members, credentials) and full-page Livewire screen gets
  * the applied name, icon and accent. Without an applied kit the shell shows
- * the package's own manifest name and artwork, exactly as before.
+ * the configured app name and Capstan's built-in mark. The Scalpels wordmark
+ * and navigation are the package's, unchanged.
  */
 class BrandedBuiltForCloudLayout extends Layout
 {
