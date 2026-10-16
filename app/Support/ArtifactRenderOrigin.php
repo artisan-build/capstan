@@ -150,6 +150,12 @@ class ArtifactRenderOrigin
         return $this->renderOrigin().$path;
     }
 
+    /** Only the current applied kit's assets resolve here; drafts use the signed preview route. */
+    public function brandAssetUrl(string $asset): string
+    {
+        return $this->renderOrigin().route('brand-assets.show', ['asset' => $asset], false);
+    }
+
     public function contentSecurityPolicy(bool $allowSameOriginImages = false): string
     {
         return implode('; ', [

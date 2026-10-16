@@ -119,4 +119,23 @@ return [
         'name' => env('MAIL_FROM_NAME', env('APP_NAME', 'Laravel')),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Markdown Mail Settings
+    |--------------------------------------------------------------------------
+    |
+    | The capstan theme is Laravel's default theme plus the applied brand's
+    | accent colour. The components in resources/views/vendor/mail carry the
+    | applied display name and logo into every notification mail.
+    |
+    */
+
+    'markdown' => [
+        'theme' => 'capstan',
+
+        'paths' => [
+            resource_path('views/vendor/mail'),
+        ],
+    ],
+
 ];
