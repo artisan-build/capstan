@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\ArtifactShareController;
+use App\Http\Controllers\BrandingSettingsController;
 use App\Http\Controllers\PageController;
 use App\Http\Controllers\PageExportController;
 use App\Http\Controllers\PageShareController;
@@ -8,6 +9,13 @@ use Illuminate\Support\Facades\Route;
 
 Route::middleware('bfc.auth')->group(function (): void {
     Route::livewire('postmaster', 'postmaster.spoke-map')->name('postmaster.map');
+    Route::get('branding', [BrandingSettingsController::class, 'show'])->name('branding.show');
+    Route::patch('branding/draft', [BrandingSettingsController::class, 'update'])->name('branding.draft.update');
+    Route::post('branding/assets', [BrandingSettingsController::class, 'upload'])->name('branding.assets.store');
+    Route::post('branding/apply', [BrandingSettingsController::class, 'apply'])->name('branding.apply');
+    Route::post('branding/versions/{version}/revert', [BrandingSettingsController::class, 'revert'])
+        ->whereNumber('version')
+        ->name('branding.versions.revert');
 });
 
 // The content route lives in routes/render.php on a lean, sessionless stack.

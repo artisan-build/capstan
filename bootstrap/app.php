@@ -50,7 +50,7 @@ return Application::configure(basePath: dirname(__DIR__))
             fn (Request $request) => $request->is('api/*') || $request->expectsJson(),
         );
         $exceptions->respond(function (Response $response, Throwable $exception, Request $request): Response {
-            if ($request->is('artifacts/*', 'pages', 'pages/*', 'page-shares/*')) {
+            if ($request->is('artifacts/*', 'brand-previews/*', 'pages', 'pages/*', 'page-shares/*')) {
                 $response->headers->set('X-Robots-Tag', 'noindex, nofollow, noarchive');
             }
 
