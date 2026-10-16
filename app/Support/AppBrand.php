@@ -53,8 +53,9 @@ final readonly class AppBrand
         );
     }
 
+    /** The Artifacts feature already requires an isolated render origin. */
     private function assetUrl(mixed $id): ?string
     {
-        return is_string($id) && $this->origin->isConfigured() ? $this->origin->brandAssetUrl($id) : null;
+        return is_string($id) ? $this->origin->brandAssetUrl($id) : null;
     }
 }
