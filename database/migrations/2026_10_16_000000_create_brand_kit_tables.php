@@ -30,7 +30,7 @@ return new class extends Migration
 
         Schema::create('brand_assets', function (Blueprint $table): void {
             $table->uuid('id')->primary();
-            $table->string('kind', 16);
+            $table->enum('kind', ['logo', 'mark']);
             $table->string('content_type', 64);
             $table->unsignedBigInteger('size_bytes');
             $table->string('content_hash', 64)->index();

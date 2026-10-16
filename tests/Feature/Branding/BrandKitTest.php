@@ -55,11 +55,6 @@ function brandPng(): string
     return (string) base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', true);
 }
 
-function brandTtf(): string
-{
-    return (string) file_get_contents(base_path('tests/Fixtures/Brand/instrument-sans-400-latin-ext.ttf'));
-}
-
 /** @return array<string, string> */
 function brandImageSamples(): array
 {
@@ -68,19 +63,6 @@ function brandImageSamples(): array
         'image/jpeg' => (string) base64_decode('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAABv/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AHP/Z', true),
         'image/webp' => (string) base64_decode('UklGRhoAAABXRUJQVlA4TA4AAAAvAAAAAAcQEf0PRET/Aw==', true),
     ];
-}
-
-/** @return array<string, string> */
-function brandFontSamples(): array
-{
-    return [
-        'font/ttf' => brandTtf(),
-    ];
-}
-
-function brandReplaceUint32(string $bytes, int $offset, int $value): string
-{
-    return substr_replace($bytes, pack('N', $value), $offset, 4);
 }
 
 function brandRecognizableImageTruncation(string $bytes, string $contentType): string
@@ -100,7 +82,7 @@ function brandRecognizableImageTruncation(string $bytes, string $contentType): s
     throw new RuntimeException('The positive image fixture has no recognizable truncated prefix.');
 }
 
-function brandPage(User $owner, string $html): Page
+function brandPage(User $owner, string $html, string $contentType = 'text/html'): Page
 {
     return resolve(PagePublisher::class)->publish(
         pageId: (string) Str::uuid(),
@@ -110,7 +92,7 @@ function brandPage(User $owner, string $html): Page
         refreshRecipe: 'Brand page recipe '.Str::random(8),
         layout: PageLayout::Plain,
         content: $html,
-        contentType: 'text/html',
+        contentType: $contentType,
     );
 }
 
@@ -234,7 +216,7 @@ test('select asset authorizes before missing or wrong-kind lookup for every unav
     $refusals = [];
 
     foreach ([$member, $inactiveAdmin, $offboardedAdmin] as $denied) {
-        foreach ([['logo_light', (string) Str::uuid()], ['heading_font', $wrongKind->id]] as [$slot, $assetId]) {
+        foreach ([['logo_light', (string) Str::uuid()], ['mark', $wrongKind->id]] as [$slot, $assetId]) {
             try {
                 $service->selectAsset($denied, $slot, $assetId);
                 throw new LogicException('An unavailable principal selected a brand asset.');
@@ -259,40 +241,29 @@ test('owner and admin select and clear every asset slot while admitted selection
     $admin = capstanUser(['role' => UserRole::Admin->value]);
     $logo = $service->uploadAsset($owner, BrandAssetKind::Logo, brandPng());
     $mark = $service->uploadAsset($admin, BrandAssetKind::Mark, brandPng());
-    $font = $service->uploadAsset($owner, BrandAssetKind::Font, brandTtf());
-
-    $service->selectAsset($owner, 'logo_light', $logo->id);
-    $service->selectAsset($admin, 'logo_dark', $logo->id);
-    $service->selectAsset($owner, 'mark', $mark->id);
-    $service->selectAsset($admin, 'heading_font', $font->id);
-    $draft = $service->selectAsset($owner, 'body_font', $font->id);
-    expect($draft['assets'])->toBe(['logo_light' => $logo->id, 'logo_dark' => $logo->id, 'mark' => $mark->id])
-        ->and($draft['fonts']['heading'])->toBe(['type' => 'asset', 'value' => $font->id])
-        ->and($draft['fonts']['body'])->toBe(['type' => 'asset', 'value' => $font->id]);
-
-    $service->selectAsset($admin, 'logo_light', null);
-    $service->selectAsset($owner, 'logo_dark', null);
-    $service->selectAsset($admin, 'mark', null);
-    $service->selectAsset($owner, 'heading_font', null);
-    $cleared = $service->selectAsset($admin, 'body_font', null);
-    expect($cleared['assets'])->toBe(['logo_light' => null, 'logo_dark' => null, 'mark' => null])
-        ->and($cleared['fonts']['heading'])->toBe(['type' => 'stack', 'value' => 'system-sans'])
-        ->and($cleared['fonts']['body'])->toBe(['type' => 'stack', 'value' => 'system-sans']);
+    foreach ([$owner, $admin] as $actor) {
+        foreach (['logo_light' => $logo, 'logo_dark' => $logo, 'mark' => $mark] as $slot => $asset) {
+            $selected = $service->selectAsset($actor, $slot, $asset->id);
+            expect($selected['assets'][$slot])->toBe($asset->id);
+            $cleared = $service->selectAsset($actor, $slot, null);
+            expect($cleared['assets'][$slot])->toBeNull();
+        }
+    }
 
     $beforeState = $service->read();
     $beforeFiles = Storage::disk()->allFiles();
     $failures = [
         fn () => $service->selectAsset($owner, 'logo_light', (string) Str::uuid()),
         fn () => $service->selectAsset($owner, 'unsupported_slot', $logo->id),
-        fn () => $service->selectAsset($owner, 'logo_light', $font->id),
-        fn () => $service->selectAsset($owner, 'heading_font', $logo->id),
+        fn () => $service->selectAsset($owner, 'logo_light', $mark->id),
+        fn () => $service->selectAsset($owner, 'mark', $logo->id),
         fn () => $service->selectAsset($owner, 'logo_dark', $mark->id),
     ];
     foreach ($failures as $failure) {
         expect($failure)->toThrow(ValidationException::class);
         expect($service->read())->toBe($beforeState)
             ->and(BrandVersion::query()->count())->toBe(0)
-            ->and(BrandAsset::query()->count())->toBe(3)
+            ->and(BrandAsset::query()->count())->toBe(2)
             ->and(Storage::disk()->allFiles())->toBe($beforeFiles);
     }
 });
@@ -310,7 +281,9 @@ test('token grammar rejects unknown names css breakouts and unsafe font choices'
     'negative length' => [['radius' => ['md' => '-1px']]],
     'unitless length' => [['spacing' => ['lg' => '12']]],
     'arbitrary font family' => [['fonts' => ['body' => ['type' => 'stack', 'value' => 'Arial;src:url(evil)']]]],
-    'asset non uuid' => [['fonts' => ['heading' => ['type' => 'asset', 'value' => "x\n}"]]]],
+    'asset non uuid' => [['assets' => ['logo_light' => "x\n}"]]],
+    'font asset reference' => [['fonts' => ['heading' => ['type' => 'asset', 'value' => '11111111-1111-4111-8111-111111111111']]]],
+    'font extra field' => [['fonts' => ['body' => ['asset_id' => '11111111-1111-4111-8111-111111111111']]]],
 ]);
 
 test('serialized css uses only fixed declarations and canonical values', function (): void {
@@ -384,18 +357,140 @@ test('headless documents and fragments receive an effective style without corrup
         ->and(substr_count($renderedFragment, 'data-capstan-brand="applied"'))->toBe(1);
 });
 
+test('reviewer self-closing script regression never captures the brand style', function (): void {
+    $html = '<!doctype html><html><script /><head id=decoy></head></script><head id=real><title>x</title></head><body>y</body></html>';
+    $rendered = resolve(BrandPageRenderer::class)->render($html, 'text/html');
+
+    expect($rendered)->toContain('<head id=real><style data-capstan-brand="applied">')
+        ->and(substr_count($rendered, 'data-capstan-brand="applied"'))->toBe(1)
+        ->and(preg_replace('/<style data-capstan-brand="applied">.*?<\/style>/s', '', $rendered))->toBe($html);
+});
+
+test('raw text insertion respects the response media type', function (string $element, string $contentType, string $slash): void {
+    $proof = 'raw-proof-'.Str::random(12);
+    $decoy = '<head id=decoy>'.$proof.'</head>';
+    $html = '<!doctype html><html><'.$element.$slash.'>'.$decoy.'</'.$element.'><head id=real></head><body>'.$proof.'</body></html>';
+    $rendered = resolve(BrandPageRenderer::class)->render($html, $contentType);
+    $styleStart = '<style data-capstan-brand="applied">';
+
+    if ($contentType === 'application/xhtml+xml' && $slash !== '') {
+        // XML closes the preceding element, so this head is no longer raw text.
+        expect($rendered)->toContain('<head id=decoy>'.$styleStart);
+    } elseif ($contentType === 'text/html' && $element === 'plaintext') {
+        expect($rendered)->toStartWith('<!doctype html>'.$styleStart)
+            ->toContain($decoy, '<head id=real></head>');
+    } else {
+        expect($rendered)->toContain('<head id=real>'.$styleStart, $decoy);
+    }
+
+    expect(substr_count($rendered, 'data-capstan-brand="applied"'))->toBe(1)
+        ->and(preg_replace('/<style data-capstan-brand="applied">.*?<\/style>/s', '', $rendered))->toBe($html);
+})->with(['script', 'style', 'textarea', 'title', 'iframe', 'noembed', 'noframes', 'noscript', 'xmp', 'plaintext'])
+    ->with(['text/html', 'application/xhtml+xml'])
+    ->with(['', ' /']);
+
+test('unclosed HTML raw text uses fallback before the raw text interval', function (string $element): void {
+    $html = '<!doctype html><html><'.$element.' /><head id=decoy>unclosed '.Str::random(12).'</head>';
+    $rendered = resolve(BrandPageRenderer::class)->render($html, 'text/html');
+
+    expect($rendered)->toStartWith('<!doctype html><style data-capstan-brand="applied">')
+        ->and(substr_count($rendered, 'data-capstan-brand="applied"'))->toBe(1)
+        ->and(preg_replace('/<style data-capstan-brand="applied">.*?<\/style>/s', '', $rendered))->toBe($html);
+})->with(['script', 'style', 'textarea', 'title', 'iframe', 'noembed', 'noframes', 'noscript', 'xmp', 'plaintext']);
+
+test('owner and public responses pass their media type to insertion and measure transformed bytes', function (string $contentType, string $element): void {
+    $owner = brandOwner();
+    $service = resolve(BrandKitService::class);
+    $logo = $service->uploadAsset($owner, BrandAssetKind::Logo, brandPng());
+    $service->selectAsset($owner, 'logo_light', $logo->id);
+    $service->applyDraft($owner);
+    // A later draft must not affect either CSS or the image capability snapshot.
+    $service->selectAsset($owner, 'logo_light', null);
+    $html = '<!doctype html><html><'.$element.' /><head id=decoy></head></'.$element.'><head id=real></head><body>'.Str::random(12).'</body></html>';
+    $page = brandPage($owner, $html, $contentType);
+    $share = PageShare::query()->create([
+        'page_id' => $page->id,
+        'created_by_user_id' => (string) $owner->getKey(),
+        'kind' => PageShareKind::Link,
+        'expires_at' => now()->addHour(),
+    ]);
+    $origin = resolve(ArtifactRenderOrigin::class);
+    foreach ([$origin->signedPageContentUrl($page, $page->latestVersion), $origin->signedPageShareContentUrl($share)] as $url) {
+        $response = $this->get($url)->assertOk();
+        expect($response->headers->get('Content-Type'))->toStartWith($contentType);
+        $body = $response->streamedContent();
+        $prefix = $contentType === 'application/xhtml+xml'
+            ? '<head id=decoy>'
+            : ($element === 'plaintext' ? '<!doctype html>' : '<head id=real>');
+        expect($body)->toContain($prefix.'<style data-capstan-brand="applied">', $logo->id)
+            ->and(substr_count($body, 'data-capstan-brand="applied"'))->toBe(1)
+            ->and(preg_replace('/<style data-capstan-brand="applied">.*?<\/style>/s', '', $body))->toBe($html)
+            ->and($response->headers->get('Content-Length'))->toBe((string) strlen($body))
+            ->and($response->headers->get('Content-Security-Policy'))->toContain("font-src 'none'", "img-src 'self' data:");
+    }
+})->with(['text/html', 'application/xhtml+xml'])->with(['script', 'plaintext']);
+
+test('short images are validation refusals before rows or private files', function (): void {
+    $owner = brandOwner();
+    $service = resolve(BrandKitService::class);
+    $files = Storage::disk()->allFiles();
+
+    foreach ([BrandAssetKind::Logo, BrandAssetKind::Mark] as $kind) {
+        for ($length = 0; $length < 12; $length++) {
+            foreach ([substr(brandPng(), 0, $length), str_repeat('A', $length)] as $bytes) {
+                expect(fn () => $service->uploadAsset($owner, $kind, $bytes))->toThrow(ValidationException::class)
+                    ->and(BrandAsset::query()->count())->toBe(0)
+                    ->and(BrandKit::query()->count())->toBe(0)
+                    ->and(BrandVersion::query()->count())->toBe(0)
+                    ->and(Storage::disk()->allFiles())->toBe($files);
+            }
+        }
+    }
+});
+
+test('every fixed font choice serializes without network references', function (string $stack): void {
+    $owner = brandOwner();
+    $service = resolve(BrandKitService::class);
+    $choice = ['type' => 'stack', 'value' => $stack];
+    $service->updateDraft($owner, ['fonts' => ['heading' => $choice, 'body' => $choice]]);
+    $service->applyDraft($owner);
+
+    $family = match ($stack) {
+        'system-serif' => 'ui-serif',
+        'monospace' => 'ui-monospace',
+        default => 'ui-sans-serif',
+    };
+    expect($service->current()['fonts'])->toBe(['heading' => $choice, 'body' => $choice])
+        ->and(resolve(BrandStylesheet::class)->current())->toContain('--capstan-font-heading:'.$family, '--capstan-font-body:'.$family)
+        ->not->toContain('@font-face', 'url(', 'https://', 'http://')
+        ->and($service->currentAssetIds())->toBe([]);
+})->with(BrandKitSchema::FONT_STACKS);
+
+test('current asset serving is limited to supported image media types', function (): void {
+    $owner = brandOwner();
+    $service = resolve(BrandKitService::class);
+    foreach ([[BrandAssetKind::Logo, 'logo_light'], [BrandAssetKind::Mark, 'mark']] as [$kind, $slot]) {
+        foreach (brandImageSamples() as $contentType => $bytes) {
+            $asset = $service->uploadAsset($owner, $kind, $bytes);
+            $service->selectAsset($owner, $slot, $asset->id);
+            $service->applyDraft($owner);
+            $url = 'https://render.brand.test/brand-assets/'.$asset->id;
+            $response = $this->get($url)->assertOk()->assertHeader('Content-Type', $contentType);
+            expect($response->streamedContent())->toBe($bytes);
+
+            $asset->forceFill(['content_type' => 'application/octet-stream'])->save();
+            $refused = $this->get($url)->assertNotFound()->assertHeaderMissing('Set-Cookie');
+            expect($refused->getContent())->toBe('')->and($refused->headers->getCookies())->toBe([]);
+        }
+    }
+});
+
 test('asset uploads sniff bytes enforce limits and leave invalid input side effect free', function (): void {
     $owner = brandOwner();
     $service = resolve(BrandKitService::class);
 
     foreach (brandImageSamples() as $contentType => $bytes) {
         $asset = $service->uploadAsset($owner, BrandAssetKind::Logo, $bytes);
-        expect($asset->content_type)->toBe($contentType)
-            ->and($asset->size_bytes)->toBe(strlen($bytes))
-            ->and(Storage::disk()->get($asset->storage_key))->toBe($bytes);
-    }
-    foreach (brandFontSamples() as $contentType => $bytes) {
-        $asset = $service->uploadAsset($owner, BrandAssetKind::Font, $bytes);
         expect($asset->content_type)->toBe($contentType)
             ->and($asset->size_bytes)->toBe(strlen($bytes))
             ->and(Storage::disk()->get($asset->storage_key))->toBe($bytes);
@@ -416,35 +511,15 @@ test('asset uploads sniff bytes enforce limits and leave invalid input side effe
             ->and(@imagecreatefromstring($bytes))->toBeFalse();
     }
 
-    $font = brandTtf();
-    $tableCount = (int) (unpack('ntables', substr($font, 4, 2))['tables'] ?? 0);
-    $directoryEnd = 12 + ($tableCount * 16);
-    $headerOnlyTtf = substr($font, 0, 12);
-    $emptyDirectoryTtf = substr_replace($font, pack('n', 0), 4, 2);
-    $truncatedTtf = substr($font, 0, -1);
-    $outOfBoundsDirectoryTtf = brandReplaceUint32($font, 20, strlen($font) + 4);
-    $zeroLengthTableTtf = brandReplaceUint32($font, 24, 0);
-    $corruptPayloadTtf = substr($font, 0, $directoryEnd).str_repeat('A', strlen($font) - $directoryEnd);
-    expect(substr($corruptPayloadTtf, 0, $directoryEnd))->toBe(substr($font, 0, $directoryEnd))
-        ->and(substr($corruptPayloadTtf, $directoryEnd))->not->toBe(substr($font, $directoryEnd));
     $invalid = [
         ...array_map(fn (string $bytes): array => [BrandAssetKind::Logo, $bytes], array_values($truncatedImages)),
-        [BrandAssetKind::Logo, brandTtf()],
-        [BrandAssetKind::Font, brandPng()],
-        [BrandAssetKind::Font, $headerOnlyTtf],
-        [BrandAssetKind::Font, $emptyDirectoryTtf],
-        [BrandAssetKind::Font, $truncatedTtf],
-        [BrandAssetKind::Font, $outOfBoundsDirectoryTtf],
-        [BrandAssetKind::Font, $zeroLengthTableTtf],
-        [BrandAssetKind::Font, $corruptPayloadTtf],
-        [BrandAssetKind::Font, 'wOF2'.str_repeat("\x00", 44)],
-        [BrandAssetKind::Font, 'wOFF'.str_repeat("\x00", 40)],
-        [BrandAssetKind::Font, 'OTTO'.str_repeat("\x00", 24)],
         [BrandAssetKind::Logo, (string) base64_decode('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', true)],
         ['video', brandPng()],
     ];
     foreach ($invalid as [$kind, $bytes]) {
-        expect(fn () => $service->uploadAsset($owner, $kind, $bytes))->toThrow(ValidationException::class);
+        expect(fn () => $service->uploadAsset($owner, $kind, $bytes))->toThrow(ValidationException::class)
+            ->and(BrandAsset::query()->count())->toBe($rowCount)
+            ->and(Storage::disk()->allFiles())->toBe($files);
     }
     expect(BrandAsset::query()->count())->toBe($rowCount)
         ->and(Storage::disk()->allFiles())->toBe($files);
@@ -454,10 +529,6 @@ test('asset uploads sniff bytes enforce limits and leave invalid input side effe
         ->and(BrandAsset::query()->count())->toBe($rowCount)
         ->and(Storage::disk()->allFiles())->toBe($files);
 
-    config(['capstan.brand.max_font_bytes' => strlen(brandTtf()) - 1]);
-    expect(fn () => $service->uploadAsset($owner, BrandAssetKind::Font, brandTtf()))->toThrow(ValidationException::class)
-        ->and(BrandAsset::query()->count())->toBe($rowCount)
-        ->and(Storage::disk()->allFiles())->toBe($files);
 });
 
 test('page CSP follows applied asset classes while drafts and legacy artifacts stay least privilege', function (): void {
@@ -478,15 +549,13 @@ test('page CSP follows applied asset classes while drafts and legacy artifacts s
     $publicUrl = $origin->signedPageShareContentUrl($share);
     $logo = $service->uploadAsset($owner, BrandAssetKind::Logo, brandPng());
     $unreferencedLogo = $service->uploadAsset($owner, BrandAssetKind::Logo, brandPng());
-    $font = $service->uploadAsset($owner, BrandAssetKind::Font, brandTtf());
     $service->updateDraft($owner, ['colours' => ['light' => ['primary' => $draftColour]], 'tone_notes' => $tone]);
     $service->selectAsset($owner, 'logo_light', $logo->id);
-    $service->selectAsset($owner, 'heading_font', $font->id);
 
     foreach ([$ownerUrl, $publicUrl] as $url) {
         $before = $this->get($url)->assertOk()->assertStreamed();
         expect($before->streamedContent())->toContain($distinctiveBody, 'data-capstan-brand="applied"')
-            ->not->toContain($draftColour, $tone, $logo->id, $font->id)
+            ->not->toContain($draftColour, $tone, $logo->id)
             ->and($before->headers->get('Content-Security-Policy'))
             ->toContain("font-src 'none'", 'img-src data:', "connect-src 'none'", "form-action 'none'", "base-uri 'none'")
             ->not->toContain("font-src 'self'", "img-src 'self'");
@@ -497,7 +566,6 @@ test('page CSP follows applied asset classes while drafts and legacy artifacts s
         ->assertHeaderMissing('Set-Cookie');
     expect($draftAsset->getContent())->toBe('')->and($draftAsset->headers->getCookies())->toBe([]);
 
-    $service->selectAsset($owner, 'heading_font', null);
     $service->applyDraft($owner);
     foreach ([$ownerUrl, $publicUrl] as $url) {
         $imageOnly = $this->get($url)
@@ -507,7 +575,6 @@ test('page CSP follows applied asset classes while drafts and legacy artifacts s
             ->assertHeaderMissing('Set-Cookie');
         $rendered = $imageOnly->streamedContent();
         expect($rendered)->toContain($distinctiveBody, '--capstan-color-primary:'.$draftColour, $logo->id)
-            ->not->toContain($font->id)
             ->not->toContain($tone)
             ->and($imageOnly->headers->get('Content-Length'))->toBe((string) strlen($rendered))
             ->and($imageOnly->headers->get('Content-Security-Policy'))
@@ -516,11 +583,14 @@ test('page CSP follows applied asset classes while drafts and legacy artifacts s
             ->not->toContain('attacker.test');
     }
 
-    $service->selectAsset($owner, 'heading_font', $font->id);
     $service->selectAsset($owner, 'logo_light', null);
+    $service->updateDraft($owner, ['fonts' => [
+        'heading' => ['type' => 'stack', 'value' => 'system-serif'],
+        'body' => ['type' => 'stack', 'value' => 'monospace'],
+    ]]);
     foreach ([$ownerUrl, $publicUrl] as $url) {
         $fontDraft = $this->get($url)->assertOk();
-        expect($fontDraft->streamedContent())->not->toContain($font->id)
+        expect($fontDraft->streamedContent())->not->toContain('--capstan-font-heading:ui-serif')
             ->and($fontDraft->headers->get('Content-Security-Policy'))
             ->toContain("font-src 'none'", "img-src 'self' data:")
             ->not->toContain("font-src 'self'");
@@ -529,10 +599,10 @@ test('page CSP follows applied asset classes while drafts and legacy artifacts s
     $service->applyDraft($owner);
     foreach ([$ownerUrl, $publicUrl] as $url) {
         $fontOnly = $this->get($url)->assertOk();
-        expect($fontOnly->streamedContent())->toContain($font->id)
-            ->not->toContain($logo->id)
+        expect($fontOnly->streamedContent())->toContain('--capstan-font-heading:ui-serif', '--capstan-font-body:ui-monospace')
+            ->not->toContain($logo->id, '@font-face', 'url(')
             ->and($fontOnly->headers->get('Content-Security-Policy'))
-            ->toContain("font-src 'self'", 'img-src data:', "connect-src 'none'", "form-action 'none'", "base-uri 'none'")
+            ->toContain("font-src 'none'", 'img-src data:', "connect-src 'none'", "form-action 'none'", "base-uri 'none'")
             ->not->toContain("img-src 'self'")
             ->not->toContain('attacker.test');
     }
@@ -541,9 +611,9 @@ test('page CSP follows applied asset classes while drafts and legacy artifacts s
     $service->applyDraft($owner);
     foreach ([$ownerUrl, $publicUrl] as $url) {
         $withBoth = $this->get($url)->assertOk();
-        expect($withBoth->streamedContent())->toContain($font->id, $logo->id)
+        expect($withBoth->streamedContent())->toContain('--capstan-font-heading:ui-serif', $logo->id)
             ->and($withBoth->headers->get('Content-Security-Policy'))
-            ->toContain("font-src 'self'", "img-src 'self' data:", "connect-src 'none'", "form-action 'none'", "base-uri 'none'")
+            ->toContain("font-src 'none'", "img-src 'self' data:", "connect-src 'none'", "form-action 'none'", "base-uri 'none'")
             ->not->toContain('attacker.test');
     }
 
@@ -562,7 +632,7 @@ test('page CSP follows applied asset classes while drafts and legacy artifacts s
     expect($legacyCsp)->toContain("font-src 'none'", 'img-src data:', "connect-src 'none'", "form-action 'none'", "base-uri 'none'")
         ->not->toContain("font-src 'self'", "img-src 'self'");
 
-    expect($service->currentAssetIds())->toContain($logo->id, $font->id)
+    expect($service->currentAssetIds())->toBe([$logo->id])
         ->and(BrandAsset::query()->find($logo->id))->toBeInstanceOf(BrandAsset::class)
         ->and(Storage::disk()->exists($logo->storage_key))->toBeTrue();
     $assetResponse = $this->get('https://render.brand.test/brand-assets/'.$logo->id)
@@ -592,11 +662,6 @@ test('page CSP follows applied asset classes while drafts and legacy artifacts s
         ->assertHeader('X-Content-Type-Options', 'nosniff')
         ->assertHeaderMissing('Set-Cookie');
     expect($restoredAsset->streamedContent())->toBe(brandPng());
-    $this->get('https://render.brand.test/brand-assets/'.$font->id)
-        ->assertOk()
-        ->assertHeader('Content-Type', 'font/ttf')
-        ->assertHeader('X-Content-Type-Options', 'nosniff')
-        ->assertHeaderMissing('Set-Cookie');
     $this->get('https://render.brand.test/brand-assets/'.$unreferencedLogo->id)
         ->assertNotFound()
         ->assertHeaderMissing('Set-Cookie');
@@ -606,7 +671,7 @@ test('page CSP follows applied asset classes while drafts and legacy artifacts s
         ->assertOk();
     $publicViewer = $this->get($origin->signedPageShareViewerUrl($share))->assertOk();
     foreach ([$appViewer, $publicViewer] as $viewer) {
-        foreach ([$draftColour, $tone, $logo->id, $font->id, 'data-capstan-brand', '--capstan-color-primary'] as $privateBrandValue) {
+        foreach ([$draftColour, $tone, $logo->id, 'data-capstan-brand', '--capstan-color-primary'] as $privateBrandValue) {
             expect($viewer->content())->not->toContain($privateBrandValue);
         }
     }
@@ -637,9 +702,7 @@ test('configured CSP sources survive applied page branding without widening lega
         'expires_at' => now()->addHour(),
     ]);
     $logo = $service->uploadAsset($owner, BrandAssetKind::Logo, brandPng());
-    $font = $service->uploadAsset($owner, BrandAssetKind::Font, brandTtf());
     $service->selectAsset($owner, 'logo_light', $logo->id);
-    $service->selectAsset($owner, 'heading_font', $font->id);
     $service->applyDraft($owner);
     $origin = resolve(ArtifactRenderOrigin::class);
 
@@ -651,13 +714,13 @@ test('configured CSP sources survive applied page branding without widening lega
         expect($csp)->toContain(
             "script-src 'unsafe-inline' ".$sources['script_src'],
             "style-src 'unsafe-inline' ".$sources['style_src'],
-            "font-src 'self' ".$sources['font_src'],
+            "font-src 'none'",
             "img-src 'self' data: ".$sources['img_src'],
             "connect-src 'none'",
             "form-action 'none'",
             "base-uri 'none'",
             'frame-ancestors https://app.brand.test',
-        );
+        )->not->toContain($sources['font_src'], "font-src 'self'");
     }
 
     $artifactBody = '<html><body>configured legacy '.Str::random(8).'</body></html>';
@@ -674,13 +737,13 @@ test('configured CSP sources survive applied page branding without widening lega
     expect($legacyCsp)->toContain(
         "script-src 'unsafe-inline' ".$sources['script_src'],
         "style-src 'unsafe-inline' ".$sources['style_src'],
-        'font-src '.$sources['font_src'],
+        "font-src 'none'",
         'img-src data: '.$sources['img_src'],
         "connect-src 'none'",
         "form-action 'none'",
         "base-uri 'none'",
         'frame-ancestors https://app.brand.test',
-    )->not->toContain("font-src 'self'", "img-src 'self'");
+    )->not->toContain($sources['font_src'], "font-src 'self'", "img-src 'self'");
 });
 
 test('brand asset route is narrowly sessionless and non html bodies are not transformed', function (): void {

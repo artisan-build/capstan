@@ -131,7 +131,6 @@ class PageController extends Controller
             'Content-Type' => $version->content_type,
             'Content-Security-Policy' => $origin->contentSecurityPolicy(
                 $rendered['allow_same_origin_images'],
-                $rendered['allow_same_origin_fonts'],
             ),
             'X-Content-Type-Options' => 'nosniff',
             'Referrer-Policy' => 'no-referrer',

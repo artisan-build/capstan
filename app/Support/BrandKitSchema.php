@@ -134,11 +134,7 @@ final class BrandKitSchema
         if ($type === 'stack' && is_string($choice) && in_array($choice, self::FONT_STACKS, true)) {
             return ['type' => 'stack', 'value' => $choice];
         }
-        if ($type === 'asset' && is_string($choice) && Str::isUuid($choice)) {
-            return ['type' => 'asset', 'value' => $choice];
-        }
-
-        $this->invalid($path, 'must select a fixed stack or a font asset UUID');
+        $this->invalid($path, 'must select an application-owned font stack');
     }
 
     private function colour(mixed $value, string $path): string

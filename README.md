@@ -377,7 +377,6 @@ The settings a self-hosted Capstan normally changes. Laravel's own settings are 
 | `CAPSTAN_ARTIFACT_MAX_CONTENT_BYTES` | `1048576` | Largest artifact accepted, in bytes. Anything bigger is a `422`. |
 | `CAPSTAN_ARTIFACT_CSP_SCRIPT_SRC` | *(empty)* | Comma-separated extra sources artifact HTML may load scripts from. Empty means none. |
 | `CAPSTAN_ARTIFACT_CSP_STYLE_SRC` | *(empty)* | Same, for stylesheets. |
-| `CAPSTAN_ARTIFACT_CSP_FONT_SRC` | *(empty)* | Same, for fonts. |
 | `CAPSTAN_ARTIFACT_CSP_IMG_SRC` | *(empty)* | Same, for images. Inline `data:` images are always allowed. |
 | `CAPSTAN_FEATURE_POSTMASTER` | `false` | Turns the message bus on. While off, `/postmaster` and the poll API return `404`. |
 | `CAPSTAN_SERVER_ID` | *(none)* | This server's permanent address. Leave it blank: Capstan mints one and stores it. Set it only to restore a previous identity after rebuilding a server. |
@@ -497,8 +496,8 @@ A success is `201` with the artifact and a link to share:
 Open `share_url` in a browser. You get a page on the app hostname holding a sandboxed iframe, and the
 iframe loads your HTML from `artifacts.localhost:8000` under a content security policy that by default
 permits inline scripts and styles and `data:` images, and blocks the page from reaching the network at
-all. It can load an external script, stylesheet, font or image only from a source you add yourself
-through the `CAPSTAN_ARTIFACT_CSP_*` variables. That is the isolation working: two hostnames, one page.
+all. It can load an external script, stylesheet or image only from a source you add yourself
+through the `CAPSTAN_ARTIFACT_CSP_*` variables. Fonts remain blocked by `font-src 'none'`.
 
 Fields you can send:
 

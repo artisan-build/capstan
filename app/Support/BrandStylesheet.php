@@ -14,28 +14,21 @@ final readonly class BrandStylesheet
     /** @param  array<string, mixed>  $brand */
     public function serialize(array $brand): string
     {
-        $fontFaces = [];
         $fontFamilies = [];
         foreach (['heading', 'body'] as $slot) {
             $choice = $brand['fonts'][$slot];
-            if ($choice['type'] === 'asset') {
-                $family = 'capstan-brand-'.str_replace('-', '', $choice['value']);
-                $fontFamilies[$slot] = "'{$family}'";
-                $fontFaces[$choice['value']] = "@font-face{font-family:'{$family}';src:url('/brand-assets/{$choice['value']}');font-display:swap;}";
-            } else {
-                $fontFamilies[$slot] = match ($choice['value']) {
-                    'system-serif' => 'ui-serif,Georgia,Cambria,"Times New Roman",Times,serif',
-                    'monospace' => 'ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace',
-                    default => 'ui-sans-serif,system-ui,sans-serif',
-                };
-            }
+            $fontFamilies[$slot] = match ($choice['value']) {
+                'system-serif' => 'ui-serif,Georgia,Cambria,"Times New Roman",Times,serif',
+                'monospace' => 'ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace',
+                default => 'ui-sans-serif,system-ui,sans-serif',
+            };
         }
 
         $light = $this->tokenDeclarations($brand, 'light', $fontFamilies);
         $dark = $this->colourDeclarations($brand['colours']['dark']);
         $dark .= '--capstan-logo:'.$this->assetUrl($brand['assets']['logo_dark'] ?? $brand['assets']['logo_light']).';';
 
-        return implode('', $fontFaces).":root{{$light}}@media (prefers-color-scheme:dark){:root{{$dark}}}";
+        return ":root{{$light}}@media (prefers-color-scheme:dark){:root{{$dark}}}";
     }
 
     /** @param array<string, mixed> $brand

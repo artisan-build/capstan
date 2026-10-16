@@ -6,15 +6,16 @@ final class HtmlHeadStyleInjector
 {
     /** @var list<string> */
     private const array RAW_TEXT_ELEMENTS = [
-        'script', 'style', 'textarea', 'title', 'xmp', 'iframe', 'noembed', 'noframes',
+        'script', 'style', 'textarea', 'title', 'xmp', 'iframe', 'noembed', 'noframes', 'noscript', 'plaintext',
     ];
 
-    public function inject(string $html, string $style): string
+    public function inject(string $html, string $style, string $contentType = 'text/html'): string
     {
         $length = strlen($html);
         $cursor = 0;
         $doctypeEnd = null;
         $bodyStarted = false;
+        $isHtml = $contentType === 'text/html';
 
         while ($cursor < $length) {
             $tagStart = strpos($html, '<', $cursor);
@@ -62,7 +63,12 @@ final class HtmlHeadStyleInjector
                 $bodyStarted = true;
             }
             if (in_array($name, self::RAW_TEXT_ELEMENTS, true)
-                && ! str_ends_with(rtrim($inside), '/')) {
+                && ($isHtml || ! str_ends_with(rtrim($inside), '/'))) {
+                // HTML's self-closing flag never closes these non-void elements.
+                // Unlike other raw text, plaintext has no HTML closing token.
+                if ($isHtml && $name === 'plaintext') {
+                    break;
+                }
                 $closingEnd = $this->rawTextEnd($html, $name, $tagEnd + 1);
                 if ($closingEnd === null) {
                     break;

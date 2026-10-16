@@ -16,7 +16,7 @@ final readonly class BrandPageRenderer
     }
 
     /**
-     * @return array{body: string, allow_same_origin_images: bool, allow_same_origin_fonts: bool}
+     * @return array{body: string, allow_same_origin_images: bool}
      */
     public function renderResponse(string $body, string $contentType): array
     {
@@ -24,7 +24,6 @@ final readonly class BrandPageRenderer
             return [
                 'body' => $body,
                 'allow_same_origin_images' => false,
-                'allow_same_origin_fonts' => false,
             ];
         }
 
@@ -32,12 +31,10 @@ final readonly class BrandPageRenderer
         $style = '<style data-capstan-brand="applied">'.$this->stylesheet->serialize($brand).'</style>';
 
         return [
-            'body' => $this->injector->inject($body, $style),
+            'body' => $this->injector->inject($body, $style, $contentType),
             'allow_same_origin_images' => is_string($brand['assets']['logo_light'])
                 || is_string($brand['assets']['logo_dark'])
                 || is_string($brand['assets']['mark']),
-            'allow_same_origin_fonts' => $brand['fonts']['heading']['type'] === 'asset'
-                || $brand['fonts']['body']['type'] === 'asset',
         ];
     }
 }

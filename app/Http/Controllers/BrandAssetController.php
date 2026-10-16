@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\BrandAssetKind;
 use App\Features\Artifacts;
 use App\Models\BrandAsset;
 use App\Support\ArtifactRenderOrigin;
@@ -27,7 +28,10 @@ final class BrandAssetController extends Controller
             return $this->notFound();
         }
 
-        $brandAsset = BrandAsset::query()->find($asset);
+        $brandAsset = BrandAsset::query()
+            ->whereIn('kind', [BrandAssetKind::Logo->value, BrandAssetKind::Mark->value])
+            ->whereIn('content_type', ['image/png', 'image/jpeg', 'image/webp'])
+            ->find($asset);
         if (! $brandAsset instanceof BrandAsset) {
             return $this->notFound();
         }

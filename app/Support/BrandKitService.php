@@ -73,7 +73,7 @@ final readonly class BrandKitService
         if (! $resolvedKind instanceof BrandAssetKind) {
             throw ValidationException::withMessages(['kind' => 'The brand asset kind is not supported.']);
         }
-        $metadata = $this->assets->inspect($resolvedKind, $bytes);
+        $metadata = $this->assets->inspect($bytes);
         $id = (string) Str::uuid();
         $storageKey = 'brand-assets/'.$metadata['content_hash'].'/'.$id;
         $disk = Storage::disk();
@@ -111,8 +111,6 @@ final readonly class BrandKitService
         return match ($slot) {
             'logo_light', 'logo_dark' => $this->selectImage($actor, $slot, $asset, BrandAssetKind::Logo),
             'mark' => $this->selectImage($actor, $slot, $asset, BrandAssetKind::Mark),
-            'heading_font' => $this->selectFont($actor, 'heading', $asset),
-            'body_font' => $this->selectFont($actor, 'body', $asset),
             default => throw ValidationException::withMessages(['slot' => 'The brand asset slot is not supported.']),
         };
     }
@@ -152,8 +150,6 @@ final readonly class BrandKitService
             $current['assets']['logo_light'],
             $current['assets']['logo_dark'],
             $current['assets']['mark'],
-            $current['fonts']['heading']['type'] === 'asset' ? $current['fonts']['heading']['value'] : null,
-            $current['fonts']['body']['type'] === 'asset' ? $current['fonts']['body']['value'] : null,
         ], is_string(...)));
 
         return array_values(array_unique($ids));
@@ -191,11 +187,6 @@ final readonly class BrandKitService
         if (is_string($configuration['assets']['mark'])) {
             $expected[$configuration['assets']['mark']] = BrandAssetKind::Mark;
         }
-        foreach (['heading', 'body'] as $slot) {
-            if ($configuration['fonts'][$slot]['type'] === 'asset') {
-                $expected[$configuration['fonts'][$slot]['value']] = BrandAssetKind::Font;
-            }
-        }
 
         foreach ($expected as $assetId => $kind) {
             $asset = BrandAsset::query()->find($assetId);
@@ -213,20 +204,6 @@ final readonly class BrandKitService
         }
 
         return $this->updateDraft($actor, ['assets' => [$slot => $asset?->id]]);
-    }
-
-    /** @return array<string, mixed> */
-    private function selectFont(User $actor, string $slot, ?BrandAsset $asset): array
-    {
-        if ($asset !== null && $asset->kind !== BrandAssetKind::Font) {
-            throw ValidationException::withMessages(['asset' => 'The selected asset is not a font.']);
-        }
-
-        return $this->updateDraft($actor, [
-            'fonts' => [$slot => $asset === null
-                ? ['type' => 'stack', 'value' => 'system-sans']
-                : ['type' => 'asset', 'value' => $asset->id]],
-        ]);
     }
 
     private function authorize(User $actor): void
