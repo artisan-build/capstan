@@ -102,6 +102,19 @@ function pr5ChromeContentLossCases(): array
     ];
 }
 
+/** @return array<string, array{string, string}> */
+function pr5DroppedAttributeCases(): array
+{
+    return [
+        'digit-first name' => ['<span 1unknown="proof">text</span>', 'is not valid HTML5 chrome'],
+        'hyphen-first name' => ['<span -unknown="proof">text</span>', 'is not valid HTML5 chrome'],
+        'period-first name' => ['<span .unknown="proof">text</span>', 'is not valid HTML5 chrome'],
+        'non-ASCII name' => ['<span ü="proof">text</span>', 'contains an attribute outside the allowlist'],
+        'empty name' => ['<span ="proof">text</span>', 'is not valid HTML5 chrome'],
+        'duplicate name' => ['<span unknown="one" unknown="two">text</span>', 'contains an attribute outside the allowlist'],
+    ];
+}
+
 /** @return array<string, array{array<string, int>, array<string, int>, bool}> */
 function pr5StartTagPreservationCases(): array
 {
@@ -206,6 +219,62 @@ test('allowlisted malformed chrome is repaired to canonical bytes', function (st
         ->and($sanitizer->sanitize($canonical, []))->toBe($canonical);
 })->with(pr5ChromeRepairCases());
 
+test('attribute names outside the allowlist refuse even when the tokenizer would drop them', function (string $html, string $message): void {
+    expect(fn (): string => resolve(BrandChromeSanitizer::class)->sanitize($html, []))
+        ->toThrow(InvalidArgumentException::class, $message);
+})->with(pr5DroppedAttributeCases());
+
+test('duplicate allowlisted attributes retain the tokenizer first-value rule', function (): void {
+    expect(resolve(BrandChromeSanitizer::class)->sanitize('<span ID="first" id="second">text</span>', []))
+        ->toBe('<span id="first">text</span>');
+});
+
+test('lexical attribute backstop counts assignments and bare tokens by start-tag occurrence', function (string $html, array $sourceEvents, array $canonicalEvents, bool $survives): void {
+    $sanitizer = resolve(BrandChromeSanitizer::class);
+    $scanSourceStartTags = new ReflectionMethod($sanitizer, 'scanSourceStartTags');
+    $sourceAttributesSurvive = new ReflectionMethod($sanitizer, 'sourceAttributesSurvive');
+    $sourceTags = $scanSourceStartTags->invoke($sanitizer, $html);
+
+    expect($sourceAttributesSurvive->invoke($sanitizer, $sourceTags, $sourceEvents, $canonicalEvents))->toBe($survives);
+})->with([
+    'dropped assigned attribute' => [
+        '<span 1unknown="proof">text</span>',
+        [['name' => 'span', 'attributes' => []]],
+        [['name' => 'span', 'attributes' => []]],
+        false,
+    ],
+    'dropped bare attribute' => [
+        '<span 1unknown>text</span>',
+        [['name' => 'span', 'attributes' => []]],
+        [['name' => 'span', 'attributes' => []]],
+        false,
+    ],
+    'dropped empty-name assignment' => [
+        '<span ="proof">text</span>',
+        [['name' => 'span', 'attributes' => []]],
+        [['name' => 'span', 'attributes' => []]],
+        false,
+    ],
+    'second occurrence owns its attributes' => [
+        '<span id="kept"></span><span 1unknown="lost"></span>',
+        [
+            ['name' => 'span', 'attributes' => ['id']],
+            ['name' => 'span', 'attributes' => []],
+        ],
+        [
+            ['name' => 'span', 'attributes' => ['id']],
+            ['name' => 'span', 'attributes' => []],
+        ],
+        false,
+    ],
+    'allowlisted duplicate is the only missing entry' => [
+        '<span id="first" ID="second">text</span>',
+        [['name' => 'span', 'attributes' => ['id']]],
+        [['name' => 'span', 'attributes' => ['id']]],
+        true,
+    ],
+]);
+
 test('text observation refuses a repair that drops non-whitespace tokenizer text', function (): void {
     expect(fn (): string => resolve(BrandChromeSanitizer::class)->sanitize('<span>before&#0;after</span>', []))
         ->toThrow(InvalidArgumentException::class, 'is not valid HTML5 chrome');
@@ -305,3 +374,22 @@ test('content-loss refusal names invalid HTML and leaves every persisted surface
         ->and([BrandKit::query()->count(), BrandVersion::query()->count(), BrandAsset::query()->count()])->toBe($counts)
         ->and(Storage::disk()->allFiles())->toBe($files);
 })->with(pr5ChromeContentLossCases())->with(['header_html', 'footer_html']);
+
+test('dropped attribute refusal leaves every persisted surface unchanged', function (string $html, string $message, string $field): void {
+    $owner = capstanUser(['role' => UserRole::Owner->value]);
+    $service = resolve(BrandKitService::class);
+    $service->updateDraft($owner, ['header_html' => '<b>applied</b>']);
+    $service->applyDraft($owner);
+    $service->updateDraft($owner, ['footer_html' => '<i>pending</i>']);
+
+    $before = $service->read();
+    $counts = [BrandKit::query()->count(), BrandVersion::query()->count(), BrandAsset::query()->count()];
+    $files = Storage::disk()->allFiles();
+    $exception = pr5ChromeValidationException(fn () => $service->updateDraft($owner, [$field => $html]));
+
+    expect($exception->errors())->toHaveKey($field)
+        ->and($exception->errors()[$field])->toBe([$message])
+        ->and($service->read())->toBe($before)
+        ->and([BrandKit::query()->count(), BrandVersion::query()->count(), BrandAsset::query()->count()])->toBe($counts)
+        ->and(Storage::disk()->allFiles())->toBe($files);
+})->with(pr5DroppedAttributeCases())->with(['header_html', 'footer_html']);

@@ -34,6 +34,11 @@ final readonly class BrandChromeSanitizer
     /** @var list<string> */
     private const array VOID_ELEMENTS = ['br', 'col', 'hr', 'img', 'wbr'];
 
+    /** @var list<string> */
+    private const array RECOVERABLE_TOKENIZER_ERRORS = [
+        'Unexpected EOF inside of tag.',
+    ];
+
     public function __construct(private BrandCssGrammar $css) {}
 
     /**
@@ -57,7 +62,12 @@ final readonly class BrandChromeSanitizer
             $reparsed = $this->parseFragment($canonical, $selected);
 
             if ($this->normalizeObservedText($parsed['text']) !== $this->normalizeObservedText($reparsed['text'])
-                || ! $this->startTagsSurvive($parsed['start_tags'], $reparsed['start_tags'])) {
+                || ! $this->startTagsSurvive($parsed['start_tags'], $reparsed['start_tags'])
+                || ! $this->sourceAttributesSurvive(
+                    $this->scanSourceStartTags($html),
+                    $parsed['start_tag_events'],
+                    $reparsed['start_tag_events'],
+                )) {
                 throw new InvalidArgumentException('is not valid HTML5 chrome');
             }
 
@@ -71,7 +81,12 @@ final readonly class BrandChromeSanitizer
 
     /**
      * @param  array<string, true>  $selectedAssetIds
-     * @return array{fragment: DOMDocumentFragment, text: string, start_tags: array<string, int>}
+     * @return array{
+     *     fragment: DOMDocumentFragment,
+     *     text: string,
+     *     start_tags: array<string, int>,
+     *     start_tag_events: list<array{name: string, attributes: list<string>}>
+     * }
      */
     private function parseFragment(string $html, array $selectedAssetIds): array
     {
@@ -83,17 +98,31 @@ final readonly class BrandChromeSanitizer
                 throw new InvalidArgumentException('contains an element outside the allowlist');
             }
         };
-        $handler = new class($builder, $startTag, $endTag) implements EventHandler
+        $parseError = function (string $message): void {
+            if (! in_array($message, self::RECOVERABLE_TOKENIZER_ERRORS, true)) {
+                throw new InvalidArgumentException('is not valid HTML5 chrome');
+            }
+        };
+        $handler = new class($builder, $startTag, $endTag, $parseError) implements EventHandler
         {
             private string $text = '';
 
             /** @var array<string, int> */
             private array $startTags = [];
 
+            /** @var list<array{name: string, attributes: list<string>}> */
+            private array $startTagEvents = [];
+
+            /**
+             * @param  Closure(string, array<string, string|null>): array<string, string>  $startTag
+             * @param  Closure(string): void  $endTag
+             * @param  Closure(string): void  $parseError
+             */
             public function __construct(
                 private readonly DOMTreeBuilder $builder,
                 private readonly Closure $startTag,
                 private readonly Closure $endTag,
+                private readonly Closure $parseError,
             ) {}
 
             public function doctype($name, $idType = 0, $id = null, $quirks = false): never
@@ -110,6 +139,7 @@ final readonly class BrandChromeSanitizer
                 $name = strtolower($name);
                 $attributes = ($this->startTag)($name, $attributes);
                 $this->startTags[$name] = ($this->startTags[$name] ?? 0) + 1;
+                $this->startTagEvents[] = ['name' => $name, 'attributes' => array_keys($attributes)];
 
                 return $this->builder->startTag($name, $attributes, $selfClosing);
             }
@@ -147,8 +177,7 @@ final readonly class BrandChromeSanitizer
              */
             public function parseError($msg, $line, $col): void
             {
-                // HTML5 parse errors are recoverable. Content observations below
-                // decide whether the parser's canonical repair is lossless.
+                ($this->parseError)($msg);
             }
 
             public function cdata($data): never
@@ -171,6 +200,12 @@ final readonly class BrandChromeSanitizer
             {
                 return $this->startTags;
             }
+
+            /** @return list<array{name: string, attributes: list<string>}> */
+            public function observedStartTagEvents(): array
+            {
+                return $this->startTagEvents;
+            }
         };
 
         $parser = new Tokenizer(new Scanner($html, 'UTF-8'), $handler, Tokenizer::CONFORMANT_HTML);
@@ -180,7 +215,161 @@ final readonly class BrandChromeSanitizer
             'fragment' => $builder->fragment(),
             'text' => $handler->observedText(),
             'start_tags' => $handler->observedStartTags(),
+            'start_tag_events' => $handler->observedStartTagEvents(),
         ];
+    }
+
+    /**
+     * @return list<array{name: string, attributes: list<?string>}>
+     */
+    private function scanSourceStartTags(string $html): array
+    {
+        $tags = [];
+        $length = strlen($html);
+
+        for ($offset = 0; $offset < $length; $offset++) {
+            if ($html[$offset] !== '<' || $offset + 1 >= $length || preg_match('/[A-Za-z]/', $html[$offset + 1]) !== 1) {
+                continue;
+            }
+
+            $offset++;
+            $nameStart = $offset;
+            while ($offset < $length && preg_match('/[A-Za-z0-9:-]/', $html[$offset]) === 1) {
+                $offset++;
+            }
+            $name = strtolower(substr($html, $nameStart, $offset - $nameStart));
+            $attributes = [];
+
+            while ($offset < $length) {
+                while ($offset < $length && str_contains(" \t\n\f\r", $html[$offset])) {
+                    $offset++;
+                }
+                if ($offset >= $length || $html[$offset] === '>') {
+                    break;
+                }
+                if ($html[$offset] === '/' && $offset + 1 < $length && $html[$offset + 1] === '>') {
+                    $offset++;
+                    break;
+                }
+
+                $attributeStart = $offset;
+                while ($offset < $length && ! str_contains(" \t\n\f\r/=>", $html[$offset])) {
+                    $offset++;
+                }
+                $attribute = $offset === $attributeStart
+                    ? null
+                    : strtolower(substr($html, $attributeStart, $offset - $attributeStart));
+
+                while ($offset < $length && str_contains(" \t\n\f\r", $html[$offset])) {
+                    $offset++;
+                }
+
+                if ($offset < $length && $html[$offset] === '=') {
+                    $offset++;
+                    while ($offset < $length && str_contains(" \t\n\f\r", $html[$offset])) {
+                        $offset++;
+                    }
+                    if ($offset < $length && ($html[$offset] === '"' || $html[$offset] === "'")) {
+                        $quote = $html[$offset++];
+                        while ($offset < $length && $html[$offset] !== $quote) {
+                            $offset++;
+                        }
+                        if ($offset < $length) {
+                            $offset++;
+                        }
+                    } else {
+                        while ($offset < $length && ! str_contains(" \t\n\f\r>", $html[$offset])) {
+                            $offset++;
+                        }
+                    }
+                } elseif ($attribute === null) {
+                    $offset++;
+                }
+
+                $attributes[] = $attribute;
+            }
+
+            $tags[] = ['name' => $name, 'attributes' => $attributes];
+        }
+
+        return $tags;
+    }
+
+    /**
+     * @param  list<array{name: string, attributes: list<?string>}>  $sourceTags
+     * @param  list<array{name: string, attributes: list<string>}>  $sourceEvents
+     * @param  list<array{name: string, attributes: list<string>}>  $canonicalEvents
+     */
+    private function sourceAttributesSurvive(array $sourceTags, array $sourceEvents, array $canonicalEvents): bool
+    {
+        $sourceByName = $this->startTagEventsByName($sourceEvents);
+        $canonicalByName = $this->startTagEventsByName($canonicalEvents);
+        $occurrences = [];
+
+        foreach ($sourceTags as $tag) {
+            $index = $occurrences[$tag['name']] ?? 0;
+            $occurrences[$tag['name']] = $index + 1;
+            $source = $sourceByName[$tag['name']][$index] ?? null;
+            $canonical = $canonicalByName[$tag['name']][$index] ?? null;
+
+            if ($source === null
+                || $canonical === null
+                || ! $this->attributesSurvive($tag['name'], $tag['attributes'], $source)
+                || ! $this->attributesSurvive($tag['name'], $tag['attributes'], $canonical)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @param  list<array{name: string, attributes: list<string>}>  $events
+     * @return array<string, list<list<string>>>
+     */
+    private function startTagEventsByName(array $events): array
+    {
+        $byName = [];
+        foreach ($events as $event) {
+            $byName[$event['name']][] = $event['attributes'];
+        }
+
+        return $byName;
+    }
+
+    /**
+     * @param  list<?string>  $source
+     * @param  list<string>  $canonical
+     */
+    private function attributesSurvive(string $element, array $source, array $canonical): bool
+    {
+        if (count($canonical) >= count($source)) {
+            return true;
+        }
+
+        $canonicalCounts = array_count_values($canonical);
+        $sourceCounts = [];
+        foreach ($source as $attribute) {
+            if ($attribute === null) {
+                return false;
+            }
+
+            $sourceCounts[$attribute] = ($sourceCounts[$attribute] ?? 0) + 1;
+            if ($sourceCounts[$attribute] > ($canonicalCounts[$attribute] ?? 0)
+                && (($canonicalCounts[$attribute] ?? 0) === 0 || ! $this->isAllowedAttribute($element, $attribute))) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function isAllowedAttribute(string $element, string $attribute): bool
+    {
+        return in_array($attribute, ['class', 'id', 'role', 'alt', 'title', 'width', 'height', 'lang', 'dir', 'style'], true)
+            || preg_match('/\Aaria-[a-z0-9_-]+\z/D', $attribute) === 1
+            || ($attribute === 'href' && $element === 'a')
+            || ($attribute === 'src' && $element === 'img');
     }
 
     private function normalizeObservedText(string $text): string
