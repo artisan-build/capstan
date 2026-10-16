@@ -12,6 +12,8 @@ use LogicException;
  * @property int $version_number
  * @property array<string, mixed> $configuration
  * @property string $applied_by_user_id
+ *
+ * @mixin IdeHelperBrandVersion
  */
 class BrandVersion extends Model
 {
