@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Auth\CapstanCredentialDeclaration;
 use App\Http\Controllers\DashboardController;
+use App\View\BrandedBuiltForCloudLayout;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 
 return [
@@ -16,6 +17,9 @@ return [
     ],
 
     'dashboard' => DashboardController::class,
+
+    // Built for Cloud's shell with the applied brand's name, icon and accent.
+    'layout' => env('BUILT_FOR_CLOUD_LAYOUT', BrandedBuiltForCloudLayout::class),
 
     'mcp' => [
         'path' => '/mcp',

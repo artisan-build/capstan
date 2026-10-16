@@ -1,8 +1,10 @@
+@inject('appBrand', \App\Support\AppBrand::class)
+@php($brand = $appBrand->current())
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
 <title>
-    {{ filled($title ?? null) ? $title.' - '.config('app.name', 'Laravel') : config('app.name', 'Laravel') }}
+    {{ filled($title ?? null) ? $title.' - '.$brand->displayName : $brand->displayName }}
 </title>
 
 <link rel="icon" href="/favicon.ico" sizes="any">
@@ -12,4 +14,10 @@
 @fonts
 
 @vite(['resources/css/app.css', 'resources/js/app.js'])
+@if ($brand->hasAccent())
+    <style data-testid="app-brand-accent">
+        :root { --color-accent: {{ $brand->accentLight }}; --color-accent-content: {{ $brand->accentLight }}; --color-accent-foreground: {{ \App\Support\AppBrandValues::foregroundFor($brand->accentLight) }}; }
+        .dark { --color-accent: {{ $brand->accentDark }}; --color-accent-content: {{ $brand->accentDark }}; --color-accent-foreground: {{ \App\Support\AppBrandValues::foregroundFor($brand->accentDark) }}; }
+    </style>
+@endif
 @fluxAppearance
