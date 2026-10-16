@@ -2,10 +2,12 @@
 
 namespace App\Support;
 
+use App\Enums\PageLayout;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use InvalidArgumentException;
 
-final class BrandKitSchema
+final readonly class BrandKitSchema
 {
     /** @var list<string> */
     public const array COLOUR_TOKENS = [
@@ -22,6 +24,11 @@ final class BrandKitSchema
 
     /** @var list<string> */
     public const array FONT_STACKS = ['system-sans', 'system-serif', 'monospace'];
+
+    public function __construct(
+        private BrandChromeSanitizer $chrome,
+        private BrandCssGrammar $cssGrammar,
+    ) {}
 
     /**
      * The supported CSS grammar is deliberately small: colours are #rgb,
@@ -58,6 +65,10 @@ final class BrandKitSchema
             ],
             'assets' => ['logo_light' => null, 'logo_dark' => null, 'mark' => null],
             'tone_notes' => '',
+            'default_layout' => 'report',
+            'header_html' => '',
+            'footer_html' => '',
+            'custom_css' => '',
         ];
     }
 
@@ -78,11 +89,15 @@ final class BrandKitSchema
      */
     public function normalize(array $value): array
     {
+        // Snapshots written before chrome existed keep deterministic defaults.
+        $value = array_replace(array_intersect_key($this->defaults(), array_flip(['default_layout', 'header_html', 'footer_html', 'custom_css'])), $value);
         $this->assertExactKeys($value, $this->defaults(), 'brand kit');
 
         $displayName = $this->text($value['display_name'], 'display_name', 120, false);
         $toneNotes = $this->text($value['tone_notes'], 'tone_notes', 10_000, true);
-
+        if (! is_string($value['default_layout']) || ! in_array($value['default_layout'], PageLayout::values(), true)) {
+            $this->invalid('default_layout', 'must select a supported layout');
+        }
         $colours = $this->mapGroups($value['colours'], ['light', 'dark'], self::COLOUR_TOKENS, fn (mixed $token, string $path): string => $this->colour($token, $path), 'colours');
         $spacing = $this->mapTokens($value['spacing'], self::SPACING_TOKENS, fn (mixed $token, string $path): string => $this->length($token, $path), 'spacing');
         $radius = $this->mapTokens($value['radius'], self::RADIUS_TOKENS, fn (mixed $token, string $path): string => $this->length($token, $path), 'radius');
@@ -109,6 +124,11 @@ final class BrandKitSchema
             $assets[$slot] = $asset;
         }
 
+        $selectedAssetIds = array_values(array_filter($assets, is_string(...)));
+        $header = $this->chrome($value['header_html'], 'header_html', $selectedAssetIds);
+        $footer = $this->chrome($value['footer_html'], 'footer_html', $selectedAssetIds);
+        $customCss = $this->css($value['custom_css']);
+
         return [
             'display_name' => $displayName,
             'colours' => $colours,
@@ -117,7 +137,39 @@ final class BrandKitSchema
             'fonts' => $fonts,
             'assets' => $assets,
             'tone_notes' => $toneNotes,
+            'default_layout' => $value['default_layout'],
+            'header_html' => $header,
+            'footer_html' => $footer,
+            'custom_css' => $customCss,
         ];
+    }
+
+    /** @param list<string> $selectedAssetIds */
+    private function chrome(mixed $value, string $path, array $selectedAssetIds): string
+    {
+        $html = $this->text($value, $path, 32_768, true);
+        try {
+            $sanitized = $this->chrome->sanitize($html, $selectedAssetIds);
+            if (mb_strlen($sanitized) > 32_768) {
+                $this->invalid($path, 'must remain within 32,768 characters after normalization');
+            }
+
+            return $sanitized;
+        } catch (InvalidArgumentException $exception) {
+            $this->invalid($path, $exception->getMessage());
+        }
+    }
+
+    private function css(mixed $value): string
+    {
+        $css = $this->text($value, 'custom_css', 65_536, true);
+        try {
+            $this->cssGrammar->assertValid($css);
+        } catch (InvalidArgumentException $exception) {
+            $this->invalid('custom_css', $exception->getMessage());
+        }
+
+        return $css;
     }
 
     /**

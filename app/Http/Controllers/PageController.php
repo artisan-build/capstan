@@ -125,7 +125,7 @@ class PageController extends Controller
         $disk = Storage::disk();
         $body = rescue(fn () => $disk->get($version->storage_key), null, false);
         abort_unless(is_string($body), 404);
-        $rendered = $branding->renderResponse($body, $version->content_type);
+        $rendered = $branding->renderResponse($body, $version->content_type, $version->layout);
         $body = $rendered['body'];
         $headers = [
             'Content-Type' => $version->content_type,

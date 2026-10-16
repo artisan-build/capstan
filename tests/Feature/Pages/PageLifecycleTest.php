@@ -97,7 +97,7 @@ test('owner sees latest and prior immutable versions while another user sees nei
     $priorContent = $this->get(resolve(ArtifactRenderOrigin::class)->signedPageContentUrl($page, $first))
         ->assertOk()
         ->assertStreamed();
-    expect($latestContent->streamedContent())->toContain($secondHtml, 'data-capstan-brand="applied"')
+    expect($latestContent->streamedContent())->toContain(strip_tags($secondHtml), 'data-capstan-brand="applied"', 'data-testid="page-layout-report"')
         ->and($priorContent->streamedContent())->toContain($firstHtml, 'data-capstan-brand="applied"')
         ->and($first->fresh()?->only(array_keys($immutable)))->toBe($immutable);
 

@@ -36,7 +36,7 @@ final readonly class BrandKitService
 
         return [
             'defaults' => $defaults,
-            'current' => $version instanceof BrandVersion ? $version->configuration : $defaults,
+            'current' => $version instanceof BrandVersion ? $this->schema->normalize($version->configuration) : $defaults,
             'draft' => $kit?->draft,
             'current_version' => $version instanceof BrandVersion ? $version->version_number : null,
         ];
@@ -62,7 +62,10 @@ final readonly class BrandKitService
             $this->assertAssetSelections($draft);
             $kit->forceFill(['draft' => $draft])->save();
 
-            return $draft;
+            $normalized = (array_key_exists('header_html', $changes) && $changes['header_html'] !== $draft['header_html'])
+                || (array_key_exists('footer_html', $changes) && $changes['footer_html'] !== $draft['footer_html']);
+
+            return [...$draft, 'normalized' => $normalized];
         });
     }
 
