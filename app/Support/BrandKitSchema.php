@@ -7,7 +7,7 @@ use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
 
-final class BrandKitSchema
+final readonly class BrandKitSchema
 {
     /** @var list<string> */
     public const array COLOUR_TOKENS = [
@@ -26,8 +26,8 @@ final class BrandKitSchema
     public const array FONT_STACKS = ['system-sans', 'system-serif', 'monospace'];
 
     public function __construct(
-        private readonly BrandChromeSanitizer $chrome,
-        private readonly BrandCssGrammar $cssGrammar,
+        private BrandChromeSanitizer $chrome,
+        private BrandCssGrammar $cssGrammar,
     ) {}
 
     /**

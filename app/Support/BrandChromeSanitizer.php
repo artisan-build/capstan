@@ -59,12 +59,12 @@ final readonly class BrandChromeSanitizer
                 throw new InvalidArgumentException('contains an element outside the allowlist');
             }
         };
-        $handler = new class($builder, $startTag, $endTag) implements EventHandler
+        $handler = new readonly class($builder, $startTag, $endTag) implements EventHandler
         {
             public function __construct(
-                private readonly DOMTreeBuilder $builder,
-                private readonly Closure $startTag,
-                private readonly Closure $endTag,
+                private DOMTreeBuilder $builder,
+                private Closure $startTag,
+                private Closure $endTag,
             ) {}
 
             public function doctype($name, $idType = 0, $id = null, $quirks = false): never
