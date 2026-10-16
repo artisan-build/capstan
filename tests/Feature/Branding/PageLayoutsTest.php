@@ -152,7 +152,7 @@ test('component public classes and their token driven declarations form the exac
         expect($kit->serialize())->toContain('.'.$class.'{'.$declarations.'}');
         foreach (explode(';', $declarations) as $declaration) {
             $value = explode(':', $declaration, 2)[1];
-            if (! in_array($value, ['grid', 'block', '100%', 'auto', 'nowrap'], true)) {
+            if (! in_array($value, ['grid', '100%', 'nowrap'], true)) {
                 expect($value)->toContain('var(--capstan-');
             }
         }
@@ -161,14 +161,18 @@ test('component public classes and their token driven declarations form the exac
 });
 
 test('component stylesheet keeps report and brief usable at narrow widths', function (): void {
-    $css = resolve(PageComponentStylesheet::class)->serialize();
+    $kit = resolve(PageComponentStylesheet::class);
+    $css = $kit->serialize();
 
+    expect($kit->rules()['capstan-table'])
+        ->toBe('width:100%;border-spacing:var(--capstan-space-xs);color:var(--capstan-color-text);background:var(--capstan-color-surface-muted)')
+        ->not->toContain('display:block', 'max-width', 'overflow-x');
     expect($css)
         ->toContain('.capstan-stat-value{font-family:var(--capstan-font-heading);font-size:clamp(var(--capstan-space-lg),8vw,calc(var(--capstan-space-xl) * 2));color:var(--capstan-color-primary);white-space:nowrap}')
-        ->toContain('.capstan-table{display:block;max-width:100%;overflow-x:auto;')
+        ->toContain('.capstan-table{width:100%;border-spacing:var(--capstan-space-xs);')
         ->toContain('@media (max-width:640px){.capstan-layout-report,.capstan-layout-brief{margin:0;padding:var(--capstan-space-md)}')
         ->toContain('.capstan-header>div,.capstan-footer>div{display:flex;flex-direction:column;align-items:flex-start}')
-        ->toContain('.capstan-header img{max-width:100%;height:auto}');
+        ->toContain('.capstan-header img{max-width:100%;height:auto}.capstan-table{display:block;overflow-x:auto}');
 });
 
 test('prefixed XHTML retains namespace semantics and literal ampersand CSS on owner and public routes', function (PageLayout $layout, bool $withHead): void {

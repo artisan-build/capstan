@@ -20,7 +20,7 @@ final class PageComponentStylesheet
             'capstan-stat' => 'padding:var(--capstan-space-lg);background:var(--capstan-color-surface-muted);border-radius:var(--capstan-radius-md)',
             'capstan-stat-value' => 'font-family:var(--capstan-font-heading);font-size:clamp(var(--capstan-space-lg),8vw,calc(var(--capstan-space-xl) * 2));color:var(--capstan-color-primary);white-space:nowrap',
             'capstan-stat-label' => 'color:var(--capstan-color-text-muted)',
-            'capstan-table' => 'display:block;max-width:100%;overflow-x:auto;border-spacing:var(--capstan-space-xs);color:var(--capstan-color-text);background:var(--capstan-color-surface-muted)',
+            'capstan-table' => 'width:100%;border-spacing:var(--capstan-space-xs);color:var(--capstan-color-text);background:var(--capstan-color-surface-muted)',
             'capstan-badge' => 'padding:var(--capstan-space-xs) var(--capstan-space-sm);border-radius:var(--capstan-radius-pill);color:var(--capstan-color-primary);background:var(--capstan-color-surface-muted)',
             'capstan-callout' => 'padding:var(--capstan-space-lg);border-left:solid var(--capstan-space-xs) var(--capstan-color-accent);background:var(--capstan-color-surface-muted)',
         ];
@@ -46,6 +46,7 @@ final class PageComponentStylesheet
             .'.capstan-layout-report,.capstan-layout-brief{margin:0;padding:var(--capstan-space-md)}'
             .'.capstan-header>div,.capstan-footer>div{display:flex;flex-direction:column;align-items:flex-start}'
             .'.capstan-header img{max-width:100%;height:auto}'
+            .'.capstan-table{display:block;overflow-x:auto}'
             .'}';
     }
 }
