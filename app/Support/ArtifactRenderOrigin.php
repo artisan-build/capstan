@@ -126,6 +126,30 @@ class ArtifactRenderOrigin
         return $this->renderOrigin().$path;
     }
 
+    public function signedBrandPreviewUrl(string $fingerprint): string
+    {
+        $path = URL::temporarySignedRoute(
+            'brand-previews.show',
+            now()->addMinutes(5),
+            ['fingerprint' => $fingerprint],
+            false,
+        );
+
+        return $this->renderOrigin().$path;
+    }
+
+    public function signedBrandPreviewAssetUrl(string $fingerprint, string $asset): string
+    {
+        $path = URL::temporarySignedRoute(
+            'brand-previews.assets.show',
+            now()->addMinutes(5),
+            ['fingerprint' => $fingerprint, 'asset' => $asset],
+            false,
+        );
+
+        return $this->renderOrigin().$path;
+    }
+
     public function contentSecurityPolicy(bool $allowSameOriginImages = false): string
     {
         return implode('; ', [

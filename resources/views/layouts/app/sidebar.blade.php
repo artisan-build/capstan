@@ -26,6 +26,11 @@
                         <flux:sidebar.item data-testid="pages-navigation" icon="document-text" :href="route('pages.index')" :current="request()->routeIs('pages.*')" wire:navigate>
                             {{ __('Pages') }}
                         </flux:sidebar.item>
+                        @if (\ArtisanBuild\BuiltForCloud\RolePolicy::canManageMembers(auth()->user()->role))
+                            <flux:sidebar.item data-testid="branding-navigation" icon="swatch" :href="route('branding.show')" :current="request()->routeIs('branding.*')" wire:navigate>
+                                {{ __('Branding') }}
+                            </flux:sidebar.item>
+                        @endif
                     @endif
 
                     <flux:sidebar.item icon="layout-grid" href="/bfc/ui">

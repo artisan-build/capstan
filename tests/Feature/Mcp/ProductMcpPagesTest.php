@@ -112,17 +112,23 @@ test('advertises the four exact page tools through their effect doors', function
     ], ['Authorization' => 'Bearer '.$token])->assertOk()->json('result.tools'))->keyBy('name');
 
     expect($read->keys()->sort()->values()->all())->toBe([
-        'get_page', 'list_pages', 'postmaster_messages', 'postmaster_spokes',
+        'get_brand_kit', 'get_page', 'list_layouts', 'list_pages', 'postmaster_messages', 'postmaster_spokes', 'preview_brand_draft',
     ])->and($write->keys()->sort()->values()->all())->toBe([
         'ack_postmaster_messages',
+        'apply_brand_draft',
         'create_artifact_share',
+        'get_brand_kit',
         'get_page',
+        'list_layouts',
         'list_pages',
         'postmaster_messages',
         'postmaster_spokes',
+        'preview_brand_draft',
         'publish_page',
         'send_postmaster_message',
+        'update_brand_draft',
         'update_page',
+        'upload_brand_asset',
     ])->and(data_get($write->get('publish_page'), '_meta.effect'))->toBe('write')
         ->and(data_get($write->get('update_page'), 'inputSchema.additionalProperties'))->toBeFalse()
         ->and(data_get($read->get('list_pages'), '_meta.effect'))->toBe('read')

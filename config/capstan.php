@@ -62,5 +62,7 @@ return [
     'brand' => [
         // Code defaults keep fresh installations safe without environment setup.
         'max_image_bytes' => 2 * 1024 * 1024,
+        // Keep base64 plus the JSON-RPC envelope below the MCP relay ceiling.
+        'max_mcp_image_bytes' => 700 * 1024,
     ],
 ];

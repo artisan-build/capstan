@@ -166,7 +166,7 @@ test('keeps the exact read-effect tools on the read door when the write door is 
         ->and($meta->json('endpoints'))->toBe(['mcp' => '/mcp', 'mcp_write' => '/mcp/write']);
 
     $tools = collect(capstanMcpReadList($token)->assertOk()->json('result.tools'))->keyBy('name');
-    expect($tools->keys()->sort()->values()->all())->toBe(['get_page', 'list_pages', 'postmaster_messages', 'postmaster_spokes']);
+    expect($tools->keys()->sort()->values()->all())->toBe(['get_brand_kit', 'get_page', 'list_layouts', 'list_pages', 'postmaster_messages', 'postmaster_spokes', 'preview_brand_draft']);
 
     foreach ([
         'postmaster_spokes' => 'metadata',
@@ -179,7 +179,7 @@ test('keeps the exact read-effect tools on the read door when the write door is 
             ->and(data_get($tool, 'inputSchema.additionalProperties'))->toBeFalse();
     }
 
-    foreach (['send_postmaster_message', 'ack_postmaster_messages', 'create_artifact_share', 'publish_page', 'update_page'] as $excluded) {
+    foreach (['send_postmaster_message', 'ack_postmaster_messages', 'apply_brand_draft', 'create_artifact_share', 'publish_page', 'update_brand_draft', 'update_page', 'upload_brand_asset'] as $excluded) {
         $response = capstanMcpReadCall($excluded, (object) [], $token);
         expect($response->status())->toBeIn([200, 400])
             ->and($response->getContent())->not->toContain('storage_key', 'signing_key_id', 'APP_KEY');
@@ -189,14 +189,20 @@ test('keeps the exact read-effect tools on the read door when the write door is 
     expect(collect(capstanMcpReadList($token, '/mcp/write')->assertOk()->json('result.tools'))->pluck('name')->sort()->values()->all())
         ->toBe([
             'ack_postmaster_messages',
+            'apply_brand_draft',
             'create_artifact_share',
+            'get_brand_kit',
             'get_page',
+            'list_layouts',
             'list_pages',
             'postmaster_messages',
             'postmaster_spokes',
+            'preview_brand_draft',
             'publish_page',
             'send_postmaster_message',
+            'update_brand_draft',
             'update_page',
+            'upload_brand_asset',
         ]);
 });
 
@@ -607,7 +613,7 @@ test('feature gating and unsupported subject types fail closed without changing 
 
     config(['capstan.features.postmaster' => false]);
     Feature::flushCache();
-    expect(capstanMcpReadList($token)->json('result.tools.*.name'))->toHaveCount(4);
+    expect(capstanMcpReadList($token)->json('result.tools.*.name'))->toHaveCount(7);
     capstanMcpReadCall('postmaster_spokes', (object) [], $token)
         ->assertOk()
         ->assertJsonPath('result.isError', true)

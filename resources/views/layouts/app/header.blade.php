@@ -17,6 +17,11 @@
                     <flux:navbar.item data-testid="pages-navigation" icon="document-text" :href="route('pages.index')" :current="request()->routeIs('pages.*')" wire:navigate>
                         {{ __('Pages') }}
                     </flux:navbar.item>
+                    @if (\ArtisanBuild\BuiltForCloud\RolePolicy::canManageMembers(auth()->user()->role))
+                        <flux:navbar.item data-testid="branding-navigation" icon="swatch" :href="route('branding.show')" :current="request()->routeIs('branding.*')" wire:navigate>
+                            {{ __('Branding') }}
+                        </flux:navbar.item>
+                    @endif
                 @endif
             </flux:navbar>
 
@@ -65,6 +70,11 @@
                         <flux:sidebar.item data-testid="pages-navigation" icon="document-text" :href="route('pages.index')" :current="request()->routeIs('pages.*')" wire:navigate>
                             {{ __('Pages') }}
                         </flux:sidebar.item>
+                        @if (\ArtisanBuild\BuiltForCloud\RolePolicy::canManageMembers(auth()->user()->role))
+                            <flux:sidebar.item data-testid="branding-navigation" icon="swatch" :href="route('branding.show')" :current="request()->routeIs('branding.*')" wire:navigate>
+                                {{ __('Branding') }}
+                            </flux:sidebar.item>
+                        @endif
                     @endif
                 </flux:sidebar.group>
             </flux:sidebar.nav>
