@@ -21,6 +21,8 @@
         <style data-testid="bfc-brand-accent">
             .bfc-body { --color-accent: {{ $brand->accentLight }}; --color-accent-content: {{ $brand->accentLight }}; --color-accent-foreground: {{ \App\Support\AppBrandValues::foregroundFor($brand->accentLight) }}; }
             .dark .bfc-body { --color-accent: {{ $brand->accentDark }}; --color-accent-content: {{ $brand->accentDark }}; --color-accent-foreground: {{ \App\Support\AppBrandValues::foregroundFor($brand->accentDark) }}; }
+            .bfc-body .bfc-auth button[type="submit"] { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-accent-foreground); }
+            .bfc-body .bfc-link { color: var(--color-accent-content); }
         </style>
     @endif
     @stack('head')

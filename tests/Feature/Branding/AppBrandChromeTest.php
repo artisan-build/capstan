@@ -178,6 +178,10 @@ test('without an applied kit app chrome and mail fall back to the configured nam
         expectAbsent($html, 'data-testid="app-brand-icon"', 'data-testid="app-brand-accent"', 'data-testid="bfc-brand-accent"', '/brand-assets/', 'scalpels.app/img/products', $defaultAccent);
     }
     expect($chrome['dashboard'])->toContain('<title>'."\n    Dashboard - ".e($name));
+    foreach ($chrome['bfc'] as $html) {
+        expectAbsent($html, 'background: var(--color-accent)', 'border-color: var(--color-accent)', 'color: var(--color-accent-foreground)', 'color: var(--color-accent-content)');
+        expect($html)->toContain('[--color-accent:var(--color-clay-brown)]', '[--color-accent-content:var(--color-clay-iron)]', '[--color-accent-foreground:var(--color-clay-surface)]');
+    }
 
     $mails = appBrandMails($owner);
     foreach (['share_html', 'invite_html'] as $key) {
@@ -232,6 +236,11 @@ test('after apply the app chrome and Built for Cloud auth shell carry the applie
             ($shell ? '.dark .bfc-body' : '.dark').' { --color-accent: '.$markers['dark'].'; --color-accent-content: '.$markers['dark'].';',
         );
         expectAbsent($accent, $draftMarkers['light'], $draftMarkers['dark']);
+        if ($shell) {
+            expect($accent)
+                ->toMatch('/\.bfc-body\s+\.bfc-auth\s+button\[type="submit"\]\s*\{\s*background:\s*var\(--color-accent\);\s*border-color:\s*var\(--color-accent\);\s*color:\s*var\(--color-accent-foreground\);\s*\}/')
+                ->toMatch('/\.bfc-body\s+\.bfc-link\s*\{\s*color:\s*var\(--color-accent-content\);\s*\}/');
+        }
     }
     expect($chrome['dashboard'])->toContain('Dashboard - '.e($markers['name']));
     foreach ($chrome['bfc'] as $html) {
