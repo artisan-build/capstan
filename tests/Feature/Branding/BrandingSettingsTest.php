@@ -180,6 +180,46 @@ test('settings validation summary names top level and nested fields', function (
         ->assertSee('must be a hexadecimal CSS colour');
 });
 
+test('draft form POST retains rejected input and displays default bag errors without changing the draft', function (string $field, string $rejected, string $label, string $message): void {
+    $owner = capstanUser(['role' => UserRole::Owner->value]);
+    $service = resolve(BrandKitService::class);
+    $service->updateDraft($owner, ['display_name' => 'Durable draft '.Str::random(8)]);
+    $before = BrandKit::query()->sole()->getAttributes();
+    $input = $service->read()['draft'];
+    data_set($input, $field, $rejected);
+    $input['_method'] = 'PATCH';
+
+    $this->actingAsVersioned($owner)->post(route('branding.draft.update'), $input)
+        ->assertStatus(302)
+        ->assertRedirect(route('branding.show'))
+        ->assertSessionHasErrors([$field => $message], null, 'default')
+        ->assertSessionHasInput($field, $rejected);
+
+    $response = $this->withCookie(session()->getName(), session()->getId())
+        ->get(route('branding.show'))->assertOk();
+    $document = new DOMDocument;
+    @$document->loadHTML($response->content());
+    $xpath = new DOMXPath($document);
+    $errors = $xpath->query('//*[@data-testid="branding-errors"]');
+    expect($errors)->not->toBeFalse();
+    expect($errors->length)->toBe(1)
+        ->and($errors->item(0)?->textContent)->toContain($label.':', $message);
+    $name = match ($field) {
+        'colours.light.primary' => 'colours[light][primary]',
+        'spacing.md' => 'spacing[md]',
+        default => $field,
+    };
+    $control = $xpath->query('//*[@name="'.$name.'"]')?->item(0);
+    expect($control)->toBeInstanceOf(DOMElement::class);
+    $value = $control->tagName === 'textarea' ? $control->textContent : $control->getAttribute('value');
+    expect($value)->toBe($rejected)
+        ->and(BrandKit::query()->sole()->getAttributes())->toBe($before);
+})->with([
+    'colour' => ['colours.light.primary', 'notacolour', 'Light colours — Primary', 'must be a hexadecimal CSS colour'],
+    'spacing' => ['spacing.md', '-1rem', 'Spacing MD', 'must be zero or a non-negative px, rem, em or % length'],
+    'tone' => ['tone_notes', str_repeat('x', 10_001), 'Tone notes', 'must be valid bounded UTF-8 text'],
+]);
+
 test('settings upload select remove preview apply and revert append immutable versions', function (): void {
     $owner = capstanUser(['role' => UserRole::Owner->value]);
     $firstName = 'First brand '.Str::random(8);
@@ -205,6 +245,7 @@ test('settings upload select remove preview apply and revert append immutable ve
         $asset->id,
         'body{font-family:var(--capstan-font-body)}',
         '.capstan-preview-layout>h2{font-family:var(--capstan-font-heading)',
+        '.capstan-preview-layout .capstan-card>h1{font-family:var(--capstan-font-heading)}',
     )
         ->and($preview->headers->get('Content-Security-Policy'))->toContain("img-src 'self' data:", "font-src 'none'");
 

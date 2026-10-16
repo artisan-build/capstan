@@ -45,7 +45,7 @@ final readonly class BrandPreviewDocument
 
         return '<!doctype html><html><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow,noarchive">'
             .'<meta name="viewport" content="width=device-width,initial-scale=1"><title>'.$title.'</title>'
-            .'<style data-capstan-brand="draft">'.$css.'body{font-family:var(--capstan-font-body)}.capstan-preview-layout{margin:2rem 0}.capstan-preview-layout>h2{font-family:var(--capstan-font-heading);padding:0 1rem}</style>'
+            .'<style data-capstan-brand="draft">'.$css.'body{font-family:var(--capstan-font-body)}.capstan-preview-layout{margin:2rem 0}.capstan-preview-layout>h2{font-family:var(--capstan-font-heading);padding:0 1rem}.capstan-preview-layout .capstan-card>h1{font-family:var(--capstan-font-heading)}</style>'
             .'</head><body data-testid="brand-preview">'.$sections.'</body></html>';
     }
 

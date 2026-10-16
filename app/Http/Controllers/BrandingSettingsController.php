@@ -16,6 +16,7 @@ use Illuminate\Http\Response;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Laravel\Pennant\Feature;
 
 final readonly class BrandingSettingsController
@@ -70,7 +71,11 @@ final readonly class BrandingSettingsController
             }
         }
 
-        $this->brands->updateDraft($actor, $changes);
+        try {
+            $this->brands->updateDraft($actor, $changes);
+        } catch (ValidationException $exception) {
+            return to_route('branding.show')->withErrors($exception->errors())->withInput();
+        }
 
         return to_route('branding.show')->with('status', 'Brand draft saved.');
     }
