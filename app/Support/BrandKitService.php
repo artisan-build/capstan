@@ -36,7 +36,7 @@ final readonly class BrandKitService
 
         return [
             'defaults' => $defaults,
-            'current' => $version instanceof BrandVersion ? $version->configuration : $defaults,
+            'current' => $version instanceof BrandVersion ? $this->schema->normalize($version->configuration) : $defaults,
             'draft' => $kit?->draft,
             'current_version' => $version instanceof BrandVersion ? $version->version_number : null,
         ];

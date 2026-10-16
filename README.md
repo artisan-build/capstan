@@ -521,6 +521,55 @@ endpoints together. The 61st is rejected by Laravel's throttle middleware before
 it is a plain `429` with `Retry-After` and `X-RateLimit-*` headers and **no `error.code`**. Handle that
 separately.
 
+### Page layouts and brand CSS
+
+Each immutable page version selects `report`, `dashboard`, `brief`, or `plain`. Report uses
+document spacing, dashboard uses tighter padding, and brief uses a smaller document inset.
+The first three wrap the body in `capstan-page` and `capstan-layout-report`,
+`capstan-layout-dashboard`, or `capstan-layout-brief`, with a `capstan-content` main section.
+Optional chrome uses `capstan-header` and `capstan-footer`. Plain adds no shell, header, or footer.
+Tokens, component rules, and custom CSS remain available in plain pages. Original body bytes stay
+intact inside the shell. Fragments are wrapped; incomplete documents without a closing body retain
+their structure instead of guessing where to close a shell.
+
+The installation brand has a `default_layout` of `report`, empty `header_html` and `footer_html`,
+and empty `custom_css` until configured. A version's explicit layout always wins. The default is
+captured by the publisher when its caller supplies no layout; the publish MCP tool still requires an explicit choice.
+Existing applied snapshots receive these defaults without rewriting their stored version.
+
+Chrome partials must be XML-compatible HTML fragments, at most 32,768 Unicode characters each.
+Close void elements, for example `<img src="…" alt="…" />`, and write `&amp;` for a literal ampersand.
+Declarations, doctypes and processing instructions are rejected. Custom CSS is bounded to 65,536
+characters. Both accept only UTF-8 without NUL bytes. CSS accepts local rules and declarations;
+it rejects markup delimiters, backslash escapes, comments, at-rules (including imports), and resource
+functions, including data URLs. Allowed functions are `var`, `rgb`, `rgba`, `hsl`, `hsla`, `calc`,
+`min`, `max`, `clamp`, `repeat`, and `minmax`. The same CSS limits apply to chrome style elements
+and style attributes. These are authoring limits, not an HTML sanitizer: origin isolation and CSP
+remain the security boundary. Drafts do not affect a served page or download until applied.
+
+The component stylesheet is inlined on HTML and XHTML render responses. Its public classes are:
+
+| Classes | Use |
+| --- | --- |
+| `capstan-page`, `capstan-layout-report`, `capstan-layout-dashboard`, `capstan-layout-brief` | Application-owned page shells |
+| `capstan-content`, `capstan-header`, `capstan-footer` | Body and optional chrome sections |
+| `capstan-card`, `capstan-grid` | Bordered cards and a responsive card grid |
+| `capstan-stat`, `capstan-stat-value`, `capstan-stat-label` | Metric tile, value and label |
+| `capstan-table` | Table surface, text and cell spacing |
+| `capstan-badge`, `capstan-badge-success`, `capstan-badge-warning`, `capstan-badge-danger` | Badge base and semantic colours |
+| `capstan-callout`, `capstan-callout-success`, `capstan-callout-warning`, `capstan-callout-danger` | Callout base and semantic border colours |
+| `capstan-chart-series-1`, `capstan-chart-series-2`, `capstan-chart-series-3`, `capstan-chart-series-4`, `capstan-chart-series-5` | Matching text, SVG fill and stroke for each chart series |
+
+Use a base class with its semantic modifier. Appearance values come from normalized
+`--capstan-color-*`, `--capstan-space-*`, `--capstan-radius-*`, and `--capstan-font-*` variables.
+Page content can bring its own CSS. Applying a brand updates existing pages without publishing
+another page version. Custom HTML and CSS never enter the app-host viewer or mail.
+
+Owner export uses the current page version's layout and the current applied brand. It inlines tokens,
+components, custom CSS, chrome, and selected brand images as data URLs. Unresolved Capstan dependencies
+(including build assets or unselected brand images) cause an opaque refusal rather than a download
+that calls back to the installation. The exporter never fetches remote resources.
+
 ### Connecting an agent to Postmaster
 
 Sign in, open **/postmaster**, and under **Connect a local agent** press **Generate installer**.

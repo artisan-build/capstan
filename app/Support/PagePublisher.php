@@ -11,16 +11,20 @@ use Illuminate\Support\Facades\DB;
 
 final readonly class PagePublisher
 {
+    public function __construct(private BrandKitService $brands) {}
+
     public function publish(
         string $pageId,
         string $ownerUserId,
         string $title,
         ?string $description,
         string $refreshRecipe,
-        PageLayout $layout,
+        ?PageLayout $layout,
         string $content,
         string $contentType,
     ): Page {
+        $layout ??= PageLayout::from($this->brands->current()['default_layout']);
+
         return DB::transaction(function () use ($pageId, $ownerUserId, $title, $description, $refreshRecipe, $layout, $content, $contentType): Page {
             $page = new Page([
                 'owner_user_id' => $ownerUserId,

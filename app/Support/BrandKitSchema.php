@@ -2,6 +2,7 @@
 
 namespace App\Support;
 
+use App\Enums\PageLayout;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -58,6 +59,10 @@ final class BrandKitSchema
             ],
             'assets' => ['logo_light' => null, 'logo_dark' => null, 'mark' => null],
             'tone_notes' => '',
+            'default_layout' => 'report',
+            'header_html' => '',
+            'footer_html' => '',
+            'custom_css' => '',
         ];
     }
 
@@ -78,10 +83,18 @@ final class BrandKitSchema
      */
     public function normalize(array $value): array
     {
+        // Snapshots written before chrome existed keep deterministic defaults.
+        $value = array_replace(array_intersect_key($this->defaults(), array_flip(['default_layout', 'header_html', 'footer_html', 'custom_css'])), $value);
         $this->assertExactKeys($value, $this->defaults(), 'brand kit');
 
         $displayName = $this->text($value['display_name'], 'display_name', 120, false);
         $toneNotes = $this->text($value['tone_notes'], 'tone_notes', 10_000, true);
+        if (! is_string($value['default_layout']) || ! in_array($value['default_layout'], PageLayout::values(), true)) {
+            $this->invalid('default_layout', 'must select a supported layout');
+        }
+        $header = $this->chrome($value['header_html'], 'header_html');
+        $footer = $this->chrome($value['footer_html'], 'footer_html');
+        $customCss = $this->css($value['custom_css']);
 
         $colours = $this->mapGroups($value['colours'], ['light', 'dark'], self::COLOUR_TOKENS, fn (mixed $token, string $path): string => $this->colour($token, $path), 'colours');
         $spacing = $this->mapTokens($value['spacing'], self::SPACING_TOKENS, fn (mixed $token, string $path): string => $this->length($token, $path), 'spacing');
@@ -117,7 +130,53 @@ final class BrandKitSchema
             'fonts' => $fonts,
             'assets' => $assets,
             'tone_notes' => $toneNotes,
+            'default_layout' => $value['default_layout'],
+            'header_html' => $header,
+            'footer_html' => $footer,
+            'custom_css' => $customCss,
         ];
+    }
+
+    private function chrome(mixed $value, string $path): string
+    {
+        $html = $this->text($value, $path, 32_768, true);
+        // XML-compatible partials work identically in HTML and XHTML. No entities,
+        // declarations or external subsets are accepted or loaded.
+        if (str_contains($html, '<!') || str_contains($html, '<?')) {
+            $this->invalid($path, 'must be an XML-compatible HTML fragment without declarations');
+        }
+        $document = new \DOMDocument;
+        if (! @$document->loadXML('<div>'.$html.'</div>', LIBXML_NONET)) {
+            $this->invalid($path, 'must be an XML-compatible HTML fragment');
+        }
+        foreach ($document->getElementsByTagName('*') as $element) {
+            if (strtolower($element->tagName) === 'style') {
+                $this->css($element->textContent);
+            }
+            if ($element->hasAttribute('style')) {
+                $this->css($element->getAttribute('style'));
+            }
+        }
+
+        return $html;
+    }
+
+    private function css(mixed $value): string
+    {
+        $css = $this->text($value, 'custom_css', 65_536, true);
+        // Deliberately reject escape/comment obfuscation, all at-rules and URL
+        // functions. This is a local declaration/rule block, not a CSS loader.
+        if (preg_match('/[<>\\\\@]|\/\*|url\s*\(|image-set\s*\(|expression\s*\(/i', $css) === 1) {
+            $this->invalid('custom_css', 'must not contain markup, escapes, comments, at-rules or resource functions');
+        }
+        preg_match_all('/([a-zA-Z_-][a-zA-Z0-9_-]*)\s*\(/', $css, $functions);
+        foreach ($functions[1] as $function) {
+            if (! in_array(strtolower($function), ['var', 'rgb', 'rgba', 'hsl', 'hsla', 'calc', 'min', 'max', 'clamp', 'repeat', 'minmax'], true)) {
+                $this->invalid('custom_css', 'contains an unsupported CSS function');
+            }
+        }
+
+        return $css;
     }
 
     /**

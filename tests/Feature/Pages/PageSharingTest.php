@@ -393,7 +393,8 @@ test('owner exports the current self-contained html while every other principal 
     $exportedHtml = $export->baseResponse instanceof StreamedResponse
         ? $export->streamedContent()
         : $export->getContent();
-    expect($exportedHtml)->toBe($second)
+    expect(preg_replace('/<style data-capstan-brand="applied">.*?<\/style>/s', '', $exportedHtml))->toBe($second)
+        ->and($exportedHtml)->toContain('data-capstan-brand="applied"', '--capstan-color-primary:', '.capstan-card{')
         ->and($exportedHtml)->not->toContain('app.sharing.test')
         ->and($exportedHtml)->not->toContain('render.sharing.test')
         ->and($exportedHtml)->not->toContain('/build/assets/');

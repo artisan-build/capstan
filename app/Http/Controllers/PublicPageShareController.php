@@ -77,7 +77,7 @@ final class PublicPageShareController extends Controller
         if (! is_string($body)) {
             return $this->notFound();
         }
-        $rendered = $branding->renderResponse($body, $version->content_type);
+        $rendered = $branding->renderResponse($body, $version->content_type, $version->layout);
         $body = $rendered['body'];
 
         $headers = [
