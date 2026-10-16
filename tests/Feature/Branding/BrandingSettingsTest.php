@@ -211,7 +211,7 @@ test('draft form POST retains rejected input through database sessions and displ
         $this->withUnencryptedCookie($cookie->getName(), $cookie->getValue());
     }
     // Force the next request to reload persisted data instead of reusing in-memory flash.
-    app('session')->forgetDrivers();
+    resolve('session')->forgetDrivers();
     app()->forgetInstance('session.store');
     app()->forgetInstance('redirect');
 
