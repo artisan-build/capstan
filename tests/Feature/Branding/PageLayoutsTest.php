@@ -38,8 +38,8 @@ test('version layouts have owner public parity valid XHTML preserved bytes and e
     $owner = capstanUser(['role' => UserRole::Owner->value]);
     $service = resolve(BrandKitService::class);
     $proof = Str::random(16);
-    $header = '<p data-testid="fixture-header">Header '.$proof.'</p>';
-    $footer = '<p data-testid="fixture-footer">Footer '.$proof.'</p>';
+    $header = '<p id="fixture-header">Header '.$proof.'</p>';
+    $footer = '<p id="fixture-footer">Footer '.$proof.'</p>';
     $service->updateDraft($owner, ['header_html' => $header, 'footer_html' => $footer, 'custom_css' => '.fixture-'.$proof.'{color:var(--capstan-color-accent)}']);
     $service->applyDraft($owner);
     $content = '<section data-testid="fixture-body">Body '.$proof.' Ω</section><script>var decoy="&lt;/body&gt;";</script>';
@@ -142,7 +142,7 @@ test('invalid chrome and CSS leave draft versions assets and private storage unc
     'SVG prefixed CSS import footer' => [['footer_html' => '<s:svg xmlns:s="http://www.w3.org/2000/svg"><s:style>@import &quot;https://outside.test/x.css&quot;;</s:style></s:svg>']],
     'HTML CSS url' => [['footer_html' => '<b style="background:url(https://outside.test)">x</b>']],
     'XML declaration' => [['header_html' => '<?xml version="1.0"?>']],
-    'unbalanced HTML' => [['footer_html' => '<b>unclosed']],
+    'malformed attribute' => [['footer_html' => '<b title="unclosed>x</b>']],
 ]);
 
 test('component public classes and their token driven declarations form the exact authoring contract', function (): void {
@@ -165,7 +165,7 @@ test('prefixed XHTML retains namespace semantics and literal ampersand CSS on ow
     $owner = capstanUser(['role' => UserRole::Owner->value]);
     $service = resolve(BrandKitService::class);
     $css = '.fixture::after{content:"a & b"}';
-    $service->updateDraft($owner, ['header_html' => '<p data-testid="fixture-header">Header</p>', 'footer_html' => '<p data-testid="fixture-footer">Footer</p>', 'custom_css' => $css]);
+    $service->updateDraft($owner, ['header_html' => '<p id="fixture-header">Header</p>', 'footer_html' => '<p id="fixture-footer">Footer</p>', 'custom_css' => $css]);
     $service->applyDraft($owner);
     $html = '<?xml version="1.0"?><h:html xmlns:h="http://www.w3.org/1999/xhtml">'.($withHead ? '<h:head><h:title>Title</h:title></h:head>' : '').'<h:body><h:p>Body</h:p></h:body></h:html>';
     $page = resolve(PagePublisher::class)->publish((string) Str::uuid(), (string) $owner->getKey(), 'XHTML fixture', null, 'XHTML recipe', $layout, $html, 'application/xhtml+xml');
@@ -188,8 +188,8 @@ test('prefixed XHTML retains namespace semantics and literal ampersand CSS on ow
             expect($xpath->query('//*[@data-testid="page-content" or @data-testid="page-header" or @data-testid="page-footer"]')->length)->toBe(0);
         } else {
             expect($xpath->query('/x:html/x:body/x:div[@data-testid="page-layout-'.$layout->value.'"]/x:main/x:p')->length)->toBe(1)
-                ->and($xpath->query('//x:header/x:p[@data-testid="fixture-header"]')->length)->toBe(1)
-                ->and($xpath->query('//x:footer/x:p[@data-testid="fixture-footer"]')->length)->toBe(1);
+                ->and($xpath->query('//x:header/x:p[@id="fixture-header"]')->length)->toBe(1)
+                ->and($xpath->query('//x:footer/x:p[@id="fixture-footer"]')->length)->toBe(1);
         }
     }
     expect($bodies[0])->toBe($bodies[1]);
@@ -227,25 +227,17 @@ test('unresolved owned origin hosts refuse exports case insensitively and opaque
     '//RENDER.LAYOUTS.TEST/a.js',
 ]);
 
-test('export refuses linked injected chrome resources but leaves plain and page authored resources alone', function (string $chrome, string $field): void {
+test('page-authored external resources remain outside the chrome sanitizer', function (string $content): void {
     $owner = capstanUser(['role' => UserRole::Owner->value]);
-    $service = resolve(BrandKitService::class);
-    $service->updateDraft($owner, [$field => $chrome]);
-    $service->applyDraft($owner);
-    $publisher = resolve(PagePublisher::class);
-    $page = $publisher->publish((string) Str::uuid(), (string) $owner->getKey(), 'Chrome fixture', null, 'Chrome recipe', PageLayout::Report, '<p>Export fixture</p>', 'text/html');
-    expect(resolve(PageExporter::class)->export($page->latestVersion))->toBeNull();
-    $this->actingAsVersioned($owner)->get(route('pages.export', $page))->assertNotFound()->assertContent('');
-    $page = $publisher->update($page->id, (string) $owner->getKey(), (string) Str::uuid(), ['layout' => PageLayout::Plain], '<p>Export fixture</p>'.$chrome, 'text/html');
-    expect(resolve(PageExporter::class)->export($page->latestVersion))->toContain($chrome);
+    $page = resolve(PagePublisher::class)->publish((string) Str::uuid(), (string) $owner->getKey(), 'Page resource fixture', null, 'Page resource recipe', PageLayout::Report, '<p>Export fixture</p>'.$content, 'text/html');
+
+    expect(resolve(PageExporter::class)->export($page->latestVersion))->toContain($content);
 })->with([
     '<link rel="stylesheet" href="https://cdn.outside.test/a.css" />',
     '<script src="https://cdn.outside.test/a.js"></script>',
-    '<img src="//cdn.outside.test/a.png" />',
-    '<iframe src="https://cdn.outside.test/frame"></iframe>',
-    '<img src="/external-image.png" />',
-    '<svg xmlns:xlink="http://www.w3.org/1999/xlink"><use xlink:href="https://cdn.outside.test/a.svg#icon" /></svg>',
-])->with(['header_html', 'footer_html']);
+    '<img srcset="https://cdn.outside.test/a.png 1x" />',
+    '<video poster="https://cdn.outside.test/a.png"></video>',
+]);
 
 test('embedded and document local chrome references remain exportable', function (): void {
     $owner = capstanUser(['role' => UserRole::Owner->value]);
@@ -271,6 +263,9 @@ test('branded current-version export inlines applied image bytes and refuses unr
     $proof = Str::random(12);
     $service->updateDraft($owner, ['header_html' => '<img src="https://render.layouts.test/brand-assets/'.$asset->id.'" alt="'.$proof.'" />', 'footer_html' => '<b>'.$proof.'</b>', 'custom_css' => '.export-'.$proof.'{color:var(--capstan-color-accent)}']);
     $service->applyDraft($owner);
+    $canonicalImage = '<img alt="'.$proof.'" src="/brand-assets/'.$asset->id.'" />';
+    expect($service->current()['header_html'])->toBe($canonicalImage)
+        ->and(resolve(BrandPageRenderer::class)->renderResponse('<p>render</p>', 'text/html', PageLayout::Report)['body'])->toContain($canonicalImage);
     $publisher = resolve(PagePublisher::class);
     $page = $publisher->publish((string) Str::uuid(), (string) $owner->getKey(), $proof, null, $proof, PageLayout::Plain, '<p>old-'.$proof.'</p>', 'text/html');
     $page = $publisher->update($page->id, (string) $owner->getKey(), (string) Str::uuid(), ['layout' => PageLayout::Dashboard], '<html><head></head><body><p>new-'.$proof.'</p></body></html>', 'text/html');
@@ -282,6 +277,24 @@ test('branded current-version export inlines applied image bytes and refuses unr
         $page = $publisher->update($page->id, (string) $owner->getKey(), (string) Str::uuid(), [], $unresolved, 'text/html');
         expect(resolve(PageExporter::class)->export($page->latestVersion))->toBeNull();
     }
+});
+
+test('export refuses when post-inlining chrome is not already sanitizer canonical', function (): void {
+    $owner = capstanUser(['role' => UserRole::Owner->value]);
+    $service = resolve(BrandKitService::class);
+    $image = imagecreatetruecolor(2, 2);
+    ob_start();
+    imagepng($image);
+    $bytes = ob_get_clean();
+    imagedestroy($image);
+    $asset = $service->uploadAsset($owner, BrandAssetKind::Logo, $bytes);
+    $service->selectAsset($owner, 'logo_light', $asset->id);
+    $service->updateDraft($owner, ['header_html' => '<img src="/brand-assets/'.$asset->id.'" alt="Brand" />']);
+    $service->applyDraft($owner);
+    $asset->forceFill(['content_type' => 'IMAGE/PNG'])->save();
+    $page = resolve(PagePublisher::class)->publish((string) Str::uuid(), (string) $owner->getKey(), 'Canonical export fixture', null, 'Canonical export recipe', PageLayout::Report, '<p>Export</p>', 'text/html');
+
+    expect(resolve(PageExporter::class)->export($page->latestVersion))->toBeNull();
 });
 
 test('default layout and fragment fallback are deterministic and non HTML passes unchanged', function (): void {

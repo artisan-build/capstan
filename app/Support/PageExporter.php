@@ -6,10 +6,15 @@ use App\Enums\PageLayout;
 use App\Models\BrandAsset;
 use App\Models\PageVersion;
 use Illuminate\Support\Facades\Storage;
+use InvalidArgumentException;
 
 final readonly class PageExporter
 {
-    public function __construct(private BrandPageRenderer $renderer, private BrandKitService $brands) {}
+    public function __construct(
+        private BrandPageRenderer $renderer,
+        private BrandKitService $brands,
+        private BrandChromeSanitizer $chromeSanitizer,
+    ) {}
 
     public function export(PageVersion $version): ?string
     {
@@ -22,12 +27,13 @@ final readonly class PageExporter
         $html = $this->renderer->renderResponse($html, $version->content_type, $version->layout)['body'];
         $brand = $this->brands->current();
         $chrome = $version->layout === PageLayout::Plain || ! in_array($version->content_type, ['text/html', 'application/xhtml+xml'], true)
-            ? '' : $brand['header_html'].$brand['footer_html'];
+            ? [] : [$brand['header_html'], $brand['footer_html']];
         $origins = array_filter([
             rtrim((string) config('app.url'), '/'),
             rtrim((string) config('capstan.artifacts.render_origin'), '/'),
         ]);
-        foreach ($this->brands->currentAssetIds() as $id) {
+        $assetIds = $this->brands->currentAssetIds();
+        foreach ($assetIds as $id) {
             $asset = BrandAsset::query()->find($id);
             $bytes = $asset instanceof BrandAsset
                 ? rescue(fn (): string => Storage::disk()->get($asset->storage_key), null, false)
@@ -38,24 +44,21 @@ final readonly class PageExporter
             $path = '/brand-assets/'.$id;
             $data = 'data:'.$asset->content_type.';base64,'.base64_encode($bytes);
             foreach ($origins as $origin) {
-                [$html, $chrome] = str_replace([$origin.$path, '//'.parse_url($origin, PHP_URL_HOST).$path], $data, [$html, $chrome]);
+                $html = str_replace([$origin.$path, '//'.parse_url($origin, PHP_URL_HOST).$path], $data, $html);
+                $chrome = array_map(fn (string $fragment): string => str_replace([$origin.$path, '//'.parse_url($origin, PHP_URL_HOST).$path], $data, $fragment), $chrome);
             }
-            [$html, $chrome] = str_replace($path, $data, [$html, $chrome]);
+            $html = str_replace($path, $data, $html);
+            $chrome = array_map(fn (string $fragment): string => str_replace($path, $data, $fragment), $chrome);
         }
-        // Brand-authored links are injected dependencies, not page-authored
-        // content. Only embedded data and document-local fragments stand alone.
-        $document = new \DOMDocument;
-        if (! @$document->loadXML('<div>'.$chrome.'</div>', LIBXML_NONET)) {
-            return null;
-        }
-        foreach ($document->getElementsByTagName('*') as $element) {
-            foreach ($element->attributes as $attribute) {
-                if (in_array(strtolower($attribute->localName), ['src', 'href'], true)) {
-                    $reference = trim($attribute->value);
-                    if ($reference !== '' && ! str_starts_with($reference, '#') && stripos($reference, 'data:') !== 0) {
-                        return null;
-                    }
+        // Re-run the write-time sanitizer after private image inlining. Any
+        // parse, validation, or canonicalization difference refuses export.
+        foreach ($chrome as $fragment) {
+            try {
+                if ($this->chromeSanitizer->sanitize($fragment, $assetIds) !== $fragment) {
+                    return null;
                 }
+            } catch (InvalidArgumentException) {
+                return null;
             }
         }
         // Unknown owned dependencies cannot make a self-contained download.

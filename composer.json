@@ -21,6 +21,7 @@
         "livewire/blaze": "^1.0",
         "livewire/flux": "^2.13.1",
         "livewire/livewire": "^4.1",
+        "masterminds/html5": "^2.10",
         "symfony/http-client": "^8.1"
     },
     "require-dev": {

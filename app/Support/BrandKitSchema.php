@@ -5,6 +5,7 @@ namespace App\Support;
 use App\Enums\PageLayout;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use InvalidArgumentException;
 
 final class BrandKitSchema
 {
@@ -23,6 +24,11 @@ final class BrandKitSchema
 
     /** @var list<string> */
     public const array FONT_STACKS = ['system-sans', 'system-serif', 'monospace'];
+
+    public function __construct(
+        private readonly BrandChromeSanitizer $chrome,
+        private readonly BrandCssGrammar $cssGrammar,
+    ) {}
 
     /**
      * The supported CSS grammar is deliberately small: colours are #rgb,
@@ -92,10 +98,6 @@ final class BrandKitSchema
         if (! is_string($value['default_layout']) || ! in_array($value['default_layout'], PageLayout::values(), true)) {
             $this->invalid('default_layout', 'must select a supported layout');
         }
-        $header = $this->chrome($value['header_html'], 'header_html');
-        $footer = $this->chrome($value['footer_html'], 'footer_html');
-        $customCss = $this->css($value['custom_css']);
-
         $colours = $this->mapGroups($value['colours'], ['light', 'dark'], self::COLOUR_TOKENS, fn (mixed $token, string $path): string => $this->colour($token, $path), 'colours');
         $spacing = $this->mapTokens($value['spacing'], self::SPACING_TOKENS, fn (mixed $token, string $path): string => $this->length($token, $path), 'spacing');
         $radius = $this->mapTokens($value['radius'], self::RADIUS_TOKENS, fn (mixed $token, string $path): string => $this->length($token, $path), 'radius');
@@ -122,6 +124,11 @@ final class BrandKitSchema
             $assets[$slot] = $asset;
         }
 
+        $selectedAssetIds = array_values(array_filter($assets, is_string(...)));
+        $header = $this->chrome($value['header_html'], 'header_html', $selectedAssetIds);
+        $footer = $this->chrome($value['footer_html'], 'footer_html', $selectedAssetIds);
+        $customCss = $this->css($value['custom_css']);
+
         return [
             'display_name' => $displayName,
             'colours' => $colours,
@@ -137,43 +144,29 @@ final class BrandKitSchema
         ];
     }
 
-    private function chrome(mixed $value, string $path): string
+    /** @param list<string> $selectedAssetIds */
+    private function chrome(mixed $value, string $path, array $selectedAssetIds): string
     {
         $html = $this->text($value, $path, 32_768, true);
-        // XML-compatible partials work identically in HTML and XHTML. No entities,
-        // declarations or external subsets are accepted or loaded.
-        if (str_contains($html, '<!') || str_contains($html, '<?')) {
-            $this->invalid($path, 'must be an XML-compatible HTML fragment without declarations');
-        }
-        $document = new \DOMDocument;
-        if (! @$document->loadXML('<div>'.$html.'</div>', LIBXML_NONET)) {
-            $this->invalid($path, 'must be an XML-compatible HTML fragment');
-        }
-        foreach ($document->getElementsByTagName('*') as $element) {
-            if (strtolower($element->localName) === 'style') {
-                $this->css($element->textContent);
+        try {
+            $sanitized = $this->chrome->sanitize($html, $selectedAssetIds);
+            if (mb_strlen($sanitized) > 32_768) {
+                $this->invalid($path, 'must remain within 32,768 characters after normalization');
             }
-            if ($element->hasAttribute('style')) {
-                $this->css($element->getAttribute('style'));
-            }
-        }
 
-        return $html;
+            return $sanitized;
+        } catch (InvalidArgumentException $exception) {
+            $this->invalid($path, $exception->getMessage());
+        }
     }
 
     private function css(mixed $value): string
     {
         $css = $this->text($value, 'custom_css', 65_536, true);
-        // Deliberately reject escape/comment obfuscation, all at-rules and URL
-        // functions. This is a local declaration/rule block, not a CSS loader.
-        if (preg_match('/[<>\\\\@]|\/\*|url\s*\(|image-set\s*\(|expression\s*\(/i', $css) === 1) {
-            $this->invalid('custom_css', 'must not contain markup, escapes, comments, at-rules or resource functions');
-        }
-        preg_match_all('/([a-zA-Z_-][a-zA-Z0-9_-]*)\s*\(/', $css, $functions);
-        foreach ($functions[1] as $function) {
-            if (! in_array(strtolower($function), ['var', 'rgb', 'rgba', 'hsl', 'hsla', 'calc', 'min', 'max', 'clamp', 'repeat', 'minmax'], true)) {
-                $this->invalid('custom_css', 'contains an unsupported CSS function');
-            }
+        try {
+            $this->cssGrammar->assertValid($css);
+        } catch (InvalidArgumentException $exception) {
+            $this->invalid('custom_css', $exception->getMessage());
         }
 
         return $css;

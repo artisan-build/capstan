@@ -539,15 +539,28 @@ and empty `custom_css` until configured. A version's explicit layout always wins
 captured by the publisher when its caller supplies no layout; the publish MCP tool still requires an explicit choice.
 Existing applied snapshots receive these defaults without rewriting their stored version.
 
-Chrome partials must be XML-compatible HTML fragments, at most 32,768 Unicode characters each.
-Close void elements, for example `<img src="…" alt="…" />`, and write `&amp;` for a literal ampersand.
-Declarations, doctypes and processing instructions are rejected. Custom CSS is bounded to 65,536
-characters. Both accept only UTF-8 without NUL bytes. CSS accepts local rules and declarations;
-it rejects markup delimiters, backslash escapes, comments, at-rules (including imports), and resource
-functions, including data URLs. Allowed functions are `var`, `rgb`, `rgba`, `hsl`, `hsla`, `calc`,
-`min`, `max`, `clamp`, `repeat`, and `minmax`. The same CSS limits apply to chrome style elements
-and style attributes. These are authoring limits, not an HTML sanitizer: origin isolation and CSP
-remain the security boundary. Drafts do not affect a served page or download until applied.
+Chrome partials pass through an HTML5 sanitizer and are stored as deterministic XML-compatible
+fragments, at most 32,768 Unicode characters each. Element and attribute names are case-insensitive.
+Comments, declarations, processing instructions, custom elements, namespace declarations, and anything
+outside the allowlists are rejected instead of removed.
+
+The element allowlist is `a`, `abbr`, `address`, `article`, `aside`, `b`, `bdi`, `bdo`, `blockquote`,
+`br`, `caption`, `cite`, `code`, `col`, `colgroup`, `dd`, `del`, `details`, `dfn`, `div`, `dl`, `dt`,
+`em`, `figcaption`, `figure`, `footer`, `h1`, `h2`, `h3`, `h4`, `h5`, `h6`, `header`, `hr`, `i`,
+`img`, `ins`, `kbd`, `li`, `main`, `mark`, `nav`, `ol`, `p`, `pre`, `q`, `rp`, `rt`, `ruby`, `s`,
+`samp`, `section`, `small`, `span`, `strong`, `sub`, `summary`, `sup`, `table`, `tbody`, `td`, `tfoot`,
+`th`, `thead`, `time`, `tr`, `u`, `ul`, `var`, and `wbr`. The attribute allowlist is `class`, `id`,
+`role`, `aria-*`, `alt`, `title`, `width`, `height`, `lang`, `dir`, and `style`, plus `href` only on
+`a` and `src` only on `img`. An anchor URL must be HTTPS or a non-empty document fragment. An image
+URL must be a valid `data:image/...` URI or one of the image UUIDs selected in the same brand kit.
+Arbitrary `data-*` attributes, event handlers, and every other URL-bearing attribute are rejected.
+
+Custom CSS is bounded to 65,536 characters. Chrome and CSS accept only XML-compatible UTF-8 without
+NUL bytes. CSS accepts local rules and declarations; it rejects markup delimiters, backslash escapes,
+comments, at-rules (including imports), and resource functions, including data URLs. Allowed functions
+are `var`, `rgb`, `rgba`, `hsl`, `hsla`, `calc`, `min`, `max`, `clamp`, `repeat`, and `minmax`. Inline
+`style` attributes use the same CSS grammar. Origin isolation and CSP still contain the whole rendered
+page. Drafts do not affect a served page or download until applied.
 
 The component stylesheet is inlined on HTML and XHTML render responses. Its public classes are:
 
@@ -570,9 +583,9 @@ another page version. Custom HTML and CSS never enter the app-host viewer or mai
 Owner export uses the current page version's layout and the current applied brand. It inlines tokens,
 components, custom CSS, chrome, and selected brand images as data URLs. Unresolved Capstan dependencies
 (including build assets or unselected brand images) cause an opaque refusal rather than a download
-that calls back to the installation. Linked `src` or `href` references in applied chrome also cause
-refusal unless they are embedded data or document-local fragments; selected brand images are inlined first.
-The exporter never fetches remote resources.
+that calls back to the installation. After selected images are inlined, the exporter runs the applied
+header and footer through the same chrome sanitizer and refuses the download if parsing, validation, or
+canonicalization changes either fragment. The exporter never fetches remote resources.
 
 ### Connecting an agent to Postmaster
 
