@@ -125,6 +125,61 @@ test('settings save validated draft values preserve invalid input and never exec
     expect(resolve(BrandKitService::class)->read()['draft']['display_name'])->toBe($name);
 });
 
+test('unchanged reverted settings with empty optional text save a valid draft', function (): void {
+    $owner = capstanUser(['role' => UserRole::Owner->value]);
+    $service = resolve(BrandKitService::class);
+    $emptyName = 'Empty optional text '.Str::random(8);
+    $service->updateDraft($owner, [
+        'display_name' => $emptyName,
+        'tone_notes' => '',
+        'header_html' => '',
+        'footer_html' => '',
+        'custom_css' => '',
+    ]);
+    $service->applyDraft($owner);
+    $service->updateDraft($owner, [
+        'display_name' => 'Later brand '.Str::random(8),
+        'tone_notes' => 'Later tone',
+        'header_html' => '<div>Later header</div>',
+        'footer_html' => '<div>Later footer</div>',
+        'custom_css' => '.capstan-card{opacity:.9}',
+    ]);
+    $service->applyDraft($owner);
+    $service->updateDraft($owner, ['display_name' => 'Unsaved draft '.Str::random(8)]);
+
+    $this->actingAsVersioned($owner)->post(route('branding.versions.revert', ['version' => 1]))
+        ->assertRedirect(route('branding.show'));
+    $current = $service->read()['current'];
+    $current['assets'] = ['logo_light' => '', 'logo_dark' => '', 'mark' => ''];
+
+    $this->actingAsVersioned($owner)->patch(route('branding.draft.update'), $current)
+        ->assertRedirect(route('branding.show'))
+        ->assertSessionHasNoErrors();
+
+    $draft = $service->read()['draft'];
+    expect($draft['display_name'])->toBe($emptyName)
+        ->and($draft['tone_notes'])->toBe('')
+        ->and($draft['header_html'])->toBe('')
+        ->and($draft['footer_html'])->toBe('')
+        ->and($draft['custom_css'])->toBe('');
+});
+
+test('settings validation summary names top level and nested fields', function (): void {
+    $owner = capstanUser(['role' => UserRole::Owner->value]);
+
+    $this->from(route('branding.show'))->actingAsVersioned($owner)->followingRedirects()
+        ->patch(route('branding.draft.update'), ['tone_notes' => str_repeat('x', 10_001)])
+        ->assertOk()
+        ->assertSee('Tone notes:')
+        ->assertSee('must be valid bounded UTF-8 text');
+
+    $this->from(route('branding.show'))->followingRedirects()
+        ->patch(route('branding.draft.update'), ['colours' => ['light' => ['primary' => 'not-a-colour']]])
+        ->assertOk()
+        ->assertSee('Light colours — Primary:')
+        ->assertSee('must be a hexadecimal CSS colour');
+});
+
 test('settings upload select remove preview apply and revert append immutable versions', function (): void {
     $owner = capstanUser(['role' => UserRole::Owner->value]);
     $firstName = 'First brand '.Str::random(8);
@@ -145,7 +200,12 @@ test('settings upload select remove preview apply and revert append immutable ve
     expect($match)->toHaveCount(2);
     $previewUrl = html_entity_decode($match[1]);
     $preview = $this->get($previewUrl)->assertOk()->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
-    expect($preview->content())->toContain('data-testid="brand-preview-layout-dashboard"', $asset->id)
+    expect($preview->content())->toContain(
+        'data-testid="brand-preview-layout-dashboard"',
+        $asset->id,
+        'body{font-family:var(--capstan-font-body)}',
+        '.capstan-preview-layout>h2{font-family:var(--capstan-font-heading)',
+    )
         ->and($preview->headers->get('Content-Security-Policy'))->toContain("img-src 'self' data:", "font-src 'none'");
 
     resolve(BrandKitService::class)->updateDraft($owner, [
@@ -199,6 +259,7 @@ test('settings upload select remove preview apply and revert append immutable ve
     $history = $this->actingAsVersioned($owner)->get('https://app.brand-ui.test'.route('branding.show', [], false))
         ->assertOk()
         ->assertSee('data-testid="branding-history-row"', false)
+        ->assertSee('Reverting creates a new version and discards any unsaved draft.')
         ->assertSee($firstName)
         ->assertDontSee($secondName);
     expect(substr_count($history->content(), 'data-testid="branding-history-row"'))->toBe(3);

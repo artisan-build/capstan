@@ -12,8 +12,10 @@
         @if ($errors->any())
             <div data-testid="branding-errors" class="rounded-lg border border-red-300 bg-red-50 p-3 text-red-900">
                 <ul class="list-disc pl-5">
-                    @foreach ($errors->all() as $error)
-                        <li>{{ $error }}</li>
+                    @foreach ($errors->getMessages() as $field => $messages)
+                        @foreach ($messages as $error)
+                            <li><span class="font-medium">{{ $errorFieldNames[$field] ?? \Illuminate\Support\Str::headline(str_replace('.', ' ', $field)) }}:</span> {{ $error }}</li>
+                        @endforeach
                     @endforeach
                 </ul>
             </div>
@@ -175,6 +177,7 @@
 
         <section data-testid="branding-history" class="space-y-3 rounded-xl border border-zinc-200 p-4 dark:border-zinc-700">
             <flux:heading size="lg">{{ __('Version history') }}</flux:heading>
+            <flux:text>{{ __('Reverting creates a new version and discards any unsaved draft.') }}</flux:text>
             @forelse ($state['versions'] as $version)
                 <article data-testid="branding-history-row" class="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-200 py-3 first:border-0 dark:border-zinc-700">
                     <div>

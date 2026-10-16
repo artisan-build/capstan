@@ -15,6 +15,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Str;
 use Laravel\Pennant\Feature;
 
 final readonly class BrandingSettingsController
@@ -34,11 +35,14 @@ final readonly class BrandingSettingsController
         $state = $this->brands->read();
         $fingerprint = $this->brands->draftFingerprint($state['draft']);
 
+        $description = $contract->describe();
+
         return response()->view('branding.show', [
             'state' => $state,
             'editing' => $state['draft'] ?? $state['current'],
             'assets' => $this->brands->assets(),
-            'contract' => $contract->describe(),
+            'contract' => $description,
+            'errorFieldNames' => $this->errorFieldNames($description),
             'previewUrl' => $fingerprint === null ? null : $origin->signedBrandPreviewUrl($fingerprint),
             'draftFingerprint' => $fingerprint,
         ]);
@@ -55,6 +59,11 @@ final readonly class BrandingSettingsController
             'display_name', 'colours', 'spacing', 'radius', 'fonts', 'assets', 'tone_notes',
             'default_layout', 'header_html', 'footer_html', 'custom_css',
         ]);
+        foreach (['tone_notes', 'header_html', 'footer_html', 'custom_css'] as $field) {
+            if (array_key_exists($field, $changes) && $changes[$field] === null) {
+                $changes[$field] = '';
+            }
+        }
         foreach (['logo_light', 'logo_dark', 'mark'] as $slot) {
             if (isset($changes['assets']) && is_array($changes['assets']) && ($changes['assets'][$slot] ?? null) === '') {
                 $changes['assets'][$slot] = null;
@@ -116,6 +125,57 @@ final readonly class BrandingSettingsController
         $applied = $this->brands->revertToVersion($actor, $version);
 
         return to_route('branding.show')->with('status', 'Brand version '.$applied->version_number.' created from version '.$version.'.');
+    }
+
+    /**
+     * @param  array<string, mixed>  $contract
+     * @return array<string, string>
+     */
+    private function errorFieldNames(array $contract): array
+    {
+        $names = [
+            'brand kit' => 'Brand settings',
+            'display_name' => 'Display name',
+            'colours' => 'Colours',
+            'spacing' => 'Spacing scale',
+            'radius' => 'Radius scale',
+            'fonts' => 'System font stacks',
+            'fonts.heading' => 'Heading font',
+            'fonts.heading.type' => 'Heading font type',
+            'fonts.heading.value' => 'Heading font',
+            'fonts.body' => 'Body font',
+            'fonts.body.type' => 'Body font type',
+            'fonts.body.value' => 'Body font',
+            'assets' => 'Selected assets',
+            'assets.logo_light' => 'Light logo',
+            'assets.logo_dark' => 'Dark logo',
+            'assets.mark' => 'Mark',
+            'tone_notes' => 'Tone notes',
+            'default_layout' => 'Default layout',
+            'header_html' => 'Header HTML',
+            'footer_html' => 'Footer HTML',
+            'custom_css' => 'Custom CSS',
+            'draft' => 'Brand draft',
+            'draft_fingerprint' => 'Brand draft',
+            'kind' => 'Asset kind',
+            'asset' => 'Asset',
+            'slot' => 'Asset slot',
+            'version' => 'Brand version',
+        ];
+
+        foreach (['light' => 'Light colours', 'dark' => 'Dark colours'] as $mode => $label) {
+            foreach ($contract['colour_tokens'] as $token) {
+                $names['colours.'.$mode.'.'.$token] = $label.' — '.Str::headline($token);
+            }
+        }
+        foreach ($contract['spacing_tokens'] as $token) {
+            $names['spacing.'.$token] = 'Spacing '.Str::upper($token);
+        }
+        foreach ($contract['radius_tokens'] as $token) {
+            $names['radius.'.$token] = 'Radius '.Str::upper($token);
+        }
+
+        return $names;
     }
 
     private function actor(Request $request, ArtifactRenderOrigin $origin): ?User
