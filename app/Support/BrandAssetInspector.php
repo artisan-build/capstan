@@ -71,7 +71,7 @@ final class BrandAssetInspector
         $length = strlen($bytes);
         $tables = $this->uint16($bytes, 4);
         if ($length < 28
-            || substr($bytes, 0, 4) !== "\x00\x01\x00\x00"
+            || ! str_starts_with($bytes, "\x00\x01\x00\x00")
             || $tables < 1
             || $tables > 128
             || ! $this->searchFieldsAreValid($bytes, $tables)) {
