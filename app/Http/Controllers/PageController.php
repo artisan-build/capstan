@@ -125,10 +125,14 @@ class PageController extends Controller
         $disk = Storage::disk();
         $body = rescue(fn () => $disk->get($version->storage_key), null, false);
         abort_unless(is_string($body), 404);
-        $body = $branding->render($body, $version->content_type);
+        $rendered = $branding->renderResponse($body, $version->content_type);
+        $body = $rendered['body'];
         $headers = [
             'Content-Type' => $version->content_type,
-            'Content-Security-Policy' => $origin->contentSecurityPolicy(),
+            'Content-Security-Policy' => $origin->contentSecurityPolicy(
+                $rendered['allow_same_origin_images'],
+                $rendered['allow_same_origin_fonts'],
+            ),
             'X-Content-Type-Options' => 'nosniff',
             'Referrer-Policy' => 'no-referrer',
             'Cache-Control' => 'private, no-store, no-transform',

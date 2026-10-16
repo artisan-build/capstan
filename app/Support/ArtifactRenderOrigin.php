@@ -126,14 +126,14 @@ class ArtifactRenderOrigin
         return $this->renderOrigin().$path;
     }
 
-    public function contentSecurityPolicy(): string
+    public function contentSecurityPolicy(bool $allowSameOriginImages = false, bool $allowSameOriginFonts = false): string
     {
         return implode('; ', [
             "default-src 'none'",
             $this->sourceDirective('script-src', ["'unsafe-inline'"], 'script_src'),
             $this->sourceDirective('style-src', ["'unsafe-inline'"], 'style_src'),
-            $this->sourceDirective('font-src', ["'self'"], 'font_src'),
-            $this->sourceDirective('img-src', ["'self'", 'data:'], 'img_src'),
+            $this->sourceDirective('font-src', $allowSameOriginFonts ? ["'self'"] : [], 'font_src'),
+            $this->sourceDirective('img-src', $allowSameOriginImages ? ["'self'", 'data:'] : ['data:'], 'img_src'),
             "connect-src 'none'",
             "form-action 'none'",
             "base-uri 'none'",

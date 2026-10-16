@@ -1,9 +1,11 @@
 <?php
 
+use App\Enums\ArtifactVisibility;
 use App\Enums\BrandAssetKind;
 use App\Enums\PageLayout;
 use App\Enums\PageShareKind;
 use App\Http\Middleware\NoIndexArtifactPaths;
+use App\Models\Artifact;
 use App\Models\BrandAsset;
 use App\Models\BrandKit;
 use App\Models\BrandVersion;
@@ -56,6 +58,27 @@ function brandPng(): string
 function brandTtf(): string
 {
     return "\x00\x01\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00".str_repeat("\x00", 16);
+}
+
+/** @return array<string, string> */
+function brandImageSamples(): array
+{
+    return [
+        'image/png' => brandPng(),
+        'image/jpeg' => (string) base64_decode('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAABv/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AHP/Z', true),
+        'image/webp' => (string) base64_decode('UklGRhoAAABXRUJQVlA4TA4AAAAvAAAAAAcQEf0PRET/Aw==', true),
+    ];
+}
+
+/** @return array<string, string> */
+function brandFontSamples(): array
+{
+    return [
+        'font/woff' => 'wOFF'.pack('N', 0x00010000).pack('N', 44).pack('n', 1).str_repeat("\x00", 30),
+        'font/woff2' => 'wOF2'.pack('N', 0x00010000).pack('N', 48).pack('n', 1).str_repeat("\x00", 34),
+        'font/ttf' => brandTtf(),
+        'font/otf' => 'OTTO'."\x00\x01\x00\x00\x00\x00\x00\x00".str_repeat("\x00", 16),
+    ];
 }
 
 function brandPage(User $owner, string $html): Page
@@ -115,11 +138,26 @@ test('drafts normalize apply atomically and leave monotonic immutable versions',
         ->and($service->read()['draft']['display_name'])->toBe($secondName)
         ->and($first->fresh()?->configuration)->toBe($firstSnapshot);
 
+    $failPointerUpdate = true;
+    BrandKit::updating(function (BrandKit $kit) use (&$failPointerUpdate): void {
+        if ($failPointerUpdate && $kit->current_version_number === 2) {
+            throw new RuntimeException('Test-created pointer update failure');
+        }
+    });
+    expect(fn () => $service->applyDraft($admin))->toThrow(RuntimeException::class);
+    $failPointerUpdate = false;
+    $rolledBack = BrandKit::query()->firstOrFail();
+    expect(BrandVersion::query()->count())->toBe(1)
+        ->and($rolledBack->current_version_id)->toBe($first->id)
+        ->and($rolledBack->current_version_number)->toBe(1)
+        ->and($rolledBack->draft['display_name'])->toBe($secondName);
+
     $second = $service->applyDraft($admin);
     expect($second->version_number)->toBe(2)
         ->and($service->read()['current']['display_name'])->toBe($secondName)
         ->and($first->fresh()?->configuration)->toBe($firstSnapshot)
-        ->and(fn () => $first->forceFill(['version_number' => 99])->save())->toThrow(LogicException::class);
+        ->and(fn () => $first->forceFill(['version_number' => 99])->save())->toThrow(LogicException::class)
+        ->and(fn () => $first->delete())->toThrow(LogicException::class);
 });
 
 test('non-admin and unavailable principals are refused before every brand side effect', function (): void {
@@ -189,13 +227,19 @@ test('serialized css uses only fixed declarations and canonical values', functio
 test('asset uploads sniff bytes enforce limits and leave invalid input side effect free', function (): void {
     $owner = brandOwner();
     $service = resolve(BrandKitService::class);
-    $logo = $service->uploadAsset($owner, BrandAssetKind::Logo, brandPng());
-    $font = $service->uploadAsset($owner, BrandAssetKind::Font, brandTtf());
 
-    expect($logo->content_type)->toBe('image/png')
-        ->and($font->content_type)->toBe('font/ttf')
-        ->and(Storage::disk()->get($logo->storage_key))->toBe(brandPng())
-        ->and(Storage::disk()->get($font->storage_key))->toBe(brandTtf());
+    foreach (brandImageSamples() as $contentType => $bytes) {
+        $asset = $service->uploadAsset($owner, BrandAssetKind::Logo, $bytes);
+        expect($asset->content_type)->toBe($contentType)
+            ->and($asset->size_bytes)->toBe(strlen($bytes))
+            ->and(Storage::disk()->get($asset->storage_key))->toBe($bytes);
+    }
+    foreach (brandFontSamples() as $contentType => $bytes) {
+        $asset = $service->uploadAsset($owner, BrandAssetKind::Font, $bytes);
+        expect($asset->content_type)->toBe($contentType)
+            ->and($asset->size_bytes)->toBe(strlen($bytes))
+            ->and(Storage::disk()->get($asset->storage_key))->toBe($bytes);
+    }
     $rowCount = BrandAsset::query()->count();
     $files = Storage::disk()->allFiles();
 
@@ -209,13 +253,21 @@ test('asset uploads sniff bytes enforce limits and leave invalid input side effe
     foreach ($invalid as [$kind, $bytes]) {
         expect(fn () => $service->uploadAsset($owner, $kind, $bytes))->toThrow(ValidationException::class);
     }
+    expect(BrandAsset::query()->count())->toBe($rowCount)
+        ->and(Storage::disk()->allFiles())->toBe($files);
+
     config(['capstan.brand.max_image_bytes' => strlen(brandPng()) - 1]);
     expect(fn () => $service->uploadAsset($owner, BrandAssetKind::Logo, brandPng()))->toThrow(ValidationException::class)
         ->and(BrandAsset::query()->count())->toBe($rowCount)
         ->and(Storage::disk()->allFiles())->toBe($files);
+
+    config(['capstan.brand.max_font_bytes' => strlen(brandTtf()) - 1]);
+    expect(fn () => $service->uploadAsset($owner, BrandAssetKind::Font, brandTtf()))->toThrow(ValidationException::class)
+        ->and(BrandAsset::query()->count())->toBe($rowCount)
+        ->and(Storage::disk()->allFiles())->toBe($files);
 });
 
-test('draft branding stays private then one apply rebrands existing owner and public renders', function (): void {
+test('page CSP follows applied asset classes while drafts and legacy artifacts stay least privilege', function (): void {
     $owner = brandOwner();
     $service = resolve(BrandKitService::class);
     $distinctiveBody = 'existing-page-'.Str::random(12);
@@ -241,7 +293,10 @@ test('draft branding stays private then one apply rebrands existing owner and pu
     foreach ([$ownerUrl, $publicUrl] as $url) {
         $before = $this->get($url)->assertOk()->assertStreamed();
         expect($before->streamedContent())->toContain($distinctiveBody, 'data-capstan-brand="applied"')
-            ->not->toContain($draftColour, $tone, $logo->id, $font->id);
+            ->not->toContain($draftColour, $tone, $logo->id, $font->id)
+            ->and($before->headers->get('Content-Security-Policy'))
+            ->toContain("font-src 'none'", 'img-src data:', "connect-src 'none'", "form-action 'none'", "base-uri 'none'")
+            ->not->toContain("font-src 'self'", "img-src 'self'");
     }
     $draftAsset = $this->get('https://render.brand.test/brand-assets/'.$logo->id)
         ->assertNotFound()
@@ -249,21 +304,70 @@ test('draft branding stays private then one apply rebrands existing owner and pu
         ->assertHeaderMissing('Set-Cookie');
     expect($draftAsset->getContent())->toBe('')->and($draftAsset->headers->getCookies())->toBe([]);
 
+    $service->selectAsset($owner, 'heading_font', null);
     $service->applyDraft($owner);
     foreach ([$ownerUrl, $publicUrl] as $url) {
-        $after = $this->get($url)
+        $imageOnly = $this->get($url)
             ->assertOk()
             ->assertStreamed()
             ->assertHeader('X-Content-Type-Options', 'nosniff')
             ->assertHeaderMissing('Set-Cookie');
-        $rendered = $after->streamedContent();
-        expect($rendered)->toContain($distinctiveBody, '--capstan-color-primary:'.$draftColour, $logo->id, $font->id)
+        $rendered = $imageOnly->streamedContent();
+        expect($rendered)->toContain($distinctiveBody, '--capstan-color-primary:'.$draftColour, $logo->id)
+            ->not->toContain($font->id)
             ->not->toContain($tone)
-            ->and($after->headers->get('Content-Length'))->toBe((string) strlen($rendered))
-            ->and($after->headers->get('Content-Security-Policy'))
-            ->toContain("connect-src 'none'", "form-action 'none'", "font-src 'self'", "img-src 'self' data:")
+            ->and($imageOnly->headers->get('Content-Length'))->toBe((string) strlen($rendered))
+            ->and($imageOnly->headers->get('Content-Security-Policy'))
+            ->toContain("font-src 'none'", "img-src 'self' data:", "connect-src 'none'", "form-action 'none'", "base-uri 'none'")
+            ->not->toContain("font-src 'self'")
             ->not->toContain('attacker.test');
     }
+
+    $service->selectAsset($owner, 'heading_font', $font->id);
+    $service->selectAsset($owner, 'logo_light', null);
+    foreach ([$ownerUrl, $publicUrl] as $url) {
+        $fontDraft = $this->get($url)->assertOk();
+        expect($fontDraft->streamedContent())->not->toContain($font->id)
+            ->and($fontDraft->headers->get('Content-Security-Policy'))
+            ->toContain("font-src 'none'", "img-src 'self' data:")
+            ->not->toContain("font-src 'self'");
+    }
+
+    $service->applyDraft($owner);
+    foreach ([$ownerUrl, $publicUrl] as $url) {
+        $fontOnly = $this->get($url)->assertOk();
+        expect($fontOnly->streamedContent())->toContain($font->id)
+            ->not->toContain($logo->id)
+            ->and($fontOnly->headers->get('Content-Security-Policy'))
+            ->toContain("font-src 'self'", 'img-src data:', "connect-src 'none'", "form-action 'none'", "base-uri 'none'")
+            ->not->toContain("img-src 'self'")
+            ->not->toContain('attacker.test');
+    }
+
+    $service->selectAsset($owner, 'logo_light', $logo->id);
+    $service->applyDraft($owner);
+    foreach ([$ownerUrl, $publicUrl] as $url) {
+        $withBoth = $this->get($url)->assertOk();
+        expect($withBoth->streamedContent())->toContain($font->id, $logo->id)
+            ->and($withBoth->headers->get('Content-Security-Policy'))
+            ->toContain("font-src 'self'", "img-src 'self' data:", "connect-src 'none'", "form-action 'none'", "base-uri 'none'")
+            ->not->toContain('attacker.test');
+    }
+
+    $artifactBody = '<html><body>legacy artifact '.Str::random(8).'</body></html>';
+    [$artifactHash, $artifactStorageKey] = Artifact::storeBlob($artifactBody);
+    $artifact = Artifact::factory()->create([
+        'visibility' => ArtifactVisibility::SignedUrl,
+        'expires_at' => now()->addHour(),
+        'content_type' => 'text/html',
+        'size_bytes' => strlen($artifactBody),
+        'content_hash' => $artifactHash,
+        'storage_key' => $artifactStorageKey,
+    ]);
+    $legacyArtifact = $this->get($origin->signedContentUrl($artifact))->assertOk();
+    $legacyCsp = $legacyArtifact->headers->get('Content-Security-Policy');
+    expect($legacyCsp)->toContain("font-src 'none'", 'img-src data:', "connect-src 'none'", "form-action 'none'", "base-uri 'none'")
+        ->not->toContain("font-src 'self'", "img-src 'self'");
 
     expect($service->currentAssetIds())->toContain($logo->id, $font->id)
         ->and(BrandAsset::query()->find($logo->id))->toBeInstanceOf(BrandAsset::class)

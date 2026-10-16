@@ -8,7 +8,12 @@ final readonly class BrandStylesheet
 
     public function current(): string
     {
-        $brand = $this->brands->current();
+        return $this->serialize($this->brands->current());
+    }
+
+    /** @param  array<string, mixed>  $brand */
+    public function serialize(array $brand): string
+    {
         $fontFaces = [];
         $fontFamilies = [];
         foreach (['heading', 'body'] as $slot) {
