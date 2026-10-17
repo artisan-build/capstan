@@ -263,7 +263,7 @@ test('every registered read and write tool resolves a fully published delegated 
     ksort($arguments);
 
     $registered = collect(McpDelegatedTools::discover(CapstanServer::class)['tools'])
-        ->mapWithKeys(fn (string $class): array => [app($class)->name() => $class])
+        ->mapWithKeys(fn (string $class): array => [resolve($class)->name() => $class])
         ->sortKeys();
 
     expect($registered->keys()->all())->toBe(array_keys($arguments));
