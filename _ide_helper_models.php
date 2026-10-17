@@ -313,6 +313,7 @@ namespace App\Models{
  * @property int $id
  * @property string $actor_id
  * @property string $credential_id
+ * @property bool $credential_backed
  * @property string|null $name
  * @property CarbonImmutable|null $last_polled_at
  * @property CarbonImmutable|null $work_heartbeat_notified_at
