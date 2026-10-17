@@ -254,6 +254,13 @@ test('a delegated principal respects the local managed user lifecycle gate', fun
             'user_id' => (string) $user->getKey(),
             'offboarded_at' => now(),
         ]);
+    } elseif ($gate === 'offboarded subject') {
+        OffboardedSubject::query()->create([
+            'subject_type' => SubjectType::UserPrincipal,
+            'subject_ref' => 'capstan-user:'.$user->getKey(),
+            'user_id' => OffboardedSubject::SUBJECT_ROW,
+            'offboarded_at' => now(),
+        ]);
     } else {
         $user->forceFill(['managed_membership_status' => 'disabled'])->save();
         $freshnessKey = hash('sha256', implode("\0", [
@@ -267,7 +274,7 @@ test('a delegated principal respects the local managed user lifecycle gate', fun
     publishDelegatedPrincipal('lifecycle-scalpels-user');
     CapstanServer::tool(ListPagesTool::class)
         ->assertHasErrors(['This MCP principal is not supported.']);
-})->with(['inactive user', 'offboarded user', 'disabled managed membership']);
+})->with(['inactive user', 'offboarded user', 'offboarded subject', 'disabled managed membership']);
 
 test('a delegated member receives a readable Work authorization error with debug disabled', function (): void {
     delegatedPrincipalUser('member-scalpels-user', UserRole::Member);
