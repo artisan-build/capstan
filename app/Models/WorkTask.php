@@ -1,0 +1,114 @@
+<?php
+
+namespace App\Models;
+
+use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
+
+/**
+ * @property string $id
+ * @property int $team_id
+ * @property string $title
+ * @property string|null $user_actor_address
+ * @property string|null $device_address
+ * @property bool|null $failover
+ * @property list<string> $required_capabilities
+ * @property int $timebox_minutes
+ * @property string $creator_actor
+ * @property CarbonImmutable|null $cancelled_at
+ * @property string|null $parent_task_id
+ * @property string|null $workflow_id
+ * @property CarbonImmutable $created_at
+ * @property CarbonImmutable $updated_at
+ * @property-read Team $team
+ * @property-read WorkTask|null $parent
+ * @property-read Collection<int, WorkTask> $children
+ * @property-read Collection<int, WorkBriefRevision> $briefRevisions
+ * @property-read WorkBriefRevision|null $latestBriefRevision
+ * @property-read Collection<int, WorkItem> $items
+ * @property-read Collection<int, WorkMilestone> $milestones
+ * @property-read Collection<int, WorkSteer> $steers
+ */
+class WorkTask extends Model
+{
+    use HasUuids;
+
+    /** @var list<string> */
+    protected $fillable = [
+        'team_id',
+        'title',
+        'user_actor_address',
+        'device_address',
+        'failover',
+        'required_capabilities',
+        'timebox_minutes',
+        'creator_actor',
+        'cancelled_at',
+        'parent_task_id',
+        'workflow_id',
+    ];
+
+    /** @return array<string, string> */
+    protected function casts(): array
+    {
+        return [
+            'failover' => 'boolean',
+            'required_capabilities' => 'array',
+            'timebox_minutes' => 'integer',
+            'cancelled_at' => 'datetime',
+        ];
+    }
+
+    /** @return BelongsTo<Team, $this> */
+    public function team(): BelongsTo
+    {
+        return $this->belongsTo(Team::class);
+    }
+
+    /** @return BelongsTo<WorkTask, $this> */
+    public function parent(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'parent_task_id');
+    }
+
+    /** @return HasMany<WorkTask, $this> */
+    public function children(): HasMany
+    {
+        return $this->hasMany(self::class, 'parent_task_id');
+    }
+
+    /** @return HasMany<WorkBriefRevision, $this> */
+    public function briefRevisions(): HasMany
+    {
+        return $this->hasMany(WorkBriefRevision::class)->orderBy('sequence');
+    }
+
+    /** @return HasOne<WorkBriefRevision, $this> */
+    public function latestBriefRevision(): HasOne
+    {
+        return $this->hasOne(WorkBriefRevision::class)->ofMany('sequence', 'max');
+    }
+
+    /** @return HasMany<WorkItem, $this> */
+    public function items(): HasMany
+    {
+        return $this->hasMany(WorkItem::class);
+    }
+
+    /** @return HasMany<WorkMilestone, $this> */
+    public function milestones(): HasMany
+    {
+        return $this->hasMany(WorkMilestone::class);
+    }
+
+    /** @return HasMany<WorkSteer, $this> */
+    public function steers(): HasMany
+    {
+        return $this->hasMany(WorkSteer::class);
+    }
+}

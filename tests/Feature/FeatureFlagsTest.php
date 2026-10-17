@@ -3,6 +3,8 @@
 namespace Tests\Feature;
 
 use App\Features\Artifacts;
+use App\Features\Work;
+use Illuminate\Support\Env;
 use Laravel\Pennant\Feature;
 use Tests\TestCase;
 
@@ -40,5 +42,41 @@ class FeatureFlagsTest extends TestCase
         Feature::flushCache();
 
         $this->assertFalse(Feature::active(Artifacts::class));
+    }
+
+    public function test_work_feature_has_a_false_code_default_without_inheriting_the_environment(): void
+    {
+        $environment = Env::getRepository();
+        $original = $environment->get('CAPSTAN_FEATURE_WORK');
+        $environment->clear('CAPSTAN_FEATURE_WORK');
+
+        try {
+            /** @var array{features: array{work: bool}} $freshConfig */
+            $freshConfig = require config_path('capstan.php');
+
+            $this->assertFalse($freshConfig['features']['work']);
+        } finally {
+            if ($original !== null) {
+                $environment->set('CAPSTAN_FEATURE_WORK', $original);
+            }
+        }
+    }
+
+    public function test_work_feature_respects_explicit_config(): void
+    {
+        config(['capstan.features.work' => false]);
+        Feature::flushCache();
+
+        $this->assertFalse(Feature::active(Work::class));
+
+        config(['capstan.features.work' => true]);
+        Feature::flushCache();
+
+        $this->assertTrue(Feature::active(Work::class));
+
+        config(['capstan.features.work' => false]);
+        Feature::flushCache();
+
+        $this->assertFalse(Feature::active(Work::class));
     }
 }

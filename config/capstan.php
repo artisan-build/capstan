@@ -11,6 +11,7 @@ return [
     'features' => [
         'artifacts' => env('CAPSTAN_FEATURE_ARTIFACTS', false),
         'postmaster' => env('CAPSTAN_FEATURE_POSTMASTER', false),
+        'work' => env('CAPSTAN_FEATURE_WORK', false),
     ],
 
     'postmaster' => [
