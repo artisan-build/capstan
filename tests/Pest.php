@@ -82,9 +82,11 @@ function capstanBoundBearer(
     string $appPurpose,
 ): array {
     $request = Request::create(
-        $appPurpose === CapstanCredentialDeclaration::ARTIFACT_INGEST
-            ? '/api/v1/artifacts'
-            : '/api/v1/poll',
+        match ($appPurpose) {
+            CapstanCredentialDeclaration::ARTIFACT_INGEST => '/api/v1/artifacts',
+            CapstanCredentialDeclaration::POSTMASTER_POLL => '/api/v1/poll',
+            CapstanCredentialDeclaration::WORK_DRAIN => '/api/v1/work/1/claim',
+        },
         'POST',
         server: ['HTTP_X_CAPSTAN_ACTOR_ID' => (string) $user->getKey()],
     );

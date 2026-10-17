@@ -18,6 +18,7 @@ use App\Postmaster\MessageSender;
 use App\Postmaster\ProbeFailureNotifier;
 use App\Postmaster\ProbeManager;
 use App\Support\Address;
+use App\Support\BoundCredentialSpokeResolver;
 use App\Support\ServerIdentity;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Database\Query\Builder as QueryBuilder;
@@ -53,6 +54,7 @@ class PollController extends Controller
         ProbeFailureNotifier $probeFailureNotifier,
         MessageSender $sender,
         MessageAcknowledger $acknowledger,
+        BoundCredentialSpokeResolver $spokes,
     ): JsonResponse {
         $credential = AuthenticateBoundCredential::credential($request);
         $actorId = AuthenticateBoundCredential::actorId($request);
@@ -92,9 +94,9 @@ class PollController extends Controller
 
         try {
             /** @var array{payload: array{inbound: list<array<string, mixed>>, cursor: string|null, probe_challenge?: array{probe_id: string, nonce: string, algorithm: string}}, failure: array{Spoke, SpokeProbe}|null} $result */
-            $result = DB::transaction(function () use ($credential, $actorId, $validation, $envelopes, $serverId, $probeManager, $sender, $acknowledger): array {
+            $result = DB::transaction(function () use ($credential, $actorId, $validation, $envelopes, $serverId, $probeManager, $sender, $acknowledger, $spokes): array {
                 $now = CarbonImmutable::now();
-                $spoke = $this->resolveSpoke($actorId, $credential->id, $now);
+                $spoke = $spokes->resolve($actorId, $credential->id, $now);
                 $readyInboxes = array_values(array_unique($validation['ready_inboxes']));
                 $failedProbe = $probeManager->respond($spoke, $validation['probe_response'], $now);
 
@@ -299,18 +301,6 @@ class PollController extends Controller
         $envelope->created_at = CarbonImmutable::createFromFormat('!Y-m-d\TH:i:s\Z', $wireEnvelope['created_at'], 'UTC');
 
         return $envelope;
-    }
-
-    private function resolveSpoke(string $actorId, string $credentialId, CarbonImmutable $now): Spoke
-    {
-        DB::table('spokes')->insertOrIgnore([
-            'actor_id' => $actorId,
-            'credential_id' => $credentialId,
-            'created_at' => $now,
-            'updated_at' => $now,
-        ]);
-
-        return Spoke::query()->where('credential_id', $credentialId)->lockForUpdate()->firstOrFail();
     }
 
     /**

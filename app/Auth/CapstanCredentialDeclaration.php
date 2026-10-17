@@ -26,6 +26,8 @@ final readonly class CapstanCredentialDeclaration implements CredentialDeclarati
 
     public const string POSTMASTER_POLL = 'capstan.postmaster.poll';
 
+    public const string WORK_DRAIN = 'capstan.work.drain';
+
     public function __construct(private ServerIdentity $installation) {}
 
     public function resolveSubject(Request $request): ?Subject
@@ -37,7 +39,7 @@ final readonly class CapstanCredentialDeclaration implements CredentialDeclarati
 
     public function authorize(Credential $credential, ?string $ability, Request $request): bool
     {
-        if (! $request->is('api/v1/artifacts', 'api/v1/poll')) {
+        if (! $request->is('api/v1/artifacts', 'api/v1/poll', 'api/v1/work/*')) {
             return true;
         }
 
@@ -61,6 +63,7 @@ final readonly class CapstanCredentialDeclaration implements CredentialDeclarati
         return [
             $this->profile(self::ARTIFACT_INGEST, $subject, $installation, '/api/v1/artifacts'),
             $this->profile(self::POSTMASTER_POLL, $subject, $installation, '/api/v1/poll'),
+            $this->profile(self::WORK_DRAIN, $subject, $installation, '/api/v1/work'),
         ];
     }
 

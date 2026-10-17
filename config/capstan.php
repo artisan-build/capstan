@@ -35,6 +35,10 @@ return [
         ],
     ],
 
+    'work' => [
+        'lease_seconds' => env('CAPSTAN_WORK_LEASE_SECONDS', 300),
+    ],
+
     'artifacts' => [
         'max_content_bytes' => env('CAPSTAN_ARTIFACT_MAX_CONTENT_BYTES', 1024 * 1024),
         'render_origin' => env('CAPSTAN_ARTIFACT_RENDER_ORIGIN'),
