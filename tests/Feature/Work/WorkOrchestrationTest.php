@@ -434,6 +434,7 @@ test('child budget counts only orchestrator created children and cancels automat
 });
 
 test('signed claimed-turn links expose fixed context and all scoped actions', function (): void {
+    $addressed = capstanUser();
     $parent = orchestrationTask();
     $parent->briefRevisions()->create(['sequence' => 1, 'content' => 'Canonical brief', 'author_actor' => 'supervisor']);
     $child = orchestrationTask($parent);
@@ -473,7 +474,7 @@ test('signed claimed-turn links expose fixed context and all scoped actions', fu
     $post('cancel_item', ['item_id' => $queued['item_id']], 'signed-cancel');
     $post('decide', ['event_id' => $event->id, 'decision' => 'Signed decision', 'rationale' => 'Signed rationale', 'evidence' => ['source' => 'test']], 'signed-decide');
     $post('request_wake', ['key' => 'signed-wake', 'due_at' => now()->addMinute()->toJSON(), 'reason' => 'Signed follow-up'], 'signed-wake');
-    $post('escalate', ['key' => 'signed-question', 'addressed_actor' => 'supervisor', 'question' => 'Signed question?', 'options' => ['Yes'], 'recommendation' => 'Yes'], 'signed-escalate');
+    $post('escalate', ['key' => 'signed-question', 'addressed_actor' => (string) $addressed->id, 'question' => 'Signed question?', 'options' => ['Yes'], 'recommendation' => 'Yes'], 'signed-escalate');
     $finished = $post('finish', ['state' => 'acted', 'content' => 'Signed state'], 'signed-finish');
 
     expect($created['task_id'])->not->toBe($parent->id)
@@ -481,6 +482,150 @@ test('signed claimed-turn links expose fixed context and all scoped actions', fu
         ->and($finished['status'])->toBe('completed')
         ->and(orchestrationSeat($parent)->children_created)->toBe(1)
         ->and(WorkStateRevision::query()->where('work_task_id', $parent->id)->count())->toBe(2);
+});
+
+test('signed child creation enforces canonical intent and team failover defaults before durable effects', function (): void {
+    $team = Team::default();
+    $parent = orchestrationTask();
+    $event = orchestrationEvent($parent, 'signed-child-contract');
+    $turn = orchestrationClaims($parent, orchestrationHost('signed-child-contract-host'))[0];
+    $link = resolve(WorkWorkerLinks::class)->forItem($turn)['orchestrate'];
+    $active = capstanUser();
+    $inactive = capstanUser(['status' => 'inactive']);
+    $spoke = Spoke::query()->create(['actor_id' => (string) $active->id, 'credential_id' => (string) Str::uuid7()]);
+    $orphan = Spoke::query()->create(['actor_id' => '999999999', 'credential_id' => (string) Str::uuid7()]);
+    $post = fn (array $input, string $key) => $this->postJson($link, [
+        'action' => 'create_child', 'input' => array_replace(['under_task_id' => $parent->id, 'title' => 'Child', 'brief' => 'Brief'], $input),
+        'idempotency_key' => $key,
+    ]);
+    $refuse = function (array $input, string $key) use ($post): void {
+        $before = [WorkTask::query()->count(), DB::table('work_brief_revisions')->count(), DB::table('mcp_write_claims')->count()];
+        $post($input, $key)->assertUnprocessable()->assertJsonPath('error.code', 'invalid_orchestration_action');
+        expect([WorkTask::query()->count(), DB::table('work_brief_revisions')->count(), DB::table('mcp_write_claims')->count()])->toBe($before);
+    };
+
+    $refuse(['device_spoke_id' => $spoke->id], 'signed-pin-no-failover');
+    $refuse(['device_spoke_id' => 999999999, 'failover' => true], 'signed-missing-spoke');
+    $refuse(['device_spoke_id' => $orphan->id, 'failover' => true], 'signed-invalid-spoke');
+    $refuse(['user_actor_address' => 'missing'], 'signed-invalid-actor');
+    $refuse(['user_actor_address' => '999999999'], 'signed-missing-actor');
+    $refuse(['user_actor_address' => (string) $inactive->id], 'signed-inactive-actor');
+    $refuse(['brief' => ''], 'signed-empty-brief');
+    $refuse(['brief' => str_repeat('b', 32001)], 'signed-brief-overrun');
+    $refuse(['timebox_minutes' => 0], 'signed-timebox-underrun');
+    $refuse(['timebox_minutes' => 1441], 'signed-timebox-overrun');
+    $refuse(['required_capabilities' => ['duplicate', 'duplicate']], 'signed-capabilities-duplicate');
+    $refuse(['required_capabilities' => [str_repeat('c', 65)]], 'signed-capability-length');
+    $refuse(['required_capabilities' => array_map(fn (int $i): string => 'cap-'.$i, range(1, 26))], 'signed-capabilities-overrun');
+
+    foreach ([false, true] as $default) {
+        $team->update(['default_failover' => $default]);
+        $capabilities = array_map(fn (int $i): string => 'cap-'.$i, range(1, 25));
+        $response = $post([
+            'brief' => str_repeat('b', 32000), 'user_actor_address' => (string) $active->id,
+            'timebox_minutes' => 1440, 'required_capabilities' => $capabilities,
+        ], 'signed-default-'.(int) $default)->assertOk()->assertJsonPath('outcome', 'accepted')->json();
+        $child = WorkTask::query()->findOrFail($response['task_id']);
+        expect($child->failover)->toBe($default)
+            ->and($child->timebox_minutes)->toBe(1440)
+            ->and($child->required_capabilities)->toBe($capabilities)
+            ->and($child->latestBriefRevision()->firstOrFail()->content)->toHaveLength(32000);
+    }
+    expect($event->exists)->toBeTrue();
+});
+
+test('signed fixed turn and decision context paginates completely within live authority', function (): void {
+    $parent = orchestrationTask();
+    orchestrationEvent($parent, 'completed');
+    $host = orchestrationHost('signed-page-host');
+    $completed = orchestrationClaims($parent, $host)[0];
+    resolve(WorkOrchestrationService::class)->turnDone($completed, $completed->fence, $completed->seat_fence, 'Completed', CarbonImmutable::now());
+    $events = collect(range(1, 27))->map(fn (int $index): WorkOrchestrationEvent => orchestrationEvent($parent, 'page-'.$index));
+    $turn = orchestrationClaims($parent, $host)[0];
+    $later = orchestrationEvent($parent, 'outside-fixed-turn');
+    foreach (range(1, 27) as $index) {
+        WorkOrchestrationDecision::query()->create([
+            'work_task_id' => $parent->id, 'triggering_event_id' => $events[0]->id,
+            'decision' => 'Decision '.$index, 'rationale' => 'Rationale '.$index, 'evidence' => ['index' => $index],
+        ]);
+    }
+    $expectedDecisions = WorkOrchestrationDecision::query()->where('work_task_id', $parent->id)->orderBy('id')->pluck('id')->all();
+    $link = resolve(WorkWorkerLinks::class)->forItem($turn)['orchestration'];
+    $first = $this->getJson($link)->assertOk()
+        ->assertJsonCount(25, 'context.events')->assertJsonPath('context.has_more', true)
+        ->assertJsonPath('context.next_cursor', 26)->assertJsonCount(25, 'context.decisions')
+        ->assertJsonPath('context.decisions_has_more', true)->json('context');
+    $second = $this->getJson($link.'&after='.$first['next_cursor'].'&decisions_after='.$first['decisions_next_cursor'])
+        ->assertOk()->assertJsonCount(2, 'context.events')->assertJsonPath('context.has_more', false)
+        ->assertJsonCount(2, 'context.decisions')->assertJsonPath('context.decisions_has_more', false)->json('context');
+
+    expect(array_column([...$first['events'], ...$second['events']], 'id'))->toBe($events->pluck('id')->all())
+        ->and(array_column([...$first['decisions'], ...$second['decisions']], 'id'))->toBe($expectedDecisions)
+        ->and(array_column([...$first['events'], ...$second['events']], 'id'))->not->toContain($later->id);
+    $this->getJson($link.'&after=bogus')->assertUnprocessable();
+    $this->getJson($link.'&after=0')->assertUnprocessable()->assertJsonPath('error.code', 'invalid_cursor');
+    $this->getJson($link.'&after='.($turn->turn_upper_bound + 1))->assertUnprocessable()->assertJsonPath('error.code', 'invalid_cursor');
+
+    $turn->increment('fence');
+    $this->getJson($link.'&after='.$first['next_cursor'])->assertForbidden();
+
+    $expiringParent = orchestrationTask();
+    foreach (range(1, 27) as $index) {
+        orchestrationEvent($expiringParent, 'expiring-'.$index);
+    }
+    $expiring = orchestrationClaims($expiringParent, orchestrationHost('signed-expiring-page'))[0];
+    $expiringLink = resolve(WorkWorkerLinks::class)->forItem($expiring)['orchestration'];
+    $cursor = $this->getJson($expiringLink)->assertOk()->json('context.next_cursor');
+    Date::setTestNow(now()->addSeconds(361));
+    $this->getJson($expiringLink.'&after='.$cursor)->assertForbidden();
+});
+
+test('signed decision evidence bounds and surfaced action limits refuse before durable effects', function (): void {
+    $addressed = capstanUser();
+    $inactive = capstanUser(['status' => 'inactive']);
+    $parent = orchestrationTask();
+    $child = orchestrationTask($parent);
+    $event = orchestrationEvent($parent, 'signed-input-bounds');
+    $turn = orchestrationClaims($parent, orchestrationHost('signed-input-host'))[0];
+    $link = resolve(WorkWorkerLinks::class)->forItem($turn)['orchestrate'];
+    $post = fn (string $action, array $input, string $key) => $this->postJson($link, compact('action', 'input') + ['idempotency_key' => $key]);
+    $validEvidence = ['source' => ['kind' => 'test', 'indexes' => [1, 2, 3]]];
+    $post('decide', ['event_id' => $event->id, 'decision' => 'Proceed', 'rationale' => 'Evidence is bounded', 'evidence' => $validEvidence], 'signed-valid-evidence')
+        ->assertOk()->assertJsonPath('outcome', 'accepted');
+    expect(WorkOrchestrationDecision::query()->latest('created_at')->firstOrFail()->evidence)->toBe($validEvidence);
+
+    $deep = ['value' => true];
+    foreach (range(1, 7) as $level) {
+        $deep = ['level' => $deep];
+    }
+    $invalidEvidence = [
+        'string' => ['value' => str_repeat('x', 8001)],
+        'depth' => $deep,
+        'list-root' => ['first', 'second'],
+        'encoded-bytes' => ['first' => str_repeat('a', 4100), 'second' => str_repeat('b', 4100)],
+    ];
+    foreach ($invalidEvidence as $key => $evidence) {
+        $before = [WorkOrchestrationDecision::query()->count(), DB::table('mcp_write_claims')->count()];
+        $post('decide', ['event_id' => $event->id, 'decision' => 'No', 'rationale' => 'Invalid evidence', 'evidence' => $evidence], 'signed-evidence-'.$key)
+            ->assertUnprocessable()->assertJsonPath('error.code', 'invalid_orchestration_action');
+        expect([WorkOrchestrationDecision::query()->count(), DB::table('mcp_write_claims')->count()])->toBe($before);
+    }
+
+    $post('revise_brief', ['task_id' => $child->id, 'brief' => str_repeat('r', 32000)], 'signed-revise-boundary')->assertOk();
+    $post('steer', ['task_id' => $child->id, 'content' => str_repeat('s', 8000)], 'signed-steer-boundary')->assertOk();
+    foreach ([
+        ['revise_brief', ['task_id' => $child->id, 'brief' => str_repeat('r', 32001)], 'signed-revise-over'],
+        ['steer', ['task_id' => $child->id, 'content' => str_repeat('s', 8001)], 'signed-steer-over'],
+        ['escalate', ['key' => 'missing', 'addressed_actor' => '999999999', 'question' => 'Missing?', 'options' => ['No'], 'recommendation' => 'No'], 'signed-escalate-missing'],
+        ['escalate', ['key' => 'inactive', 'addressed_actor' => (string) $inactive->id, 'question' => 'Inactive?', 'options' => ['No'], 'recommendation' => 'No'], 'signed-escalate-inactive'],
+    ] as [$action, $input, $key]) {
+        $before = [DB::table('work_brief_revisions')->count(), DB::table('work_steers')->count(), WorkEscalation::query()->count(), WorkItem::query()->count(), DB::table('mcp_write_claims')->count()];
+        $post($action, $input, $key)->assertUnprocessable()->assertJsonPath('error.code', 'invalid_orchestration_action');
+        expect([DB::table('work_brief_revisions')->count(), DB::table('work_steers')->count(), WorkEscalation::query()->count(), WorkItem::query()->count(), DB::table('mcp_write_claims')->count()])->toBe($before);
+    }
+    $post('escalate', ['key' => 'valid', 'addressed_actor' => (string) $addressed->id, 'question' => 'Valid?', 'options' => ['Yes'], 'recommendation' => 'Yes'], 'signed-escalate-valid')
+        ->assertOk()->assertJsonPath('outcome', 'accepted');
+    expect(WorkEscalation::query()->where('request_key', 'valid')->sole()->addressed_actor)->toBe((string) $addressed->id);
 });
 
 test('signed queue replay preserves the final child slot and overrun raises one circuit breaker', function (): void {

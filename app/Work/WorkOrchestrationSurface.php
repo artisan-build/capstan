@@ -45,7 +45,7 @@ final readonly class WorkOrchestrationSurface
     }
 
     /** @return array<string, mixed> */
-    public function read(WorkOrchestrationContext $context, int $after, CarbonImmutable $now, ?string $decisionsAfter = null): array
+    public function read(WorkOrchestrationContext $context, ?int $after, CarbonImmutable $now, ?string $decisionsAfter = null): array
     {
         return $this->capability->context($context, $after, $now, $decisionsAfter);
     }
@@ -112,13 +112,13 @@ final readonly class WorkOrchestrationSurface
                 'required_capabilities' => ['sometimes', 'array', 'list', 'max:25'], 'required_capabilities.*' => ['string', 'min:1', 'max:64', 'distinct'],
                 'timebox_minutes' => ['sometimes', 'integer', 'min:1', 'max:1440'], 'workflow_ref' => ['sometimes', 'string', 'max:2048'],
             ],
-            'revise_brief' => ['task_id' => ['required', 'uuid'], 'brief' => ['required', 'string', 'min:1', 'max:100000']],
+            'revise_brief' => ['task_id' => ['required', 'uuid'], 'brief' => ['required', 'string', 'min:1', 'max:32000']],
             'queue_item' => ['task_id' => ['required', 'uuid'], 'role' => ['required', 'string', 'min:1', 'max:64', Rule::notIn([WorkItem::ROLE_HUMAN, WorkItem::ROLE_ORCHESTRATOR])]],
             'cancel_item' => ['item_id' => ['required', 'uuid']],
-            'steer' => ['task_id' => ['required', 'uuid'], 'item_id' => ['sometimes', 'uuid'], 'content' => ['required', 'string', 'min:1', 'max:10000']],
+            'steer' => ['task_id' => ['required', 'uuid'], 'item_id' => ['sometimes', 'uuid'], 'content' => ['required', 'string', 'min:1', 'max:8000']],
             'decide' => ['event_id' => ['required', 'uuid'], 'decision' => ['required', 'string', 'min:1', 'max:10000'], 'rationale' => ['required', 'string', 'min:1', 'max:10000'], 'evidence' => ['required', 'array', 'max:25']],
             'request_wake' => ['key' => ['required', 'string', 'min:1', 'max:255'], 'due_at' => ['required', 'date'], 'reason' => ['required', 'string', 'min:1', 'max:2000']],
-            'escalate' => ['key' => ['required', 'string', 'min:1', 'max:255'], 'addressed_actor' => ['required', 'string', 'min:1', 'max:255'], 'question' => ['required', 'string', 'min:1', 'max:10000'], 'options' => ['required', 'array', 'list', 'min:1', 'max:10'], 'options.*' => ['required', 'string', 'min:1', 'max:2000'], 'recommendation' => ['required', 'string', 'min:1', 'max:2000']],
+            'escalate' => ['key' => ['required', 'string', 'min:1', 'max:255'], 'addressed_actor' => ['required', 'string', 'regex:/\A[1-9][0-9]{0,18}\z/D'], 'question' => ['required', 'string', 'min:1', 'max:10000'], 'options' => ['required', 'array', 'list', 'min:1', 'max:10'], 'options.*' => ['required', 'string', 'min:1', 'max:2000'], 'recommendation' => ['required', 'string', 'min:1', 'max:2000']],
             'finish' => ['state' => ['required', Rule::in([WorkItemState::Acted->value, WorkItemState::Failed->value])], 'content' => ['sometimes', 'string', 'max:100000']],
         };
         $validator = Validator::make($input, $rules);
@@ -147,6 +147,9 @@ final readonly class WorkOrchestrationSurface
             $validated += ['required_capabilities' => [], 'timebox_minutes' => 30, 'failover' => (bool) $team->default_failover];
         }
         if ($action === 'decide' && (! $this->safeEvidence($validated['evidence']) || strlen(JsonCanonicalizer::encode($validated['evidence'])) > 8000)) {
+            throw $this->invalid();
+        }
+        if ($action === 'escalate' && ! User::query()->whereKey($validated['addressed_actor'])->where('status', 'active')->exists()) {
             throw $this->invalid();
         }
 

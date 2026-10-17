@@ -9,6 +9,7 @@ use App\Models\Team;
 use App\Models\WorkBriefRevision;
 use App\Models\WorkEscalation;
 use App\Models\WorkItem;
+use App\Models\WorkOrchestrationDecision;
 use App\Models\WorkOrchestrationEvent;
 use App\Models\WorkOrchestratorSeat;
 use App\Models\WorkStateRevision;
@@ -483,6 +484,170 @@ test('interactive MCP context and exact action envelope exercise the full subtre
     ], $token);
     expect($refused)->toBe(['outcome' => 'refused', 'reason' => 'orchestration_forbidden'])
         ->and(WorkItem::query()->count())->toBe($before);
+});
+
+test('MCP child orchestration enforces canonical intent and team defaults before durable effects', function (): void {
+    $user = capstanUser(['role' => 'owner']);
+    $token = workMcpToken($user);
+    $team = workMcpTeam(['pool_work' => true]);
+    $parent = WorkTask::query()->findOrFail(workMcpCreate($team, $token)['task']['id']);
+    resolve(WorkOrchestrationService::class)->event($parent, 'mcp-child-contract', 'test_event');
+    $taken = workMcpResult('take_seat', [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'session_ref' => 'mcp-child-contract',
+        'idempotency_key' => 'mcp-child-contract-take',
+    ], $token);
+    $base = [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'spoke_id' => $taken['seat']['spoke_id'],
+        'seat_fence' => $taken['seat']['seat_fence'], 'session_ref' => 'mcp-child-contract', 'action' => 'create_child',
+    ];
+    $active = capstanUser();
+    $inactive = capstanUser(['status' => 'inactive']);
+    $spoke = Spoke::query()->create(['actor_id' => (string) $active->id, 'credential_id' => (string) Str::uuid7()]);
+    $orphan = Spoke::query()->create(['actor_id' => '999999999', 'credential_id' => (string) Str::uuid7()]);
+    $call = fn (array $extra, string $key) => workMcpCall('orchestrate', $base + [
+        'input' => array_replace(['under_task_id' => $parent->id, 'title' => 'Child', 'brief' => 'Brief'], $extra),
+        'idempotency_key' => $key,
+    ], $token);
+    $refuse = function (array $extra, string $key) use ($call): void {
+        $before = [WorkTask::query()->count(), WorkBriefRevision::query()->count(), DB::table('mcp_write_claims')->count()];
+        $response = $call($extra, $key);
+        expect($response->status() !== 200 || $response->json('result.isError') === true || $response->json('error') !== null)->toBeTrue();
+        expect([WorkTask::query()->count(), WorkBriefRevision::query()->count(), DB::table('mcp_write_claims')->count()])->toBe($before);
+    };
+
+    $refuse(['device_spoke_id' => $spoke->id], 'mcp-pin-no-failover');
+    $refuse(['device_spoke_id' => 999999999, 'failover' => true], 'mcp-missing-spoke');
+    $refuse(['device_spoke_id' => $orphan->id, 'failover' => true], 'mcp-invalid-spoke');
+    $refuse(['user_actor_address' => 'missing'], 'mcp-invalid-actor');
+    $refuse(['user_actor_address' => '999999999'], 'mcp-missing-actor');
+    $refuse(['user_actor_address' => (string) $inactive->id], 'mcp-inactive-actor');
+    $refuse(['brief' => ''], 'mcp-empty-brief');
+    $refuse(['brief' => str_repeat('b', 32001)], 'mcp-brief-overrun');
+    $refuse(['timebox_minutes' => 0], 'mcp-timebox-underrun');
+    $refuse(['timebox_minutes' => 1441], 'mcp-timebox-overrun');
+    $refuse(['required_capabilities' => ['duplicate', 'duplicate']], 'mcp-capabilities-duplicate');
+    $refuse(['required_capabilities' => [str_repeat('c', 65)]], 'mcp-capability-length');
+    $refuse(['required_capabilities' => array_map(fn (int $i): string => 'cap-'.$i, range(1, 26))], 'mcp-capabilities-overrun');
+
+    foreach ([false, true] as $default) {
+        $team->update(['default_failover' => $default]);
+        $capabilities = array_map(fn (int $i): string => 'cap-'.$i, range(1, 25));
+        $result = workMcpResult('orchestrate', $base + [
+            'input' => [
+                'under_task_id' => $parent->id, 'title' => 'Boundary child', 'brief' => str_repeat('b', 32000),
+                'user_actor_address' => (string) $active->id, 'timebox_minutes' => 1440, 'required_capabilities' => $capabilities,
+            ],
+            'idempotency_key' => 'mcp-default-'.(int) $default,
+        ], $token);
+        $child = WorkTask::query()->findOrFail($result['task_id']);
+        expect($child->failover)->toBe($default)->and($child->timebox_minutes)->toBe(1440)
+            ->and($child->required_capabilities)->toBe($capabilities)
+            ->and($child->latestBriefRevision()->firstOrFail()->content)->toHaveLength(32000);
+    }
+});
+
+test('MCP decision context paginates deterministically without omissions or duplicates', function (): void {
+    $user = capstanUser(['role' => 'owner']);
+    $token = workMcpToken($user);
+    $team = workMcpTeam(['pool_work' => true]);
+    $parent = WorkTask::query()->findOrFail(workMcpCreate($team, $token)['task']['id']);
+    $event = resolve(WorkOrchestrationService::class)->event($parent, 'mcp-decision-pages', 'test_event');
+    foreach (range(1, 27) as $index) {
+        WorkOrchestrationDecision::query()->create([
+            'work_task_id' => $parent->id, 'triggering_event_id' => $event->id,
+            'decision' => 'Decision '.$index, 'rationale' => 'Rationale '.$index, 'evidence' => ['index' => $index],
+        ]);
+    }
+    $expected = WorkOrchestrationDecision::query()->where('work_task_id', $parent->id)->orderBy('id')->pluck('id')->all();
+    $first = workMcpResult('take_seat', [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'session_ref' => 'mcp-decision-pages',
+        'idempotency_key' => 'mcp-decision-page-one',
+    ], $token);
+    expect($first['context']['decisions'])->toHaveCount(25)
+        ->and($first['context']['decisions_has_more'])->toBeTrue()
+        ->and($first['context']['decisions_next_cursor'])->toBe($expected[24]);
+    $second = workMcpResult('take_seat', [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'session_ref' => 'mcp-decision-pages',
+        'decisions_after' => $first['context']['decisions_next_cursor'],
+        'idempotency_key' => 'mcp-decision-page-two',
+    ], $token);
+    expect($second['context']['decisions'])->toHaveCount(2)
+        ->and($second['context']['decisions_has_more'])->toBeFalse()
+        ->and(array_column([...$first['context']['decisions'], ...$second['context']['decisions']], 'id'))->toBe($expected);
+});
+
+test('MCP evidence action and addressed-user bounds refuse before durable effects', function (): void {
+    $user = capstanUser(['role' => 'owner']);
+    $addressed = capstanUser();
+    $inactive = capstanUser(['status' => 'inactive']);
+    $token = workMcpToken($user);
+    $team = workMcpTeam(['pool_work' => true]);
+    $parent = WorkTask::query()->findOrFail(workMcpCreate($team, $token)['task']['id']);
+    $child = WorkTask::query()->create([
+        'team_id' => $team->id, 'parent_task_id' => $parent->id, 'title' => 'Bounds child',
+        'required_capabilities' => [], 'timebox_minutes' => 30, 'creator_actor' => (string) $user->id,
+    ]);
+    $event = resolve(WorkOrchestrationService::class)->event($parent, 'mcp-input-bounds', 'test_event');
+    $taken = workMcpResult('take_seat', [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'session_ref' => 'mcp-input-bounds',
+        'idempotency_key' => 'mcp-input-bounds-take',
+    ], $token);
+    $base = [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'spoke_id' => $taken['seat']['spoke_id'],
+        'seat_fence' => $taken['seat']['seat_fence'], 'session_ref' => 'mcp-input-bounds',
+    ];
+    $call = fn (string $action, array $input, string $key) => workMcpCall('orchestrate', $base + compact('action', 'input') + ['idempotency_key' => $key], $token);
+    $result = workMcpResult('orchestrate', $base + [
+        'action' => 'decide',
+        'input' => ['event_id' => $event->id, 'decision' => 'Proceed', 'rationale' => 'Structured', 'evidence' => ['source' => ['kind' => 'test', 'indexes' => [1, 2, 3]]]],
+        'idempotency_key' => 'mcp-valid-evidence',
+    ], $token);
+    expect($result['outcome'])->toBe('accepted')
+        ->and(WorkOrchestrationDecision::query()->latest('created_at')->firstOrFail()->evidence)->toBe(['source' => ['kind' => 'test', 'indexes' => [1, 2, 3]]]);
+
+    $deep = ['value' => true];
+    foreach (range(1, 7) as $level) {
+        $deep = ['level' => $deep];
+    }
+    foreach ([
+        'string' => ['value' => str_repeat('x', 8001)],
+        'depth' => $deep,
+        'list-root' => ['first', 'second'],
+        'encoded-bytes' => ['first' => str_repeat('a', 4100), 'second' => str_repeat('b', 4100)],
+    ] as $key => $evidence) {
+        $before = [WorkOrchestrationDecision::query()->count(), DB::table('mcp_write_claims')->count()];
+        $response = $call('decide', ['event_id' => $event->id, 'decision' => 'No', 'rationale' => 'Invalid', 'evidence' => $evidence], 'mcp-evidence-'.$key);
+        expect($response->status() !== 200 || $response->json('result.isError') === true || $response->json('error') !== null)->toBeTrue();
+        expect([WorkOrchestrationDecision::query()->count(), DB::table('mcp_write_claims')->count()])->toBe($before);
+    }
+
+    expect(workMcpResult('orchestrate', $base + ['action' => 'revise_brief', 'input' => ['task_id' => $child->id, 'brief' => str_repeat('r', 32000)], 'idempotency_key' => 'mcp-revise-boundary'], $token)['outcome'])->toBe('accepted');
+    expect(workMcpResult('orchestrate', $base + ['action' => 'steer', 'input' => ['task_id' => $child->id, 'content' => str_repeat('s', 8000)], 'idempotency_key' => 'mcp-steer-boundary'], $token)['outcome'])->toBe('accepted');
+    foreach ([
+        ['revise_brief', ['task_id' => $child->id, 'brief' => str_repeat('r', 32001)], 'mcp-revise-over'],
+        ['steer', ['task_id' => $child->id, 'content' => str_repeat('s', 8001)], 'mcp-steer-over'],
+        ['escalate', ['key' => 'missing', 'addressed_actor' => '999999999', 'question' => 'Missing?', 'options' => ['No'], 'recommendation' => 'No'], 'mcp-escalate-missing'],
+        ['escalate', ['key' => 'inactive', 'addressed_actor' => (string) $inactive->id, 'question' => 'Inactive?', 'options' => ['No'], 'recommendation' => 'No'], 'mcp-escalate-inactive'],
+    ] as [$action, $input, $key]) {
+        $before = [WorkBriefRevision::query()->count(), WorkSteer::query()->count(), WorkEscalation::query()->count(), WorkItem::query()->count(), DB::table('mcp_write_claims')->count()];
+        $response = $call($action, $input, $key);
+        expect($response->status() !== 200 || $response->json('result.isError') === true || $response->json('error') !== null)->toBeTrue();
+        expect([WorkBriefRevision::query()->count(), WorkSteer::query()->count(), WorkEscalation::query()->count(), WorkItem::query()->count(), DB::table('mcp_write_claims')->count()])->toBe($before);
+    }
+    expect(workMcpResult('orchestrate', $base + [
+        'action' => 'escalate',
+        'input' => ['key' => 'valid', 'addressed_actor' => (string) $addressed->id, 'question' => 'Valid?', 'options' => ['Yes'], 'recommendation' => 'Yes'],
+        'idempotency_key' => 'mcp-escalate-valid',
+    ], $token)['outcome'])->toBe('accepted');
+    expect(WorkEscalation::query()->where('request_key', 'valid')->sole()->addressed_actor)->toBe((string) $addressed->id);
+
+    $definition = collect(workMcpList($token))->firstWhere('name', 'orchestrate')['inputSchema']['properties']['input']['properties'];
+    expect($definition['brief']['maxLength'])->toBe(32000)
+        ->and($definition['title']['maxLength'])->toBe(255)
+        ->and($definition['addressed_actor']['maxLength'])->toBe(19)
+        ->and($definition['timebox_minutes']['maximum'])->toBe(1440)
+        ->and($definition['required_capabilities']['maxItems'])->toBe(25)
+        ->and($definition['options']['maxItems'])->toBe(10);
 });
 
 test('interactive take respects a non failover device pin', function (): void {

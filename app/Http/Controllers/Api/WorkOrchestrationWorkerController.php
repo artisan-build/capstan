@@ -27,7 +27,7 @@ final class WorkOrchestrationWorkerController extends Controller
                 'decisions_after' => ['sometimes', 'uuid'],
             ])->validate();
 
-            return new JsonResponse(['context' => $surface->read($context, (int) ($validated['after'] ?? 0), CarbonImmutable::now(), $validated['decisions_after'] ?? null)]);
+            return new JsonResponse(['context' => $surface->read($context, isset($validated['after']) ? (int) $validated['after'] : null, CarbonImmutable::now(), $validated['decisions_after'] ?? null)]);
         }
 
         $body = json_decode($request->getContent(), true);
@@ -37,7 +37,7 @@ final class WorkOrchestrationWorkerController extends Controller
             && is_string($body['idempotency_key'] ?? null) && $body['idempotency_key'] !== '' && strlen($body['idempotency_key']) <= 255, 422);
 
         // Prove the signed authority before acquiring a replay record; the action proves it again under locks.
-        $surface->read($context, 0, CarbonImmutable::now());
+        $surface->read($context, null, CarbonImmutable::now());
         $surface->validate($body['action'], $body['input']);
         $result = $writes->run(
             new OwnerSubject('work_turn', $item.':'.$context->itemFence, $context->actorId),

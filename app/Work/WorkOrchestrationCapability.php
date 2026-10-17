@@ -67,17 +67,17 @@ final readonly class WorkOrchestrationCapability
     }
 
     /** @return array<string, mixed> */
-    public function context(WorkOrchestrationContext $context, int $after, CarbonImmutable $now, ?string $decisionsAfter = null): array
+    public function context(WorkOrchestrationContext $context, ?int $after, CarbonImmutable $now, ?string $decisionsAfter = null): array
     {
         return $this->authorised($context, $now, function (WorkTask $parent, WorkOrchestratorSeat $seat, ?WorkItem $turn) use ($after, $decisionsAfter): array {
             $brief = $parent->latestBriefRevision()->first();
             $state = WorkStateRevision::query()->where('work_task_id', $parent->id)->orderByDesc('sequence')->first();
             $floor = $turn instanceof WorkItem ? (int) ($turn->turn_cursor ?? $seat->completed_cursor) : $seat->completed_cursor;
             $upper = $turn instanceof WorkItem ? (int) ($turn->turn_upper_bound ?? $seat->event_sequence) : $seat->event_sequence;
-            if ($after > $upper || ($turn instanceof WorkItem && $after !== 0 && $after < $floor)) {
+            if ($after !== null && ($after > $upper || $after < $floor)) {
                 throw new ApiErrorException(422, 'invalid_cursor', 'The orchestration cursor is outside the authorised interval.');
             }
-            $lower = $turn instanceof WorkItem && $after === 0 ? $floor : max($floor, $after);
+            $lower = $after ?? $floor;
             $events = WorkOrchestrationEvent::query()->where('work_task_id', $parent->id)
                 ->where('sequence', '>', $lower)->where('sequence', '<=', $upper)->orderBy('sequence')->limit(26)->get();
             $decisionQuery = WorkOrchestrationDecision::query()->where('work_task_id', $parent->id);
