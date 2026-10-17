@@ -431,6 +431,73 @@ test('interactive MCP seats renew for one credential exclude drains expose bound
     ])->assertOk()->assertJsonCount(1, 'items');
 });
 
+test('cold interactive takes clamp default cursors after a completed turn without accepting invalid cursors', function (): void {
+    $user = capstanUser(['role' => 'owner']);
+    $token = workMcpToken($user);
+    $team = workMcpTeam(['pool_work' => true]);
+    $parent = WorkTask::query()->findOrFail(workMcpCreate($team, $token)['task']['id']);
+    resolve(WorkOrchestrationService::class)->event($parent, 'completed-turn', 'test_event', ['step' => 'completed']);
+
+    $initial = workMcpResult('take_seat', [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'session_ref' => 'completed-turn',
+        'idempotency_key' => 'completed-turn-take',
+    ], $token);
+    workMcpResult('orchestrate', [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'spoke_id' => $initial['seat']['spoke_id'],
+        'seat_fence' => $initial['seat']['seat_fence'], 'session_ref' => 'completed-turn',
+        'action' => 'finish', 'input' => ['state' => 'acted', 'content' => 'Completed state'],
+        'idempotency_key' => 'completed-turn-finish',
+    ], $token);
+    workMcpResult('release_seat', [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'spoke_id' => $initial['seat']['spoke_id'],
+        'seat_fence' => $initial['seat']['seat_fence'], 'idempotency_key' => 'completed-turn-release',
+    ], $token);
+
+    $later = resolve(WorkOrchestrationService::class)->event($parent, 'after-completed-turn', 'test_event', ['step' => 'later']);
+    $released = WorkOrchestratorSeat::query()->where('work_task_id', $parent->id)->sole();
+    $aboveUpper = [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'session_ref' => 'invalid-cold-take',
+        'after' => $released->event_sequence + 1, 'idempotency_key' => 'invalid-cold-take',
+    ];
+    expect(workMcpResult('take_seat', $aboveUpper, $token))
+        ->toBe(['outcome' => 'refused', 'reason' => 'invalid_cursor'])
+        ->and(workMcpResult('take_seat', $aboveUpper, $token))
+        ->toBe(['outcome' => 'refused', 'reason' => 'invalid_cursor']);
+    $afterRefusal = $released->fresh();
+    expect($afterRefusal->fence)->toBe($released->fence)
+        ->and($afterRefusal->holder_actor)->toBeNull()
+        ->and($afterRefusal->holder_spoke_id)->toBeNull()
+        ->and($afterRefusal->session_ref)->toBeNull()
+        ->and($afterRefusal->interactive)->toBeFalse();
+
+    $omitted = workMcpResult('take_seat', [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'session_ref' => 'omitted-cold-take',
+        'idempotency_key' => 'omitted-cold-take',
+    ], $token);
+    expect($omitted['outcome'])->toBe('accepted')
+        ->and($omitted['seat']['cursor'])->toBe(1)
+        ->and($omitted['events'])->toHaveCount(1)
+        ->and($omitted['events'][0]['id'])->toBe($later->id)
+        ->and($omitted['context']['cursor'])->toBe(1)
+        ->and($omitted['context']['events'])->toHaveCount(1)
+        ->and($omitted['context']['events'][0]['id'])->toBe($later->id);
+    workMcpResult('release_seat', [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'spoke_id' => $omitted['seat']['spoke_id'],
+        'seat_fence' => $omitted['seat']['seat_fence'], 'idempotency_key' => 'omitted-cold-release',
+    ], $token);
+
+    $explicitZero = workMcpResult('take_seat', [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'session_ref' => 'zero-cold-take',
+        'after' => 0, 'idempotency_key' => 'zero-cold-take',
+    ], $token);
+    expect($explicitZero['outcome'])->toBe('accepted')
+        ->and($explicitZero['events'])->toHaveCount(1)
+        ->and($explicitZero['events'][0]['id'])->toBe($later->id)
+        ->and($explicitZero['context']['cursor'])->toBe(1)
+        ->and($explicitZero['context']['events'])->toHaveCount(1)
+        ->and($explicitZero['context']['events'][0]['id'])->toBe($later->id);
+});
+
 test('interactive MCP context and exact action envelope exercise the full subtree capability with replay fencing', function (): void {
     $user = capstanUser(['role' => 'owner']);
     $token = workMcpToken($user);

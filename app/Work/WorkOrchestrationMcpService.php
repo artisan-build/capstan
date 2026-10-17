@@ -185,7 +185,7 @@ final readonly class WorkOrchestrationMcpService
             'has_more' => $events->count() > 25,
             'context' => $this->surface->read(
                 $this->surface->interactive($parent->id, $spoke->actor_id, $spoke->id, $seat->fence, (string) $seat->session_ref),
-                $after,
+                $lower,
                 $now,
                 $decisionsAfter,
             ),
