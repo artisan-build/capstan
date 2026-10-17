@@ -449,6 +449,8 @@ namespace App\Models{
  * @property CarbonImmutable|null $notified_at
  * @property \Carbon\CarbonImmutable|null $created_at
  * @property \Carbon\CarbonImmutable|null $updated_at
+ * @property-read \App\Models\WorkItem $workItem
+ * @property-read \App\Models\WorkTask $workTask
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation query()

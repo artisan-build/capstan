@@ -452,11 +452,9 @@ test('interactive MCP context and exact action envelope exercise the full subtre
         'team_id' => $team->id, 'task_id' => $parent->id, 'spoke_id' => $taken['seat']['spoke_id'],
         'seat_fence' => $taken['seat']['seat_fence'], 'session_ref' => 'interactive-actions',
     ];
-    $call = function (string $action, array $input, string $key) use ($base, $token): array {
-        return workMcpResult('orchestrate', $base + [
-            'action' => $action, 'input' => $input, 'idempotency_key' => $key,
-        ], $token);
-    };
+    $call = (fn (string $action, array $input, string $key): array => workMcpResult('orchestrate', $base + [
+        'action' => $action, 'input' => $input, 'idempotency_key' => $key,
+    ], $token));
     $created = $call('create_child', ['under_task_id' => $parent->id, 'title' => 'Created child', 'brief' => 'Created brief'], 'interactive-create');
     $call('revise_brief', ['task_id' => $child->id, 'brief' => 'Revised child'], 'interactive-revise');
     $queued = $call('queue_item', ['task_id' => $child->id, 'role' => 'builder'], 'interactive-queue');

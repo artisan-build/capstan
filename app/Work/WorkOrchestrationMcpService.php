@@ -203,7 +203,7 @@ final readonly class WorkOrchestrationMcpService
             'task_id' => $escalation->work_task_id,
             'item_id' => $escalation->work_item_id,
             'question' => $escalation->question,
-            'options' => is_array($options) ? array_values(array_filter($options, 'is_string')) : [],
+            'options' => is_array($options) ? array_values(array_filter($options, is_string(...))) : [],
             'recommendation' => is_string($recommendation) ? $recommendation : '',
             'answer' => $escalation->answer,
             'answered_at' => $escalation->answered_at?->toJSON(),

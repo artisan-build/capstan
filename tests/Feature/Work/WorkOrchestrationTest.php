@@ -461,10 +461,8 @@ test('signed claimed-turn links expose fixed context and all scoped actions', fu
         ->assertJsonPath('context.decisions.0.decision', 'Prior choice')
         ->assertJsonCount(1, 'context.events')
         ->assertJsonPath('context.events.0.id', $event->id);
-    $post = function (string $action, array $input, string $key) use ($links): array {
-        return $this->postJson($links['orchestrate'], ['action' => $action, 'input' => $input, 'idempotency_key' => $key])
-            ->assertOk()->assertJsonPath('outcome', 'accepted')->json();
-    };
+    $post = (fn (string $action, array $input, string $key): array => $this->postJson($links['orchestrate'], ['action' => $action, 'input' => $input, 'idempotency_key' => $key])
+        ->assertOk()->assertJsonPath('outcome', 'accepted')->json());
     $created = $post('create_child', ['under_task_id' => $parent->id, 'title' => 'Signed child', 'brief' => 'Signed brief'], 'signed-create');
     $post('revise_brief', ['task_id' => $child->id, 'brief' => 'Signed revision'], 'signed-revise');
     $queued = $post('queue_item', ['task_id' => $child->id, 'role' => 'builder'], 'signed-queue');
