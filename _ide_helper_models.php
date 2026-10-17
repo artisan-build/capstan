@@ -331,6 +331,7 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke query()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereActorId($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereCredentialBacked($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereCredentialId($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereId($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereLastCursor($value)
