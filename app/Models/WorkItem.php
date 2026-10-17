@@ -34,6 +34,8 @@ use InvalidArgumentException;
  * @property-read WorkBriefRevision|null $fetchedBriefRevision
  * @property-read Collection<int, WorkItemTransition> $transitions
  * @property-read Collection<int, WorkMilestone> $milestones
+ *
+ * @mixin IdeHelperWorkItem
  */
 class WorkItem extends Model
 {
@@ -116,7 +118,7 @@ class WorkItem extends Model
     /** @return HasMany<WorkItemTransition, $this> */
     public function transitions(): HasMany
     {
-        return $this->hasMany(WorkItemTransition::class)->orderBy('occurred_at');
+        return $this->hasMany(WorkItemTransition::class)->oldest('occurred_at');
     }
 
     /** @return HasMany<WorkMilestone, $this> */

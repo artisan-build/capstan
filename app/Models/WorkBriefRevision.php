@@ -17,6 +17,8 @@ use LogicException;
  * @property CarbonImmutable $created_at
  * @property CarbonImmutable $updated_at
  * @property-read WorkTask $workTask
+ *
+ * @mixin IdeHelperWorkBriefRevision
  */
 class WorkBriefRevision extends Model
 {

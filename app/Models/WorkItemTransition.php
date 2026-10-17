@@ -21,6 +21,8 @@ use LogicException;
  * @property CarbonImmutable $created_at
  * @property CarbonImmutable $updated_at
  * @property-read WorkItem $workItem
+ *
+ * @mixin IdeHelperWorkItemTransition
  */
 class WorkItemTransition extends Model
 {
