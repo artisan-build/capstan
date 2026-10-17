@@ -6,6 +6,7 @@ use App\Features\Work;
 use App\Mcp\DurableWriteCoordinator;
 use App\Mcp\OwnerSubjectResolver;
 use App\Mcp\ToolResponse;
+use App\Mcp\UnsupportedMcpPrincipal;
 use App\Models\Team;
 use App\Work\WorkOrchestrationMcpService;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
@@ -201,7 +202,7 @@ abstract class WorkOrchestrationTool extends CapstanTool
             return Response::error('Work team is unavailable.');
         }
         if ($owner->credentialId === null) {
-            throw new JsonRpcException('This MCP principal is not supported.', -32001);
+            throw new UnsupportedMcpPrincipal;
         }
         if ($this->name() === 'orchestrate') {
             $work->validateAction($input['action'], $input['input']);

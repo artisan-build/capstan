@@ -39,7 +39,7 @@
                         @endif
                     @endif
 
-                    <flux:sidebar.item icon="layout-grid" href="/bfc/ui">
+                    <flux:sidebar.item data-testid="account-navigation" icon="layout-grid" :href="route('bfc.ui.home')">
                         {{ __('Account') }}
                     </flux:sidebar.item>
                 </flux:sidebar.group>
@@ -92,7 +92,7 @@
                     <flux:menu.separator />
 
                     <flux:menu.radio.group>
-                        <flux:menu.item href="/bfc/ui" icon="cog">
+                        <flux:menu.item data-testid="mobile-settings-navigation" :href="route('bfc.ui.home')" icon="cog">
                             {{ __('Settings') }}
                         </flux:menu.item>
                     </flux:menu.radio.group>
