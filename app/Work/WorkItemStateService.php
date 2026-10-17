@@ -39,14 +39,14 @@ class WorkItemStateService
 
     public function claim(
         WorkItem $item,
-        string $claimantSpokeAddress,
+        int $claimantSpokeId,
         string $claimantActor,
         CarbonImmutable $leaseUntil,
         string $actorKind,
         string $actorId,
         ?CarbonImmutable $at = null,
     ): WorkItem {
-        return DB::transaction(function () use ($item, $claimantSpokeAddress, $claimantActor, $leaseUntil, $actorKind, $actorId, $at): WorkItem {
+        return DB::transaction(function () use ($item, $claimantSpokeId, $claimantActor, $leaseUntil, $actorKind, $actorId, $at): WorkItem {
             $locked = $this->lock($item);
 
             if ($locked->state !== WorkItemState::Queued) {
@@ -54,7 +54,7 @@ class WorkItemStateService
             }
 
             $occurredAt = $at ?? CarbonImmutable::now();
-            $locked->claimant_spoke_address = $claimantSpokeAddress;
+            $locked->claimant_spoke_id = $claimantSpokeId;
             $locked->claimant_actor = $claimantActor;
             $locked->lease_until = $leaseUntil;
             $locked->claimed_at = $occurredAt;
@@ -109,7 +109,7 @@ class WorkItemStateService
             }
 
             $locked->attempts++;
-            $locked->claimant_spoke_address = null;
+            $locked->claimant_spoke_id = null;
             $locked->claimant_actor = null;
             $locked->lease_until = null;
             $locked->claimed_at = null;

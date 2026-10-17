@@ -1,11 +1,13 @@
 <?php
 
 use App\Enums\WorkItemState;
+use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkItem;
 use App\Models\WorkTask;
 use App\Work\WorkItemStateService;
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Str;
 
 /** @param array<string, mixed> $attributes */
 function workStateItem(array $attributes = []): WorkItem
@@ -21,14 +23,24 @@ function workStateItem(array $attributes = []): WorkItem
     return $task->items()->create(array_replace(['role' => 'builder'], $attributes));
 }
 
+function workStateSpoke(): Spoke
+{
+    return Spoke::query()->create([
+        'actor_id' => 'state-spoke-'.Str::random(8),
+        'credential_id' => (string) Str::uuid7(),
+        'name' => 'State service spoke',
+    ]);
+}
+
 test('the normal transition graph appends exactly one matching event per change', function (): void {
     $service = resolve(WorkItemStateService::class);
     $item = workStateItem();
+    $spoke = workStateSpoke();
     $at = CarbonImmutable::parse('2026-10-17 12:00:00 UTC');
 
     $item = $service->claim(
         $item,
-        'spoke@server',
+        $spoke->id,
         'worker@test',
         $at->addMinutes(10),
         'spoke',
@@ -42,6 +54,7 @@ test('the normal transition graph appends exactly one matching event per change'
     $events = $item->transitions()->get();
 
     expect($item->state)->toBe(WorkItemState::Acted)
+        ->and($item->claimantSpoke?->is($spoke))->toBeTrue()
         ->and($events)->toHaveCount(4)
         ->and($events->pluck('from_state')->all())->toBe([
             WorkItemState::Queued,
@@ -115,13 +128,12 @@ test('release requeues once clears ownership and retains bounded progress', func
     $service = resolve(WorkItemStateService::class);
     $item = workStateItem([
         'state' => WorkItemState::Routed,
-        'claimant_spoke_address' => 'spoke@server',
+        'claimant_spoke_id' => 987654,
         'claimant_actor' => 'worker@test',
         'lease_until' => now()->addMinute(),
         'claimed_at' => now()->subMinute(),
         'fence' => 8,
         'attempts' => 2,
-        'fetched_brief_revision' => 3,
         'last_progress' => str_repeat('p', 2000),
         'stalled_at' => now(),
     ]);
@@ -130,12 +142,11 @@ test('release requeues once clears ownership and retains bounded progress', func
 
     expect($item->state)->toBe(WorkItemState::Queued)
         ->and($item->attempts)->toBe(3)
-        ->and($item->claimant_spoke_address)->toBeNull()
+        ->and($item->claimant_spoke_id)->toBeNull()
         ->and($item->claimant_actor)->toBeNull()
         ->and($item->lease_until)->toBeNull()
         ->and($item->claimed_at)->toBeNull()
         ->and($item->stalled_at)->toBeNull()
-        ->and($item->fetched_brief_revision)->toBe(3)
         ->and($item->last_progress)->toBe(str_repeat('p', 2000))
         ->and($item->transitions()->count())->toBe(1)
         ->and($item->transitions()->sole()->from_state)->toBe(WorkItemState::Routed)
@@ -153,7 +164,7 @@ test('expired leases requeue once while live leases remain untouched', function 
     $at = CarbonImmutable::parse('2026-10-17 13:00:00 UTC');
     $expired = workStateItem([
         'state' => WorkItemState::Delivered,
-        'claimant_spoke_address' => 'spoke@server',
+        'claimant_spoke_id' => 987654,
         'claimant_actor' => 'worker@test',
         'lease_until' => $at->subSecond(),
         'claimed_at' => $at->subMinutes(5),
@@ -165,7 +176,7 @@ test('expired leases requeue once while live leases remain untouched', function 
 
     expect($expired->state)->toBe(WorkItemState::Queued)
         ->and($expired->attempts)->toBe(5)
-        ->and($expired->claimant_spoke_address)->toBeNull()
+        ->and($expired->claimant_spoke_id)->toBeNull()
         ->and($expired->lease_until)->toBeNull()
         ->and($expired->last_progress)->toBe('Still useful progress')
         ->and($expired->transitions()->count())->toBe(1)

@@ -18,14 +18,14 @@ return new class extends Migration
             $table->foreignId('team_id')->constrained()->cascadeOnDelete();
             $table->string('title');
             $table->string('user_actor_address')->nullable();
-            $table->string('device_address')->nullable();
-            $table->boolean('failover')->nullable();
+            $table->unsignedBigInteger('device_spoke_id')->nullable()->index();
+            $table->boolean('failover')->default(true);
             $table->json('required_capabilities');
             $table->unsignedInteger('timebox_minutes');
             $table->string('creator_actor');
             $table->timestamp('cancelled_at')->nullable();
             $table->foreignUuid('parent_task_id')->nullable()->constrained('work_tasks')->nullOnDelete();
-            $table->uuid('workflow_id')->nullable()->index();
+            $table->string('workflow_ref', 2048)->nullable();
             $table->timestamps();
 
             $table->index(['team_id', 'created_at']);
@@ -47,17 +47,17 @@ return new class extends Migration
             $table->foreignUuid('work_task_id')->constrained()->cascadeOnDelete();
             $table->string('role', 64);
             $table->string('state', 32);
-            $table->string('claimant_spoke_address')->nullable();
+            $table->unsignedBigInteger('claimant_spoke_id')->nullable()->index();
             $table->string('claimant_actor')->nullable();
             $table->timestamp('lease_until')->nullable();
             $table->timestamp('claimed_at')->nullable();
             $table->unsignedBigInteger('fence')->default(0);
             $table->unsignedInteger('attempts')->default(0);
-            $table->unsignedBigInteger('fetched_brief_revision')->nullable();
+            $table->foreignUuid('fetched_brief_revision_id')->nullable()->constrained('work_brief_revisions')->nullOnDelete();
             $table->string('last_progress', 2000)->nullable();
             $table->timestamp('stalled_at')->nullable();
-            $table->timestamp('host_wait_started_at')->nullable();
-            $table->timestamp('host_wait_until')->nullable();
+            $table->timestamp('waiting_on_host_at')->nullable();
+            $table->timestamp('waiting_on_host_notified_at')->nullable();
             $table->timestamps();
 
             $table->index(['work_task_id', 'state']);
@@ -80,14 +80,13 @@ return new class extends Migration
 
         Schema::create('work_milestones', function (Blueprint $table): void {
             $table->uuid('id')->primary();
-            $table->foreignUuid('work_task_id')->constrained()->cascadeOnDelete();
-            $table->foreignUuid('work_item_id')->nullable()->constrained()->nullOnDelete();
+            $table->foreignUuid('work_item_id')->constrained()->cascadeOnDelete();
+            $table->unsignedBigInteger('fence');
             $table->string('kind', 32);
             $table->json('payload');
-            $table->string('author_actor');
-            $table->timestamps();
+            $table->timestamp('created_at');
 
-            $table->index(['work_task_id', 'created_at']);
+            $table->index(['work_item_id', 'created_at']);
         });
 
         Schema::create('work_steers', function (Blueprint $table): void {

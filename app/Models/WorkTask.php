@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
@@ -15,17 +16,18 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property int $team_id
  * @property string $title
  * @property string|null $user_actor_address
- * @property string|null $device_address
- * @property bool|null $failover
+ * @property int|null $device_spoke_id
+ * @property bool $failover
  * @property list<string> $required_capabilities
  * @property int $timebox_minutes
  * @property string $creator_actor
  * @property CarbonImmutable|null $cancelled_at
  * @property string|null $parent_task_id
- * @property string|null $workflow_id
+ * @property string|null $workflow_ref
  * @property CarbonImmutable $created_at
  * @property CarbonImmutable $updated_at
  * @property-read Team $team
+ * @property-read Spoke|null $deviceSpoke
  * @property-read WorkTask|null $parent
  * @property-read Collection<int, WorkTask> $children
  * @property-read Collection<int, WorkBriefRevision> $briefRevisions
@@ -38,25 +40,31 @@ class WorkTask extends Model
 {
     use HasUuids;
 
+    /** @var array<string, mixed> */
+    protected $attributes = [
+        'failover' => true,
+    ];
+
     /** @var list<string> */
     protected $fillable = [
         'team_id',
         'title',
         'user_actor_address',
-        'device_address',
+        'device_spoke_id',
         'failover',
         'required_capabilities',
         'timebox_minutes',
         'creator_actor',
         'cancelled_at',
         'parent_task_id',
-        'workflow_id',
+        'workflow_ref',
     ];
 
     /** @return array<string, string> */
     protected function casts(): array
     {
         return [
+            'device_spoke_id' => 'integer',
             'failover' => 'boolean',
             'required_capabilities' => 'array',
             'timebox_minutes' => 'integer',
@@ -68,6 +76,12 @@ class WorkTask extends Model
     public function team(): BelongsTo
     {
         return $this->belongsTo(Team::class);
+    }
+
+    /** @return BelongsTo<Spoke, $this> */
+    public function deviceSpoke(): BelongsTo
+    {
+        return $this->belongsTo(Spoke::class, 'device_spoke_id');
     }
 
     /** @return BelongsTo<WorkTask, $this> */
@@ -100,10 +114,10 @@ class WorkTask extends Model
         return $this->hasMany(WorkItem::class);
     }
 
-    /** @return HasMany<WorkMilestone, $this> */
-    public function milestones(): HasMany
+    /** @return HasManyThrough<WorkMilestone, WorkItem, $this> */
+    public function milestones(): HasManyThrough
     {
-        return $this->hasMany(WorkMilestone::class);
+        return $this->hasManyThrough(WorkMilestone::class, WorkItem::class);
     }
 
     /** @return HasMany<WorkSteer, $this> */

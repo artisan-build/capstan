@@ -7,31 +7,41 @@ use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use LogicException;
 
 /**
  * @property string $id
- * @property string $work_task_id
- * @property string|null $work_item_id
+ * @property string $work_item_id
+ * @property int $fence
  * @property WorkMilestoneKind $kind
  * @property array<string, mixed> $payload
- * @property string $author_actor
  * @property CarbonImmutable $created_at
- * @property CarbonImmutable $updated_at
- * @property-read WorkTask $workTask
- * @property-read WorkItem|null $workItem
+ * @property-read WorkItem $workItem
  */
 class WorkMilestone extends Model
 {
     use HasUuids;
 
+    public const UPDATED_AT = null;
+
     /** @var list<string> */
     protected $fillable = [
-        'work_task_id',
         'work_item_id',
+        'fence',
         'kind',
         'payload',
-        'author_actor',
     ];
+
+    protected static function booted(): void
+    {
+        static::creating(function (WorkMilestone $milestone): void {
+            if ($milestone->getAttribute('work_item_id') === null || $milestone->getAttribute('fence') === null) {
+                throw new LogicException('Work milestones require an item and fence.');
+            }
+        });
+        static::updating(static fn () => throw new LogicException('Work milestones are append-only.'));
+        static::deleting(static fn () => throw new LogicException('Work milestones are append-only.'));
+    }
 
     /** @return array<string, string> */
     protected function casts(): array
@@ -39,13 +49,8 @@ class WorkMilestone extends Model
         return [
             'kind' => WorkMilestoneKind::class,
             'payload' => 'array',
+            'fence' => 'integer',
         ];
-    }
-
-    /** @return BelongsTo<WorkTask, $this> */
-    public function workTask(): BelongsTo
-    {
-        return $this->belongsTo(WorkTask::class);
     }
 
     /** @return BelongsTo<WorkItem, $this> */

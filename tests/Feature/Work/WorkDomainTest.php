@@ -2,6 +2,7 @@
 
 use App\Enums\WorkItemState;
 use App\Enums\WorkMilestoneKind;
+use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkItem;
 use App\Models\WorkMilestone;
@@ -9,6 +10,7 @@ use App\Models\WorkSteer;
 use App\Models\WorkTask;
 use App\Work\BriefRevisionService;
 use App\Work\WorkItemStateService;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
@@ -24,17 +26,25 @@ function workDomainTask(array $attributes = []): WorkTask
     ], $attributes));
 }
 
+function workDomainSpoke(): Spoke
+{
+    return Spoke::query()->create([
+        'actor_id' => 'spoke-actor-'.Str::random(8),
+        'credential_id' => (string) Str::uuid7(),
+        'name' => 'Test-created Work spoke',
+    ]);
+}
+
 test('all work records use uuid version 7 primary keys', function (): void {
     $task = workDomainTask();
     $brief = resolve(BriefRevisionService::class)->append($task, 'Test-created brief', 'author@test');
     $item = $task->items()->create(['role' => WorkItem::ROLE_ORCHESTRATOR]);
     resolve(WorkItemStateService::class)->transition($item, WorkItemState::Claimed, 'user', 'actor@test');
     $transition = $item->transitions()->sole();
-    $milestone = $task->milestones()->create([
-        'work_item_id' => $item->id,
+    $milestone = $item->milestones()->create([
+        'fence' => 1,
         'kind' => WorkMilestoneKind::Started,
         'payload' => ['source' => 'test'],
-        'author_actor' => 'author@test',
     ]);
     $steer = $task->steers()->create([
         'work_item_id' => $item->id,
@@ -52,14 +62,28 @@ test('all work records use uuid version 7 primary keys', function (): void {
 });
 
 test('tasks reserve routing fields and items carry one open vocabulary scalar role', function (): void {
-    $workflowId = (string) Str::uuid7();
+    $spoke = workDomainSpoke();
     $parent = workDomainTask();
     $child = workDomainTask([
         'parent_task_id' => $parent->id,
-        'workflow_id' => $workflowId,
+        'workflow_ref' => 'workflows/review.yml',
         'user_actor_address' => 'user@server',
-        'device_address' => 'device@server',
+        'device_spoke_id' => $spoke->id,
         'failover' => false,
+    ]);
+    $urlTask = workDomainTask([
+        'workflow_ref' => 'https://example.test/workflows/review.yml',
+    ]);
+    $databaseDefaultId = (string) Str::uuid7();
+    DB::table('work_tasks')->insert([
+        'id' => $databaseDefaultId,
+        'team_id' => Team::default()->id,
+        'title' => 'Database-default failover task',
+        'required_capabilities' => '[]',
+        'timebox_minutes' => 15,
+        'creator_actor' => 'actor@test',
+        'created_at' => now(),
+        'updated_at' => now(),
     ]);
 
     $roles = [WorkItem::ROLE_ORCHESTRATOR, WorkItem::ROLE_HUMAN, 'reviewer'];
@@ -70,14 +94,26 @@ test('tasks reserve routing fields and items carry one open vocabulary scalar ro
     expect($child->fresh()?->parent->is($parent))->toBeTrue()
         ->and($parent->fresh()?->children->sole()->is($child))->toBeTrue()
         ->and($child->fresh()?->team->workTasks->contains($child))->toBeTrue()
-        ->and($child->fresh()?->workflow_id)->toBe($workflowId)
-        ->and($child->fresh()?->device_address)->toBe('device@server')
+        ->and($child->fresh()?->workflow_ref)->toBe('workflows/review.yml')
+        ->and($urlTask->fresh()?->workflow_ref)->toBe('https://example.test/workflows/review.yml')
+        ->and($child->fresh()?->device_spoke_id)->toBe($spoke->id)
+        ->and($child->fresh()?->deviceSpoke?->is($spoke))->toBeTrue()
         ->and($child->fresh()?->failover)->toBeFalse()
+        ->and($urlTask->fresh()?->failover)->toBeTrue()
+        ->and((new WorkTask)->failover)->toBeTrue()
+        ->and(WorkTask::query()->findOrFail($databaseDefaultId)->failover)->toBeTrue()
         ->and($child->fresh()?->items->pluck('role')->all())->toBe($roles)
         ->and(Schema::hasColumn('work_items', 'role'))->toBeTrue()
         ->and(Schema::getColumnType('work_items', 'role'))->toBe('varchar')
         ->and(Schema::hasColumn('work_tasks', 'roles'))->toBeFalse()
-        ->and(Schema::hasColumn('work_tasks', 'current_roles'))->toBeFalse();
+        ->and(Schema::hasColumn('work_tasks', 'current_roles'))->toBeFalse()
+        ->and(Schema::hasColumn('work_tasks', 'workflow_id'))->toBeFalse()
+        ->and(Schema::hasColumn('work_tasks', 'device_address'))->toBeFalse();
+
+    $spoke->delete();
+
+    expect($child->fresh()?->device_spoke_id)->toBe($spoke->id)
+        ->and($child->fresh()?->deviceSpoke)->toBeNull();
 });
 
 test('team work settings have safe database and model defaults', function (): void {
@@ -121,8 +157,7 @@ test('closed work vocabularies persist as portable strings', function (): void {
             'started', 'blocked', 'pr_opened', 'done', 'failed', 'released', 'note',
         ])
         ->and(Schema::getColumnType('work_items', 'state'))->toBe('varchar')
-        ->and(Schema::getColumnType('work_milestones', 'kind'))->toBe('varchar')
-        ->and(Schema::getColumnType('work_milestones', 'payload'))->toBe('text');
+        ->and(Schema::getColumnType('work_milestones', 'kind'))->toBe('varchar');
 });
 
 test('last progress is bounded at the model write surface', function (): void {
@@ -136,16 +171,75 @@ test('last progress is bounded at the model write surface', function (): void {
     expect($task->items()->count())->toBe(0);
 });
 
-test('work records expose their task and optional item relationships', function (): void {
+test('items resolve claimant spoke fetched brief and host wait reservations', function (): void {
+    $task = workDomainTask();
+    $spoke = workDomainSpoke();
+    $brief = resolve(BriefRevisionService::class)->append($task, 'Fetched brief', 'author@test');
+    $waitingAt = now()->subMinute()->startOfSecond();
+    $notifiedAt = now()->startOfSecond();
+    $item = $task->items()->create([
+        'role' => 'builder',
+        'claimant_spoke_id' => $spoke->id,
+        'fetched_brief_revision_id' => $brief->id,
+        'waiting_on_host_at' => $waitingAt,
+        'waiting_on_host_notified_at' => $notifiedAt,
+    ]);
+
+    expect($item->fresh()?->claimantSpoke?->is($spoke))->toBeTrue()
+        ->and($item->fresh()?->fetchedBriefRevision?->is($brief))->toBeTrue()
+        ->and($item->fresh()?->waiting_on_host_at?->equalTo($waitingAt))->toBeTrue()
+        ->and($item->fresh()?->waiting_on_host_notified_at?->equalTo($notifiedAt))->toBeTrue()
+        ->and(Schema::hasColumn('work_items', 'waiting_on_host_at'))->toBeTrue()
+        ->and(Schema::hasColumn('work_items', 'waiting_on_host_notified_at'))->toBeTrue()
+        ->and(Schema::hasColumn('work_items', 'host_wait_started_at'))->toBeFalse()
+        ->and(Schema::hasColumn('work_items', 'host_wait_until'))->toBeFalse()
+        ->and(Schema::hasColumn('work_items', 'fetched_brief_revision'))->toBeFalse()
+        ->and(Schema::hasColumn('work_items', 'claimant_spoke_address'))->toBeFalse();
+
+    $spoke->delete();
+
+    expect($item->fresh()?->claimant_spoke_id)->toBe($spoke->id)
+        ->and($item->fresh()?->claimantSpoke)->toBeNull();
+});
+
+test('milestones require item and fence expose task scope and remain append only', function (): void {
     $task = workDomainTask();
     $item = $task->items()->create(['role' => 'builder']);
-    $milestone = WorkMilestone::query()->create([
-        'work_task_id' => $task->id,
-        'work_item_id' => $item->id,
+    $milestone = $item->milestones()->create([
+        'fence' => 7,
         'kind' => WorkMilestoneKind::Note,
         'payload' => ['text' => 'Test-created note'],
-        'author_actor' => 'author@test',
     ]);
+
+    expect($milestone->fresh()?->workItem->is($item))->toBeTrue()
+        ->and($milestone->fresh()?->workItem->workTask->is($task))->toBeTrue()
+        ->and($task->fresh()?->milestones->sole()->is($milestone))->toBeTrue()
+        ->and($milestone->fresh()?->fence)->toBe(7)
+        ->and($milestone->fresh()?->payload)->toBe(['text' => 'Test-created note'])
+        ->and(Schema::hasColumn('work_milestones', 'work_task_id'))->toBeFalse()
+        ->and(Schema::hasColumn('work_milestones', 'author_actor'))->toBeFalse();
+
+    expect(fn () => WorkMilestone::query()->create([
+        'fence' => 1,
+        'kind' => WorkMilestoneKind::Note,
+        'payload' => [],
+    ]))->toThrow(LogicException::class, 'require an item and fence')
+        ->and(fn () => $item->milestones()->create([
+            'kind' => WorkMilestoneKind::Note,
+            'payload' => [],
+        ]))->toThrow(LogicException::class, 'require an item and fence')
+        ->and(fn () => $milestone->update(['fence' => 8]))
+        ->toThrow(LogicException::class, 'append-only')
+        ->and(fn () => $milestone->delete())
+        ->toThrow(LogicException::class, 'append-only');
+
+    expect($milestone->fresh()?->fence)->toBe(7)
+        ->and($item->milestones()->count())->toBe(1);
+});
+
+test('steers expose their task and optional item relationships', function (): void {
+    $task = workDomainTask();
+    $item = $task->items()->create(['role' => 'builder']);
     $steer = WorkSteer::query()->create([
         'work_task_id' => $task->id,
         'work_item_id' => $item->id,
@@ -154,10 +248,7 @@ test('work records expose their task and optional item relationships', function 
         'read_at' => now(),
     ]);
 
-    expect($milestone->fresh()?->workTask->is($task))->toBeTrue()
-        ->and($milestone->fresh()?->workItem?->is($item))->toBeTrue()
-        ->and($milestone->fresh()?->payload)->toBe(['text' => 'Test-created note'])
-        ->and($steer->fresh()?->workTask->is($task))->toBeTrue()
+    expect($steer->fresh()?->workTask->is($task))->toBeTrue()
         ->and($steer->fresh()?->workItem?->is($item))->toBeTrue()
         ->and($steer->fresh()?->read_at)->not->toBeNull();
 });
