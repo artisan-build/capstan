@@ -209,3 +209,49 @@ test('expired leases requeue once while live leases remain untouched', function 
         ->and($live->fresh()?->attempts)->toBe(1)
         ->and($live->transitions()->count())->toBe(0);
 });
+
+test('guarded drain writes reject item and task cancellation at the update predicate', function (string $cancellation): void {
+    $service = resolve(WorkItemStateService::class);
+    $spoke = workStateSpoke();
+    $at = CarbonImmutable::parse('2026-10-17 17:00:00 UTC');
+    $item = $service->claim(
+        workStateItem(),
+        $spoke->id,
+        'worker@test',
+        $at->addMinutes(5),
+        'spoke',
+        'worker@test',
+        $at,
+    );
+    $observed = $item->fresh();
+
+    if ($cancellation === 'item') {
+        $service->transition($item, WorkItemState::Cancelled, 'user', 'canceller@test', $at->addSecond());
+    } else {
+        $item->workTask->forceFill(['cancelled_at' => $at->addSecond()])->save();
+    }
+
+    $before = $item->fresh()?->getAttributes();
+    $events = $item->transitions()->count();
+
+    expect($service->transitionClaim(
+        $observed,
+        WorkItemState::Delivered,
+        $item->workTask->team_id,
+        $spoke->id,
+        'worker@test',
+        1,
+        $at->addSeconds(2),
+    ))->toBeNull()
+        ->and($service->renewClaim(
+            $observed,
+            $item->workTask->team_id,
+            $spoke->id,
+            'worker@test',
+            1,
+            $at->addSeconds(2),
+            $at->addMinutes(10),
+        ))->toBeNull()
+        ->and($item->fresh()?->getAttributes())->toBe($before)
+        ->and($item->transitions()->count())->toBe($events);
+})->with(['item', 'task']);
