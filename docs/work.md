@@ -43,10 +43,9 @@ Relative paths are resolved from the config file's directory. The command placeh
 `{prompt_file}` to `{prompt}` because command arguments can be visible in a process listing.
 
 The drain always sends the rendered prompt on stdin. This lets `claude -p` and generic commands receive it
-without putting signed links in argv. OpenCode Mini takes its initial prompt through `--prompt`, so that
-example uses `{prompt}` as one argv element; on a multi-user host, choose a harness that accepts stdin or
-an item-local prompt file instead. The generic example receives stdin and may also use the item-local
-files when a harness wants file-based input.
+without putting signed links in argv. The OpenCode Mini example passes `@{prompt_file}` to `--prompt`, so
+its argv contains only the private item-local path. The generic example receives stdin and may also use
+the item-local files when a harness wants file-based input.
 
 Check local paths and credential permissions without calling Capstan:
 

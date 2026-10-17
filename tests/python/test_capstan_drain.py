@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import http.server
 import importlib.util
 import json
@@ -135,6 +136,93 @@ class TemplateAndLaunchTests(DrainTestCase):
         self.assertEqual(popen.call_args.args[0][-3:], ["--", "worker", "--flag"])
         self.assertEqual(popen.call_args.kwargs["cwd"], self.base)
         self.assertIs(popen.call_args.kwargs["shell"], False)
+
+    def test_opencode_example_references_the_private_prompt_file_without_prompt_content_in_argv(self) -> None:
+        config = drain.load_config(ROOT / "drain/examples/opencode-mini.json")
+        prompt_path = "/private/item/prompt.md"
+        signed_prompt = f"Read {links()['brief']}"
+        argv = drain.substitute(
+            config.role_commands["builder"],
+            {"prompt_file": prompt_path, "prompt": signed_prompt},
+            "OpenCode example",
+        )
+
+        self.assertEqual(argv, ["opencode", "mini", "--prompt", f"@{prompt_path}"])
+        self.assertNotIn(signed_prompt, argv)
+        self.assertFalse(any("signature=" in argument for argument in argv))
+
+    def test_terminate_process_waits_for_a_cooperative_term_exit(self) -> None:
+        process = drain.subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import signal, time\n"
+                "def stop(*_):\n"
+                "    raise SystemExit(0)\n"
+                "signal.signal(signal.SIGTERM, stop)\n"
+                "print('ready', flush=True)\n"
+                "time.sleep(60)\n",
+            ],
+            stdout=drain.subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        self.addCleanup(self._stop_test_process, process)
+        self.assertIsNotNone(process.stdout)
+        self.assertEqual(process.stdout.readline().strip(), "ready")
+        reaper = threading.Thread(target=process.wait)
+        reaper.start()
+
+        drain.terminate_process(process.pid)
+
+        reaper.join(timeout=1)
+        self.assertFalse(reaper.is_alive())
+        self.assertEqual(process.returncode, 0)
+
+    def test_terminate_process_kills_and_waits_when_term_is_ignored(self) -> None:
+        process = drain.subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import signal, time\n"
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                "print('ready', flush=True)\n"
+                "time.sleep(60)\n",
+            ],
+            stdout=drain.subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        self.addCleanup(self._stop_test_process, process)
+        self.assertIsNotNone(process.stdout)
+        self.assertEqual(process.stdout.readline().strip(), "ready")
+        reaper = threading.Thread(target=process.wait)
+        reaper.start()
+
+        with mock.patch.object(drain, "TERM_WAIT_SECONDS", 0.05):
+            drain.terminate_process(process.pid)
+
+        reaper.join(timeout=1)
+        self.assertFalse(reaper.is_alive())
+        self.assertEqual(process.returncode, -drain.signal.SIGKILL)
+
+    def test_terminate_process_raises_when_kill_does_not_establish_exit(self) -> None:
+        with (
+            mock.patch.object(drain.os, "killpg") as killpg,
+            mock.patch.object(drain, "_wait_for_process_exit", side_effect=(False, False)),
+        ):
+            with self.assertRaisesRegex(OSError, "remained alive"):
+                drain.terminate_process(44)
+
+        self.assertEqual(killpg.call_args_list, [mock.call(44, drain.signal.SIGTERM), mock.call(44, drain.signal.SIGKILL)])
+
+    def _stop_test_process(self, process) -> None:
+        if process.stdout is not None:
+            process.stdout.close()
+        if process.poll() is None:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, drain.signal.SIGKILL)
+            process.wait(timeout=1)
 
     def test_role_prompts_contain_required_instructions(self) -> None:
         worker = (ROOT / "drain/worker-prompt.md").read_text()
@@ -364,6 +452,25 @@ class LifecycleTests(DrainTestCase):
         ).run()
         self.assertEqual(stopped, [999])
         self.assertFalse(any(call[0] == "transition" for call in client.calls))
+        self.assertEqual(json.loads(self.config.state_file.read_text())["items"], {})
+
+    def test_lost_live_worker_record_is_retained_when_shutdown_cannot_be_established(self) -> None:
+        self.write_state()
+        client = FakeClient(renewed=[{"item_id": ITEM_ID, "status": "lost"}])
+        output: list[str] = []
+
+        drain.DrainRunner(
+            self.config,
+            client,
+            logger=output.append,
+            alive=lambda _: True,
+            terminate=mock.Mock(side_effect=OSError("still alive")),
+            load=lambda: (0, 0, 0),
+            memory=lambda: 1,
+        ).run()
+
+        self.assertIn(ITEM_ID, json.loads(self.config.state_file.read_text())["items"])
+        self.assertTrue(any("orphan stop failed" in line for line in output))
 
     def test_nonterminal_exit_is_renewed_then_released(self) -> None:
         self.write_state()
@@ -373,6 +480,38 @@ class LifecycleTests(DrainTestCase):
         self.assertIn(("transition", ITEM_ID, 1, "released"), client.calls)
         self.assertEqual(json.loads(self.config.state_file.read_text())["items"], {})
         self.assertTrue(any("released item_id" in line for line in output))
+
+    def test_renewal_recovers_a_committed_delivered_transition_and_finishes_routing(self) -> None:
+        self.write_state(phase="launched")
+        renewed = [{
+            "item_id": ITEM_ID,
+            "status": "renewed",
+            "item": {"id": ITEM_ID, "state": "delivered", "links": links("new")},
+        }]
+        client = FakeClient(renewed=renewed)
+
+        drain.DrainRunner(self.config, client, logger=lambda _: None, alive=lambda _: True, load=lambda: (0, 0, 0), memory=lambda: 1).run()
+
+        self.assertEqual([call[3] for call in client.calls if call[0] == "transition"], ["routed"])
+        state = json.loads(self.config.state_file.read_text())["items"][ITEM_ID]
+        self.assertEqual(state["phase"], "routed")
+        self.assertTrue((Path(state["work_dir"]) / "launch.ready").is_file())
+
+    def test_renewal_recovers_a_committed_routed_transition_and_opens_the_gate(self) -> None:
+        self.write_state(phase="delivered")
+        renewed = [{
+            "item_id": ITEM_ID,
+            "status": "renewed",
+            "item": {"id": ITEM_ID, "state": "routed", "links": links("new")},
+        }]
+        client = FakeClient(renewed=renewed)
+
+        drain.DrainRunner(self.config, client, logger=lambda _: None, alive=lambda _: True, load=lambda: (0, 0, 0), memory=lambda: 1).run()
+
+        self.assertFalse(any(call[0] == "transition" for call in client.calls))
+        state = json.loads(self.config.state_file.read_text())["items"][ITEM_ID]
+        self.assertEqual(state["phase"], "routed")
+        self.assertTrue((Path(state["work_dir"]) / "launch.ready").is_file())
 
     def test_launch_failure_releases_claim_and_redacts_signed_url(self) -> None:
         client = FakeClient(claimed=[self.claim()])
@@ -429,7 +568,7 @@ class ContractTests(DrainTestCase):
         loaded = {path.name: drain.load_config(path) for path in examples.glob("*.json")}
         self.assertEqual(set(loaded), {"claude.json", "opencode-mini.json", "generic.json"})
         self.assertEqual(loaded["claude.json"].role_commands["builder"], ("claude", "-p"))
-        self.assertEqual(loaded["opencode-mini.json"].role_commands["builder"][:3], ("opencode", "mini", "--prompt"))
+        self.assertEqual(loaded["opencode-mini.json"].role_commands["builder"], ("opencode", "mini", "--prompt", "@{prompt_file}"))
         self.assertIn("{config_dir}/../harness/stub_worker.py", loaded["generic.json"].role_commands["builder"])
         self.assertTrue(all(config.capstan_url.startswith("http://127.0.0.1:") for config in loaded.values()))
 

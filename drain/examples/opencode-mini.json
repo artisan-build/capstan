@@ -16,6 +16,6 @@
   "orchestrator_prompt_template": "../orchestrator-prompt.md",
   "request_timeout_seconds": 15,
   "role_commands": {
-    "builder": ["opencode", "mini", "--prompt", "{prompt}"]
+    "builder": ["opencode", "mini", "--prompt", "@{prompt_file}"]
   }
 }

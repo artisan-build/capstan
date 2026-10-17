@@ -24,7 +24,7 @@ configuration or environment.
 Use the matching checked-in example.
 
 - `drain/examples/claude.json` for `claude -p`;
-- `drain/examples/opencode-mini.json` for `opencode mini --prompt`;
+- `drain/examples/opencode-mini.json` for `opencode mini --prompt @{prompt_file}`;
 - `drain/examples/generic.json` for an argv-based local worker or the AC10 stub.
 
 If several harnesses are available, ask which roles should use each one. Keep `role_commands` values as
@@ -110,5 +110,6 @@ permission result, local validation result, dry-claim result, scheduler type and
 first run result. State clearly when the scheduler was not installed. Redact bearer values and every URL
 containing a signature or other capability query.
 
-For operational recovery, point the user to `docs/work.md`. Do not delete a state file or PID entry until
-the corresponding process, item, and fence have been checked.
+For operational recovery, point the user to `docs/work.md`. Its optional session-reuse section covers the
+existing Solo MCP, Amp/Puck, and opaque `session_ref` wiring pattern. Do not delete a state file or PID
+entry until the corresponding process, item, and fence have been checked.

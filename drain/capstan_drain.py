@@ -27,6 +27,9 @@ from typing import Any, Callable, Iterator, Mapping, Sequence
 
 MAX_BATCH = 25
 STATE_VERSION = 1
+TERM_WAIT_SECONDS = 5.0
+KILL_WAIT_SECONDS = 5.0
+PROCESS_POLL_SECONDS = 0.05
 KNOWN_PLACEHOLDERS = frozenset(
     {
         "brief_url",
@@ -375,11 +378,29 @@ def process_alive(pid: int) -> bool:
         return True
 
 
+def _wait_for_process_exit(pid: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while process_alive(pid):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(PROCESS_POLL_SECONDS, remaining))
+    return True
+
+
 def terminate_process(pid: int) -> None:
     try:
         os.killpg(pid, signal.SIGTERM)
     except ProcessLookupError:
         return
+    if _wait_for_process_exit(pid, TERM_WAIT_SECONDS):
+        return
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    if not _wait_for_process_exit(pid, KILL_WAIT_SECONDS):
+        raise OSError("process remained alive after SIGKILL")
 
 
 def memory_percent() -> float:
@@ -642,6 +663,11 @@ class DrainRunner:
         self.log(f"released item_id={item_id} after worker exit")
 
     def _apply_renewal(self, entry: dict[str, Any], item: Mapping[str, Any]) -> None:
+        phases = ("launched", "delivered", "routed")
+        server_phase = {"claimed": "launched", "delivered": "delivered", "routed": "routed"}.get(item.get("state"))
+        local_phase = entry.get("phase")
+        if server_phase in phases and local_phase in phases and phases.index(server_phase) > phases.index(local_phase):
+            entry["phase"] = server_phase
         for key in ("session_ref", "seat_fence"):
             if key in item:
                 entry[key] = item[key]
