@@ -9,6 +9,8 @@ namespace App\Models;
  * @property int $sequence
  * @property int $through_cursor
  * @property string $content
+ *
+ * @mixin IdeHelperWorkStateRevision
  */
 class WorkStateRevision extends WorkAppendOnlyRecord
 {

@@ -438,6 +438,28 @@ namespace App\Models{
 /**
  * @property string $id
  * @property string $work_task_id
+ * @property string $work_item_id
+ * @property string $request_key
+ * @property string $addressed_actor
+ * @property string $question
+ * @property array<string, mixed> $metadata
+ * @property string|null $answer
+ * @property string|null $answered_by
+ * @property CarbonImmutable|null $answered_at
+ * @property CarbonImmutable|null $notified_at
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation query()
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperWorkEscalation {}
+}
+
+namespace App\Models{
+/**
+ * @property string $id
+ * @property string $work_task_id
  * @property string $role
  * @property WorkItemState $state
  * @property int|null $claimant_spoke_id
@@ -446,6 +468,10 @@ namespace App\Models{
  * @property CarbonImmutable|null $claimed_at
  * @property int $fence
  * @property int $attempts
+ * @property int|null $turn_cursor
+ * @property int|null $turn_upper_bound
+ * @property int|null $seat_fence
+ * @property string|null $addressed_actor
  * @property string|null $fetched_brief_revision_id
  * @property string|null $last_progress
  * @property CarbonImmutable|null $stalled_at
@@ -546,6 +572,88 @@ namespace App\Models{
 /**
  * @property string $id
  * @property string $work_task_id
+ * @property string $triggering_event_id
+ * @property string $decision
+ * @property string $rationale
+ * @property array<string, mixed> $evidence
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision query()
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperWorkOrchestrationDecision {}
+}
+
+namespace App\Models{
+/**
+ * @property string $id
+ * @property string $work_task_id
+ * @property int $sequence
+ * @property string $source_key
+ * @property string $kind
+ * @property array<string, mixed> $evidence
+ * @property string|null $author_task_id
+ * @property bool $wakes
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent query()
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperWorkOrchestrationEvent {}
+}
+
+namespace App\Models{
+/**
+ * @property string $id
+ * @property string $work_task_id
+ * @property string|null $holder_actor
+ * @property int|null $holder_spoke_id
+ * @property string|null $session_ref
+ * @property bool $interactive
+ * @property CarbonImmutable|null $lease_until
+ * @property int $fence
+ * @property bool $failover
+ * @property CarbonImmutable|null $waiting_at
+ * @property CarbonImmutable|null $notified_at
+ * @property string|null $active_item_id
+ * @property int $event_sequence
+ * @property int $completed_cursor
+ * @property int $turns_completed
+ * @property int $turns_started
+ * @property int $children_created
+ * @property CarbonImmutable|null $stopped_at
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat query()
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperWorkOrchestratorSeat {}
+}
+
+namespace App\Models{
+/**
+ * @property string $id
+ * @property string $work_task_id
+ * @property string $work_item_id
+ * @property int $sequence
+ * @property int $through_cursor
+ * @property string $content
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision query()
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperWorkStateRevision {}
+}
+
+namespace App\Models{
+/**
+ * @property string $id
+ * @property string $work_task_id
  * @property string|null $work_item_id
  * @property string $text
  * @property string $author_actor
@@ -622,4 +730,21 @@ namespace App\Models{
  */
 	#[\AllowDynamicProperties]
 	class IdeHelperWorkTask {}
+}
+
+namespace App\Models{
+/**
+ * @property string $id
+ * @property string $work_task_id
+ * @property string $request_key
+ * @property CarbonImmutable $due_at
+ * @property CarbonImmutable|null $fired_at
+ * @property string $reason
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake query()
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperWorkWake {}
 }

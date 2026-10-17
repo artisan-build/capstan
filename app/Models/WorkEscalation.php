@@ -18,6 +18,8 @@ use Illuminate\Database\Eloquent\Model;
  * @property string|null $answered_by
  * @property CarbonImmutable|null $answered_at
  * @property CarbonImmutable|null $notified_at
+ *
+ * @mixin IdeHelperWorkEscalation
  */
 class WorkEscalation extends Model
 {

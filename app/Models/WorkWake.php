@@ -13,6 +13,8 @@ use Illuminate\Database\Eloquent\Model;
  * @property CarbonImmutable $due_at
  * @property CarbonImmutable|null $fired_at
  * @property string $reason
+ *
+ * @mixin IdeHelperWorkWake
  */
 class WorkWake extends Model
 {

@@ -13,9 +13,9 @@ use Illuminate\Support\Sleep;
 use stdClass;
 use Throwable;
 
-final class WorkClaimService
+final readonly class WorkClaimService
 {
-    public function __construct(private readonly WorkSeatService $seats, private readonly WorkOrchestrationLock $locks) {}
+    public function __construct(private WorkSeatService $seats, private WorkOrchestrationLock $locks) {}
 
     private const int CANDIDATE_PAGE_SIZE = 200;
 

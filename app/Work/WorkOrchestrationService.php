@@ -266,7 +266,7 @@ final readonly class WorkOrchestrationService
     }
 
     /** Validate caller-supplied options into a bounded list of nonempty strings.
-     * @param array<array-key, mixed> $options
+     * @param  array<array-key, mixed>  $options
      */
     public function escalate(WorkTask $parent, string $key, string $actor, string $question, array $options, string $recommendation): ?WorkEscalation
     {
