@@ -83,8 +83,13 @@ For cron, preserve the existing crontab before changing it and add one tagged li
 paths made absolute:
 
 ```cron
-* * * * * /usr/bin/python3 /absolute/path/to/drain/capstan_drain.py --config /absolute/private/config.json >> /absolute/private/drain.log 2>&1 # capstan-work-drain
+* * * * * /absolute/path/to/python3 /absolute/path/to/drain/capstan_drain.py --config /absolute/private/config.json >> /absolute/private/drain.log 2>&1 # capstan-work-drain
 ```
+
+Every `/absolute/path/to/...` above is a placeholder. Onboarding must run `command -v python3` on the
+machine being onboarded and write the exact absolute path it returns. Cron runs with a minimal PATH, and a
+Homebrew, pyenv or Framework interpreter is not at `/usr/bin/python3`. The same path goes in the launch
+agent's `ProgramArguments`.
 
 Read the current crontab first. If it cannot be read for a reason other than "no crontab", stop without
 writing. Refuse to add a second line with the same tag. Save the readable prior crontab beside the config
