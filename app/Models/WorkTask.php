@@ -107,7 +107,7 @@ class WorkTask extends Model
     /** @return HasOne<WorkBriefRevision, $this> */
     public function latestBriefRevision(): HasOne
     {
-        return $this->hasOne(WorkBriefRevision::class)->ofMany('sequence', 'max');
+        return $this->hasOne(WorkBriefRevision::class)->orderByDesc('sequence');
     }
 
     /** @return HasMany<WorkItem, $this> */

@@ -130,9 +130,19 @@ test('team work settings have safe database and model defaults', function (): vo
 
 test('brief revisions append in order and newest content is canonical', function (): void {
     $task = workDomainTask();
+    $otherTask = workDomainTask(['title' => 'Other test-created work task']);
     $briefs = resolve(BriefRevisionService::class);
     $first = $briefs->append($task, 'First test brief', 'one@test');
     $second = $briefs->append($task, 'Second test brief', 'two@test');
+    $briefs->append($otherTask, 'Other first brief', 'one@test');
+    $briefs->append($otherTask, 'Other second brief', 'two@test');
+    $otherThird = $briefs->append($otherTask, 'Other third brief', 'three@test');
+
+    $tasks = WorkTask::query()
+        ->whereKey([$task->id, $otherTask->id])
+        ->with('latestBriefRevision')
+        ->get()
+        ->keyBy('id');
 
     expect($first->sequence)->toBe(1)
         ->and($second->sequence)->toBe(2)
@@ -141,6 +151,9 @@ test('brief revisions append in order and newest content is canonical', function
             'Second test brief',
         ])
         ->and($task->fresh()?->latestBriefRevision?->content)->toBe('Second test brief')
+        ->and($otherTask->fresh()?->latestBriefRevision?->is($otherThird))->toBeTrue()
+        ->and($tasks[$task->id]->latestBriefRevision?->is($second))->toBeTrue()
+        ->and($tasks[$otherTask->id]->latestBriefRevision?->is($otherThird))->toBeTrue()
         ->and(method_exists($briefs, 'update'))->toBeFalse();
 
     expect(fn () => $first->update(['content' => 'Mutated']))
