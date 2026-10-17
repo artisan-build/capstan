@@ -135,10 +135,11 @@ class TemplateAndLaunchTests(DrainTestCase):
         stream.close.assert_called_once()
         self.assertEqual(popen.call_args.args[0][-3:], ["--", "worker", "--flag"])
         self.assertEqual(popen.call_args.kwargs["cwd"], self.base)
+        self.assertEqual(popen.call_args.kwargs["env"]["PWD"], str(self.base))
         self.assertIs(popen.call_args.kwargs["shell"], False)
 
-    def test_opencode_example_references_the_private_prompt_file_without_prompt_content_in_argv(self) -> None:
-        config = drain.load_config(ROOT / "drain/examples/opencode-mini.json")
+    def test_opencode_example_attaches_the_private_prompt_file_without_prompt_content_in_argv(self) -> None:
+        config = drain.load_config(ROOT / "drain/examples/opencode.json")
         prompt_path = "/private/item/prompt.md"
         signed_prompt = f"Read {links()['brief']}"
         argv = drain.substitute(
@@ -147,7 +148,10 @@ class TemplateAndLaunchTests(DrainTestCase):
             "OpenCode example",
         )
 
-        self.assertEqual(argv, ["opencode", "mini", "--prompt", f"@{prompt_path}"])
+        self.assertEqual(
+            argv,
+            ["opencode", "run", "--standalone", "-f", prompt_path, "Follow the attached work brief exactly."],
+        )
         self.assertNotIn(signed_prompt, argv)
         self.assertFalse(any("signature=" in argument for argument in argv))
 
@@ -206,23 +210,71 @@ class TemplateAndLaunchTests(DrainTestCase):
         self.assertFalse(reaper.is_alive())
         self.assertEqual(process.returncode, -drain.signal.SIGKILL)
 
+    def test_terminate_process_kills_a_term_resistant_descendant_after_the_leader_exits(self) -> None:
+        leader = drain.subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import os, signal, time\n"
+                "read_fd, write_fd = os.pipe()\n"
+                "child = os.fork()\n"
+                "if child == 0:\n"
+                "    os.close(read_fd)\n"
+                "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                "    os.write(write_fd, b'ready')\n"
+                "    os.close(write_fd)\n"
+                "    time.sleep(60)\n"
+                "    os._exit(0)\n"
+                "os.close(write_fd)\n"
+                "os.read(read_fd, 5)\n"
+                "os.close(read_fd)\n"
+                "def stop(*_):\n"
+                "    raise SystemExit(0)\n"
+                "signal.signal(signal.SIGTERM, stop)\n"
+                "print(child, flush=True)\n"
+                "time.sleep(60)\n",
+            ],
+            stdout=drain.subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        self.addCleanup(self._stop_test_process, leader)
+        self.assertIsNotNone(leader.stdout)
+        descendant_pid = int(leader.stdout.readline().strip())
+        self.assertTrue(drain.process_alive(descendant_pid))
+        reaper = threading.Thread(target=leader.wait)
+        reaper.start()
+
+        with (
+            mock.patch.object(drain, "TERM_WAIT_SECONDS", 0.05),
+            mock.patch.object(drain.os, "killpg", wraps=os.killpg) as killpg,
+        ):
+            drain.terminate_process(leader.pid)
+
+        reaper.join(timeout=1)
+        self.assertFalse(reaper.is_alive())
+        self.assertEqual(leader.returncode, 0)
+        self.assertIn(mock.call(leader.pid, drain.signal.SIGTERM), killpg.call_args_list)
+        self.assertIn(mock.call(leader.pid, drain.signal.SIGKILL), killpg.call_args_list)
+        self.assertFalse(drain.process_group_alive(leader.pid))
+
     def test_terminate_process_raises_when_kill_does_not_establish_exit(self) -> None:
         with (
             mock.patch.object(drain.os, "killpg") as killpg,
-            mock.patch.object(drain, "_wait_for_process_exit", side_effect=(False, False)),
+            mock.patch.object(drain, "_wait_for_process_group_exit", side_effect=(False, False)),
         ):
-            with self.assertRaisesRegex(OSError, "remained alive"):
+            with self.assertRaisesRegex(OSError, "process group remained alive"):
                 drain.terminate_process(44)
 
         self.assertEqual(killpg.call_args_list, [mock.call(44, drain.signal.SIGTERM), mock.call(44, drain.signal.SIGKILL)])
 
     def _stop_test_process(self, process) -> None:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, drain.signal.SIGKILL)
+        if process.poll() is None:
+            process.wait(timeout=1)
         if process.stdout is not None:
             process.stdout.close()
-        if process.poll() is None:
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(process.pid, drain.signal.SIGKILL)
-            process.wait(timeout=1)
 
     def test_role_prompts_contain_required_instructions(self) -> None:
         worker = (ROOT / "drain/worker-prompt.md").read_text()
@@ -566,9 +618,12 @@ class ContractTests(DrainTestCase):
     def test_example_configs_match_schema_and_cover_three_harnesses(self) -> None:
         examples = ROOT / "drain/examples"
         loaded = {path.name: drain.load_config(path) for path in examples.glob("*.json")}
-        self.assertEqual(set(loaded), {"claude.json", "opencode-mini.json", "generic.json"})
+        self.assertEqual(set(loaded), {"claude.json", "opencode.json", "generic.json"})
         self.assertEqual(loaded["claude.json"].role_commands["builder"], ("claude", "-p"))
-        self.assertEqual(loaded["opencode-mini.json"].role_commands["builder"], ("opencode", "mini", "--prompt", "@{prompt_file}"))
+        self.assertEqual(
+            loaded["opencode.json"].role_commands["builder"],
+            ("opencode", "run", "--standalone", "-f", "{prompt_file}", "Follow the attached work brief exactly."),
+        )
         self.assertIn("{config_dir}/../harness/stub_worker.py", loaded["generic.json"].role_commands["builder"])
         self.assertTrue(all(config.capstan_url.startswith("http://127.0.0.1:") for config in loaded.values()))
 

@@ -12,8 +12,8 @@ Capstan feature configuration before testing a drain.
 ## Configuration
 
 The drain reads one local JSON file. It does not require environment variables. Start from one of the
-checked-in files under `drain/examples`: `claude.json` runs `claude -p`, `opencode-mini.json` runs
-`opencode mini`, and `generic.json` runs the included stub worker. Commands are JSON arrays, with
+checked-in files under `drain/examples`: `claude.json` runs `claude -p`, `opencode.json` runs
+`opencode run`, and `generic.json` runs the included stub worker. Commands are JSON arrays, with
 one argument per element. They are never shell strings.
 
 | Key | Meaning |
@@ -43,9 +43,10 @@ Relative paths are resolved from the config file's directory. The command placeh
 `{prompt_file}` to `{prompt}` because command arguments can be visible in a process listing.
 
 The drain always sends the rendered prompt on stdin. This lets `claude -p` and generic commands receive it
-without putting signed links in argv. The OpenCode Mini example passes `@{prompt_file}` to `--prompt`, so
-its argv contains only the private item-local path. The generic example receives stdin and may also use
-the item-local files when a harness wants file-based input.
+without putting signed links in argv. The OpenCode example uses a standalone server, attaches the private
+item-local prompt with `opencode run --standalone -f`, and gives the worker a fixed, non-secret instruction.
+`opencode mini` needs a TTY, so it is unsuitable for a detached drain. The generic example receives stdin
+and may also use the item-local files when a harness wants file-based input.
 
 Check local paths and credential permissions without calling Capstan:
 

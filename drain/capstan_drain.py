@@ -378,9 +378,21 @@ def process_alive(pid: int) -> bool:
         return True
 
 
-def _wait_for_process_exit(pid: int, timeout: float) -> bool:
+def process_group_alive(pgid: int) -> bool:
+    if pgid <= 0:
+        return False
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def _wait_for_process_group_exit(pgid: int, timeout: float) -> bool:
     deadline = time.monotonic() + timeout
-    while process_alive(pid):
+    while process_group_alive(pgid):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return False
@@ -393,14 +405,14 @@ def terminate_process(pid: int) -> None:
         os.killpg(pid, signal.SIGTERM)
     except ProcessLookupError:
         return
-    if _wait_for_process_exit(pid, TERM_WAIT_SECONDS):
+    if _wait_for_process_group_exit(pid, TERM_WAIT_SECONDS):
         return
     try:
         os.killpg(pid, signal.SIGKILL)
     except ProcessLookupError:
         return
-    if not _wait_for_process_exit(pid, KILL_WAIT_SECONDS):
-        raise OSError("process remained alive after SIGKILL")
+    if not _wait_for_process_group_exit(pid, KILL_WAIT_SECONDS):
+        raise OSError("process group remained alive after SIGKILL")
 
 
 def memory_percent() -> float:
@@ -446,6 +458,7 @@ class Launcher:
         process = subprocess.Popen(
             [sys.executable, str(Path(__file__).resolve()), "--gated-exec", str(gate), "--", *argv],
             cwd=cwd,
+            env={**os.environ, "PWD": str(cwd)},
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
