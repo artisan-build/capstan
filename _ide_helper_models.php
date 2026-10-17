@@ -383,19 +383,241 @@ namespace App\Models{
  * @property bool $is_default
  * @property \Carbon\CarbonImmutable|null $created_at
  * @property \Carbon\CarbonImmutable|null $updated_at
+ * @property bool $pool_work
+ * @property bool $default_failover
  * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\Artifact> $artifacts
  * @property-read int|null $artifacts_count
+ * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\WorkTask> $workTasks
+ * @property-read int|null $work_tasks_count
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Team newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Team newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Team query()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereDefaultFailover($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereId($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereIsDefault($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereName($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Team wherePoolWork($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereSlug($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereUpdatedAt($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
 	class IdeHelperTeam {}
+}
+
+namespace App\Models{
+/**
+ * @property string $id
+ * @property string $work_task_id
+ * @property int $sequence
+ * @property string $content
+ * @property string $author_actor
+ * @property CarbonImmutable $created_at
+ * @property CarbonImmutable $updated_at
+ * @property-read WorkTask $workTask
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkBriefRevision newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkBriefRevision newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkBriefRevision query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkBriefRevision whereAuthorActor($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkBriefRevision whereContent($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkBriefRevision whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkBriefRevision whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkBriefRevision whereSequence($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkBriefRevision whereUpdatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkBriefRevision whereWorkTaskId($value)
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperWorkBriefRevision {}
+}
+
+namespace App\Models{
+/**
+ * @property string $id
+ * @property string $work_task_id
+ * @property string $role
+ * @property WorkItemState $state
+ * @property int|null $claimant_spoke_id
+ * @property string|null $claimant_actor
+ * @property CarbonImmutable|null $lease_until
+ * @property CarbonImmutable|null $claimed_at
+ * @property int $fence
+ * @property int $attempts
+ * @property string|null $fetched_brief_revision_id
+ * @property string|null $last_progress
+ * @property CarbonImmutable|null $stalled_at
+ * @property CarbonImmutable|null $waiting_on_host_at
+ * @property CarbonImmutable|null $waiting_on_host_notified_at
+ * @property CarbonImmutable $created_at
+ * @property CarbonImmutable $updated_at
+ * @property-read WorkTask $workTask
+ * @property-read Spoke|null $claimantSpoke
+ * @property-read WorkBriefRevision|null $fetchedBriefRevision
+ * @property-read Collection<int, WorkItemTransition> $transitions
+ * @property-read Collection<int, WorkMilestone> $milestones
+ * @property-read int|null $milestones_count
+ * @property-read int|null $transitions_count
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereAttempts($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereClaimantActor($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereClaimantSpokeId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereClaimedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereFence($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereFetchedBriefRevisionId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereLastProgress($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereLeaseUntil($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereRole($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereStalledAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereState($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereUpdatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereWaitingOnHostAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereWaitingOnHostNotifiedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereWorkTaskId($value)
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperWorkItem {}
+}
+
+namespace App\Models{
+/**
+ * @property string $id
+ * @property string $work_item_id
+ * @property WorkItemState $from_state
+ * @property WorkItemState $to_state
+ * @property string $actor_kind
+ * @property string $actor_id
+ * @property int $fence
+ * @property CarbonImmutable $occurred_at
+ * @property CarbonImmutable $created_at
+ * @property CarbonImmutable $updated_at
+ * @property-read WorkItem $workItem
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition whereActorId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition whereActorKind($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition whereFence($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition whereFromState($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition whereOccurredAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition whereToState($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition whereUpdatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition whereWorkItemId($value)
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperWorkItemTransition {}
+}
+
+namespace App\Models{
+/**
+ * @property string $id
+ * @property string $work_item_id
+ * @property int $fence
+ * @property WorkMilestoneKind $kind
+ * @property array<string, mixed> $payload
+ * @property CarbonImmutable $created_at
+ * @property-read WorkItem $workItem
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkMilestone newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkMilestone newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkMilestone query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkMilestone whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkMilestone whereFence($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkMilestone whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkMilestone whereKind($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkMilestone wherePayload($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkMilestone whereWorkItemId($value)
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperWorkMilestone {}
+}
+
+namespace App\Models{
+/**
+ * @property string $id
+ * @property string $work_task_id
+ * @property string|null $work_item_id
+ * @property string $text
+ * @property string $author_actor
+ * @property CarbonImmutable|null $read_at
+ * @property CarbonImmutable $created_at
+ * @property CarbonImmutable $updated_at
+ * @property-read WorkTask $workTask
+ * @property-read WorkItem|null $workItem
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkSteer newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkSteer newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkSteer query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkSteer whereAuthorActor($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkSteer whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkSteer whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkSteer whereReadAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkSteer whereText($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkSteer whereUpdatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkSteer whereWorkItemId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkSteer whereWorkTaskId($value)
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperWorkSteer {}
+}
+
+namespace App\Models{
+/**
+ * @property string $id
+ * @property int $team_id
+ * @property string $title
+ * @property string|null $user_actor_address
+ * @property int|null $device_spoke_id
+ * @property bool $failover
+ * @property list<string> $required_capabilities
+ * @property int $timebox_minutes
+ * @property string $creator_actor
+ * @property CarbonImmutable|null $cancelled_at
+ * @property string|null $parent_task_id
+ * @property string|null $workflow_ref
+ * @property CarbonImmutable $created_at
+ * @property CarbonImmutable $updated_at
+ * @property-read Team $team
+ * @property-read Spoke|null $deviceSpoke
+ * @property-read WorkTask|null $parent
+ * @property-read Collection<int, WorkTask> $children
+ * @property-read Collection<int, WorkBriefRevision> $briefRevisions
+ * @property-read WorkBriefRevision|null $latestBriefRevision
+ * @property-read Collection<int, WorkItem> $items
+ * @property-read Collection<int, WorkMilestone> $milestones
+ * @property-read Collection<int, WorkSteer> $steers
+ * @property-read int|null $brief_revisions_count
+ * @property-read int|null $children_count
+ * @property-read int|null $items_count
+ * @property-read int|null $milestones_count
+ * @property-read int|null $steers_count
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereCancelledAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereCreatorActor($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereDeviceSpokeId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereFailover($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereParentTaskId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereRequiredCapabilities($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereTeamId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereTimeboxMinutes($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereTitle($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereUpdatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereUserActorAddress($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereWorkflowRef($value)
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperWorkTask {}
 }

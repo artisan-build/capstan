@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\UniqueConstraintViolationException;
 
 /**
@@ -17,12 +18,16 @@ class Team extends Model
         'name',
         'slug',
         'is_default',
+        'pool_work',
+        'default_failover',
     ];
 
     protected function casts(): array
     {
         return [
             'is_default' => 'boolean',
+            'pool_work' => 'boolean',
+            'default_failover' => 'boolean',
         ];
     }
 
@@ -44,5 +49,11 @@ class Team extends Model
     public function artifacts(): BelongsToMany
     {
         return $this->belongsToMany(Artifact::class)->withTimestamps();
+    }
+
+    /** @return HasMany<WorkTask, $this> */
+    public function workTasks(): HasMany
+    {
+        return $this->hasMany(WorkTask::class);
     }
 }
