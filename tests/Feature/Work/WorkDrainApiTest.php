@@ -8,6 +8,7 @@ use App\Models\Team;
 use App\Models\WorkItem;
 use App\Models\WorkTask;
 use App\Work\WorkItemStateService;
+use App\Work\WorkOrchestrationService;
 use App\Work\WorkSweepService;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\User;
@@ -132,6 +133,29 @@ test('claim and renewed records carry fresh signed links with capped expiry', fu
         expect((int) $query['expires'])->toBe(CarbonImmutable::parse('2026-10-17 10:07:00')->timestamp);
     }
     $this->getJson($renew->json('results.0.item.links.brief'))->assertOk();
+});
+
+test('orchestrator claim and renew return usable signed context and action links', function (): void {
+    Date::setTestNow('2026-10-17 10:00:00');
+    $team = workDrainTeam();
+    $task = workDrainTask($team);
+    $task->briefRevisions()->create(['sequence' => 1, 'content' => 'Orchestrator brief', 'author_actor' => 'creator']);
+    resolve(WorkOrchestrationService::class)->event($task, 'drain-link-context', 'test_event', ['safe' => true]);
+    $issued = workDrainCredential(capstanUser());
+
+    $claim = $this->withHeaders($issued['headers'])
+        ->postJson(route('api.work.claim', $team), workDrainClaimPayload(1, ['orchestrator']))->assertOk();
+    expect(array_keys($claim->json('items.0.links')))->toBe(['brief', 'milestone', 'steers', 'orchestration', 'orchestrate']);
+    $this->getJson($claim->json('items.0.links.orchestration'))->assertOk()
+        ->assertJsonPath('context.task.id', $task->id)
+        ->assertJsonPath('context.brief.content', 'Orchestrator brief')
+        ->assertJsonCount(1, 'context.events');
+
+    $renew = $this->withHeaders($issued['headers'])->postJson(route('api.work.renew', $team), [
+        'items' => [['item_id' => $claim->json('items.0.id'), 'fence' => $claim->json('items.0.fence')]],
+    ])->assertOk()->assertJsonPath('results.0.status', 'renewed');
+    expect(array_keys($renew->json('results.0.item.links')))->toBe(['brief', 'milestone', 'steers', 'orchestration', 'orchestrate']);
+    $this->getJson($renew->json('results.0.item.links.orchestration'))->assertOk();
 });
 
 test('expired claim links lose their fence after sweep and reclaim while replacement links succeed', function (): void {

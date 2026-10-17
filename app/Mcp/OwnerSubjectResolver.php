@@ -29,6 +29,7 @@ final readonly class OwnerSubjectResolver
             type: $principal->subject_type->value,
             ref: $principal->subject_ref,
             actorId: $principal->user_id,
+            credentialId: (string) $principal->getKey(),
         );
     }
 }

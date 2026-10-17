@@ -3,11 +3,15 @@
 namespace App\Livewire\Work;
 
 use App\Features\Work;
+use App\Models\WorkEscalation;
+use App\Models\WorkItem;
 use App\Models\WorkTask;
+use App\Work\WorkOrchestrationService;
 use ArtisanBuild\BuiltForCloud\Contracts\IdentityContext;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Contracts\View\View;
+use Illuminate\Support\Str;
 use Laravel\Pennant\Feature;
 use Livewire\Attributes\Layout;
 use Livewire\Component;
@@ -15,6 +19,9 @@ use Livewire\Component;
 #[Layout('layouts::app')]
 class Index extends Component
 {
+    /** @var array<string, string> */
+    public array $answers = [];
+
     public function mount(): void
     {
         $this->guardAccess();
@@ -23,6 +30,7 @@ class Index extends Component
     public function render(): View
     {
         $this->guardAccess();
+        $actor = (string) request()->user()->getKey();
 
         return view('livewire.work.index', [
             'tasks' => WorkTask::query()->orderByDesc('id')->limit(25)
@@ -32,7 +40,33 @@ class Index extends Component
                     'briefRevisions' => fn ($query) => $query->reorder()->orderByDesc('sequence')->limit(1),
                     'steers' => fn ($query) => $query->orderByDesc('id')->limit(10),
                 ])->withCount('items')->get(),
+            'escalations' => WorkEscalation::query()
+                ->where('addressed_actor', $actor)->whereNull('answered_at')
+                ->whereHas('workTask', fn ($query) => $query->whereNull('cancelled_at'))
+                ->whereHas('workItem', fn ($query) => $query->where('role', WorkItem::ROLE_HUMAN)
+                    ->where('addressed_actor', $actor)->where('state', 'queued'))
+                ->orderBy('id')->limit(25)->get(),
         ]);
+    }
+
+    public function answerEscalation(string $escalationId, WorkOrchestrationService $orchestration): void
+    {
+        $this->guardAccess();
+        abort_unless(Str::isUuid($escalationId), 404);
+        $actor = (string) request()->user()->getKey();
+        $validated = $this->validate([
+            'answers.'.$escalationId => ['required', 'string', 'min:1', 'max:10000'],
+        ]);
+        $escalation = WorkEscalation::query()->whereKey($escalationId)
+            ->where('addressed_actor', $actor)->first();
+        abort_unless($escalation instanceof WorkEscalation, 404);
+
+        try {
+            $orchestration->answer($escalation, $actor, $validated['answers'][$escalationId], now()->toImmutable());
+        } catch (\DomainException) {
+            abort(404);
+        }
+        unset($this->answers[$escalationId]);
     }
 
     private function guardAccess(): void

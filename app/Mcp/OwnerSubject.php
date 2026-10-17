@@ -8,5 +8,6 @@ final readonly class OwnerSubject
         public string $type,
         public string $ref,
         public string $actorId,
+        public ?string $credentialId = null,
     ) {}
 }

@@ -3,6 +3,7 @@
 use App\Livewire\Work\Index;
 use App\Models\Team;
 use App\Models\WorkTask;
+use App\Work\WorkOrchestrationService;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use Illuminate\Database\Events\QueryExecuted;
@@ -139,6 +140,55 @@ test('Work board bounds tasks items and eager loaded milestones without per-item
     $response = $this->actingAsVersioned(capstanUser())->get(route('work.index'))->assertOk();
     expect(substr_count($response->content(), 'data-testid="work-task"'))->toBe(25)
         ->and(substr_count($response->content(), 'data-testid="work-item"'))->toBe(25)
-        ->and(count($queries))->toBe(5);
+        ->and(count($queries))->toBe(6);
     $response->assertSee('data-testid="work-task-truncated"', false)->assertSee('Progress 1')->assertDontSee('Progress 27');
+});
+
+test('addressed users see escaped escalations and page answers recheck feature and admission before waking once', function (): void {
+    $user = capstanUser();
+    $task = workPageTask();
+    $escalation = resolve(WorkOrchestrationService::class)->escalate(
+        $task,
+        'page-hostile',
+        (string) $user->id,
+        '<script>question</script>',
+        ['<img src=x onerror=alert(1)>', 'Continue'],
+        '<b>Continue</b>',
+    );
+    $other = resolve(WorkOrchestrationService::class)->escalate(
+        $task,
+        'page-other',
+        (string) capstanUser()->id,
+        'Foreign question',
+        ['No'],
+        'No',
+    );
+
+    $response = $this->actingAsVersioned($user)->get(route('work.index'))->assertOk();
+    $response->assertSee('data-testid="work-escalations"', false)
+        ->assertSee('data-testid="work-escalation"', false)
+        ->assertSee('<script>question</script>')
+        ->assertSee('<img src=x onerror=alert(1)>')
+        ->assertSee('<b>Continue</b>')
+        ->assertDontSee('<script>question</script>', false)
+        ->assertDontSee('<img src=x onerror=alert(1)>', false)
+        ->assertDontSee('<b>Continue</b>', false)
+        ->assertDontSee('Foreign question');
+
+    $component = Livewire::actingAs($user)->test(Index::class)
+        ->set('answers.'.$escalation->id, '<svg onload=alert(1)>');
+    config(['capstan.features.work' => false]);
+    Feature::flushCache();
+    $component->call('answerEscalation', $escalation->id)->assertNotFound();
+    expect($escalation->fresh()->answered_at)->toBeNull();
+
+    config(['capstan.features.work' => true]);
+    Feature::flushCache();
+    Livewire::actingAs($user)->test(Index::class)
+        ->set('answers.'.$escalation->id, '<svg onload=alert(1)>')
+        ->call('answerEscalation', $escalation->id)
+        ->assertHasNoErrors();
+    expect($escalation->fresh()->answer)->toBe('<svg onload=alert(1)>')
+        ->and($escalation->fresh()->workItem->transitions()->count())->toBe(1)
+        ->and($other->fresh()->answered_at)->toBeNull();
 });

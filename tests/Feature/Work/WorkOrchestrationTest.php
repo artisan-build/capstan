@@ -17,10 +17,13 @@ use App\Work\WorkClaimService;
 use App\Work\WorkItemStateService;
 use App\Work\WorkNotifier;
 use App\Work\WorkOrchestrationAuthor;
+use App\Work\WorkOrchestrationCapability;
+use App\Work\WorkOrchestrationContext;
 use App\Work\WorkOrchestrationService;
 use App\Work\WorkSeatService;
 use App\Work\WorkSweepService;
 use App\Work\WorkToolService;
+use App\Work\WorkWorkerLinks;
 use App\Work\WorkWorkerService;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Scheduling\Schedule;
@@ -430,6 +433,331 @@ test('child budget counts only orchestrator created children and cancels automat
         ->and(orchestrationClaims($parent, $host, ['human', 'orchestrator']))->toBe([]);
 });
 
+test('signed claimed-turn links expose fixed context and all scoped actions', function (): void {
+    $addressed = capstanUser();
+    $parent = orchestrationTask();
+    $parent->briefRevisions()->create(['sequence' => 1, 'content' => 'Canonical brief', 'author_actor' => 'supervisor']);
+    $child = orchestrationTask($parent);
+    $event = orchestrationEvent($parent, 'signed-fixed');
+    WorkOrchestrationDecision::query()->create([
+        'work_task_id' => $parent->id, 'triggering_event_id' => $event->id,
+        'decision' => 'Prior choice', 'rationale' => 'Prior rationale', 'evidence' => [],
+    ]);
+    $oldItem = $parent->items()->create(['role' => 'orchestrator', 'state' => 'acted']);
+    WorkStateRevision::query()->create([
+        'work_task_id' => $parent->id, 'work_item_id' => $oldItem->id,
+        'sequence' => 1, 'through_cursor' => 0, 'content' => 'Latest state',
+    ]);
+    $host = orchestrationHost('signed-host');
+    $turn = orchestrationClaims($parent, $host)[0];
+    orchestrationSeat($parent)->forceFill(['turns_completed' => 1])->save();
+    orchestrationEvent($parent, 'signed-later');
+    $links = resolve(WorkWorkerLinks::class)->forItem($turn);
+    expect($links)->toHaveKeys(['orchestration', 'orchestrate']);
+    $this->getJson($links['orchestration'])->assertOk()
+        ->assertJsonPath('context.task.id', $parent->id)
+        ->assertJsonPath('context.brief.content', 'Canonical brief')
+        ->assertJsonPath('context.state.content', 'Latest state')
+        ->assertJsonPath('context.decisions.0.decision', 'Prior choice')
+        ->assertJsonCount(1, 'context.events')
+        ->assertJsonPath('context.events.0.id', $event->id);
+    $post = (fn (string $action, array $input, string $key): array => $this->postJson($links['orchestrate'], ['action' => $action, 'input' => $input, 'idempotency_key' => $key])
+        ->assertOk()->assertJsonPath('outcome', 'accepted')->json());
+    $created = $post('create_child', ['under_task_id' => $parent->id, 'title' => 'Signed child', 'brief' => 'Signed brief'], 'signed-create');
+    $post('revise_brief', ['task_id' => $child->id, 'brief' => 'Signed revision'], 'signed-revise');
+    $queued = $post('queue_item', ['task_id' => $child->id, 'role' => 'builder'], 'signed-queue');
+    $replay = $this->postJson($links['orchestrate'], ['action' => 'queue_item', 'input' => ['task_id' => $child->id, 'role' => 'builder'], 'idempotency_key' => 'signed-queue'])
+        ->assertOk()->assertJsonPath('outcome', 'already_accepted')->json();
+    $post('steer', ['task_id' => $child->id, 'item_id' => $queued['item_id'], 'content' => 'Signed steer'], 'signed-steer');
+    $post('cancel_item', ['item_id' => $queued['item_id']], 'signed-cancel');
+    $post('decide', ['event_id' => $event->id, 'decision' => 'Signed decision', 'rationale' => 'Signed rationale', 'evidence' => ['source' => 'test']], 'signed-decide');
+    $post('request_wake', ['key' => 'signed-wake', 'due_at' => now()->addMinute()->toJSON(), 'reason' => 'Signed follow-up'], 'signed-wake');
+    $post('escalate', ['key' => 'signed-question', 'addressed_actor' => (string) $addressed->id, 'question' => 'Signed question?', 'options' => ['Yes'], 'recommendation' => 'Yes'], 'signed-escalate');
+    $finished = $post('finish', ['state' => 'acted', 'content' => 'Signed state'], 'signed-finish');
+
+    expect($created['task_id'])->not->toBe($parent->id)
+        ->and($replay['item_id'])->toBe($queued['item_id'])
+        ->and($finished['status'])->toBe('completed')
+        ->and(orchestrationSeat($parent)->children_created)->toBe(1)
+        ->and(WorkStateRevision::query()->where('work_task_id', $parent->id)->count())->toBe(2);
+});
+
+test('signed child creation enforces canonical intent and team failover defaults before durable effects', function (): void {
+    $team = Team::default();
+    $parent = orchestrationTask();
+    $event = orchestrationEvent($parent, 'signed-child-contract');
+    $turn = orchestrationClaims($parent, orchestrationHost('signed-child-contract-host'))[0];
+    $link = resolve(WorkWorkerLinks::class)->forItem($turn)['orchestrate'];
+    $active = capstanUser();
+    $inactive = capstanUser(['status' => 'inactive']);
+    $spoke = Spoke::query()->create(['actor_id' => (string) $active->id, 'credential_id' => (string) Str::uuid7()]);
+    $orphan = Spoke::query()->create(['actor_id' => '999999999', 'credential_id' => (string) Str::uuid7()]);
+    $post = fn (array $input, string $key) => $this->postJson($link, [
+        'action' => 'create_child', 'input' => array_replace(['under_task_id' => $parent->id, 'title' => 'Child', 'brief' => 'Brief'], $input),
+        'idempotency_key' => $key,
+    ]);
+    $refuse = function (array $input, string $key) use ($post): void {
+        $before = [WorkTask::query()->count(), DB::table('work_brief_revisions')->count(), DB::table('mcp_write_claims')->count()];
+        $post($input, $key)->assertUnprocessable()->assertJsonPath('error.code', 'invalid_orchestration_action');
+        expect([WorkTask::query()->count(), DB::table('work_brief_revisions')->count(), DB::table('mcp_write_claims')->count()])->toBe($before);
+    };
+
+    $refuse(['device_spoke_id' => $spoke->id], 'signed-pin-no-failover');
+    $refuse(['device_spoke_id' => 999999999, 'failover' => true], 'signed-missing-spoke');
+    $refuse(['device_spoke_id' => $orphan->id, 'failover' => true], 'signed-invalid-spoke');
+    $refuse(['user_actor_address' => 'missing'], 'signed-invalid-actor');
+    $refuse(['user_actor_address' => '999999999'], 'signed-missing-actor');
+    $refuse(['user_actor_address' => (string) $inactive->id], 'signed-inactive-actor');
+    $refuse(['brief' => ''], 'signed-empty-brief');
+    $refuse(['brief' => str_repeat('b', 32001)], 'signed-brief-overrun');
+    $refuse(['timebox_minutes' => 0], 'signed-timebox-underrun');
+    $refuse(['timebox_minutes' => 1441], 'signed-timebox-overrun');
+    $refuse(['required_capabilities' => ['duplicate', 'duplicate']], 'signed-capabilities-duplicate');
+    $refuse(['required_capabilities' => [str_repeat('c', 65)]], 'signed-capability-length');
+    $refuse(['required_capabilities' => array_map(fn (int $i): string => 'cap-'.$i, range(1, 26))], 'signed-capabilities-overrun');
+
+    foreach ([false, true] as $default) {
+        $team->update(['default_failover' => $default]);
+        $capabilities = array_map(fn (int $i): string => 'cap-'.$i, range(1, 25));
+        $response = $post([
+            'brief' => str_repeat('b', 32000), 'user_actor_address' => (string) $active->id,
+            'timebox_minutes' => 1440, 'required_capabilities' => $capabilities,
+        ], 'signed-default-'.(int) $default)->assertOk()->assertJsonPath('outcome', 'accepted')->json();
+        $child = WorkTask::query()->findOrFail($response['task_id']);
+        expect($child->failover)->toBe($default)
+            ->and($child->timebox_minutes)->toBe(1440)
+            ->and($child->required_capabilities)->toBe($capabilities)
+            ->and($child->latestBriefRevision()->firstOrFail()->content)->toHaveLength(32000);
+    }
+    expect($event->exists)->toBeTrue();
+});
+
+test('signed fixed turn and decision context paginates completely within live authority', function (): void {
+    $parent = orchestrationTask();
+    orchestrationEvent($parent, 'completed');
+    $host = orchestrationHost('signed-page-host');
+    $completed = orchestrationClaims($parent, $host)[0];
+    resolve(WorkOrchestrationService::class)->turnDone($completed, $completed->fence, $completed->seat_fence, 'Completed', CarbonImmutable::now());
+    $events = collect(range(1, 27))->map(fn (int $index): WorkOrchestrationEvent => orchestrationEvent($parent, 'page-'.$index));
+    $turn = orchestrationClaims($parent, $host)[0];
+    $later = orchestrationEvent($parent, 'outside-fixed-turn');
+    foreach (range(1, 27) as $index) {
+        WorkOrchestrationDecision::query()->create([
+            'work_task_id' => $parent->id, 'triggering_event_id' => $events[0]->id,
+            'decision' => 'Decision '.$index, 'rationale' => 'Rationale '.$index, 'evidence' => ['index' => $index],
+        ]);
+    }
+    $expectedDecisions = WorkOrchestrationDecision::query()->where('work_task_id', $parent->id)->orderBy('id')->pluck('id')->all();
+    $link = resolve(WorkWorkerLinks::class)->forItem($turn)['orchestration'];
+    $first = $this->getJson($link)->assertOk()
+        ->assertJsonCount(25, 'context.events')->assertJsonPath('context.has_more', true)
+        ->assertJsonPath('context.next_cursor', 26)->assertJsonCount(25, 'context.decisions')
+        ->assertJsonPath('context.decisions_has_more', true)->json('context');
+    $second = $this->getJson($link.'&after='.$first['next_cursor'].'&decisions_after='.$first['decisions_next_cursor'])
+        ->assertOk()->assertJsonCount(2, 'context.events')->assertJsonPath('context.has_more', false)
+        ->assertJsonCount(2, 'context.decisions')->assertJsonPath('context.decisions_has_more', false)->json('context');
+
+    expect(array_column([...$first['events'], ...$second['events']], 'id'))->toBe($events->pluck('id')->all())
+        ->and(array_column([...$first['decisions'], ...$second['decisions']], 'id'))->toBe($expectedDecisions)
+        ->and(array_column([...$first['events'], ...$second['events']], 'id'))->not->toContain($later->id);
+    $this->getJson($link.'&after=bogus')->assertUnprocessable();
+    $this->getJson($link.'&after=0')->assertUnprocessable()->assertJsonPath('error.code', 'invalid_cursor');
+    $this->getJson($link.'&after='.($turn->turn_upper_bound + 1))->assertUnprocessable()->assertJsonPath('error.code', 'invalid_cursor');
+
+    $turn->increment('fence');
+    $this->getJson($link.'&after='.$first['next_cursor'])->assertForbidden();
+
+    $expiringParent = orchestrationTask();
+    foreach (range(1, 27) as $index) {
+        orchestrationEvent($expiringParent, 'expiring-'.$index);
+    }
+    $expiring = orchestrationClaims($expiringParent, orchestrationHost('signed-expiring-page'))[0];
+    $expiringLink = resolve(WorkWorkerLinks::class)->forItem($expiring)['orchestration'];
+    $cursor = $this->getJson($expiringLink)->assertOk()->json('context.next_cursor');
+    Date::setTestNow(now()->addSeconds(361));
+    $this->getJson($expiringLink.'&after='.$cursor)->assertForbidden();
+});
+
+test('signed decision evidence bounds and surfaced action limits refuse before durable effects', function (): void {
+    $addressed = capstanUser();
+    $inactive = capstanUser(['status' => 'inactive']);
+    $parent = orchestrationTask();
+    $child = orchestrationTask($parent);
+    $event = orchestrationEvent($parent, 'signed-input-bounds');
+    $turn = orchestrationClaims($parent, orchestrationHost('signed-input-host'))[0];
+    $link = resolve(WorkWorkerLinks::class)->forItem($turn)['orchestrate'];
+    $post = fn (string $action, array $input, string $key) => $this->postJson($link, compact('action', 'input') + ['idempotency_key' => $key]);
+    $validEvidence = ['source' => ['kind' => 'test', 'indexes' => [1, 2, 3]]];
+    $post('decide', ['event_id' => $event->id, 'decision' => 'Proceed', 'rationale' => 'Evidence is bounded', 'evidence' => $validEvidence], 'signed-valid-evidence')
+        ->assertOk()->assertJsonPath('outcome', 'accepted');
+    expect(WorkOrchestrationDecision::query()->latest('created_at')->firstOrFail()->evidence)->toBe($validEvidence);
+
+    $deep = ['value' => true];
+    foreach (range(1, 7) as $level) {
+        $deep = ['level' => $deep];
+    }
+    $invalidEvidence = [
+        'string' => ['value' => str_repeat('x', 8001)],
+        'depth' => $deep,
+        'list-root' => ['first', 'second'],
+        'encoded-bytes' => ['first' => str_repeat('a', 4100), 'second' => str_repeat('b', 4100)],
+    ];
+    foreach ($invalidEvidence as $key => $evidence) {
+        $before = [WorkOrchestrationDecision::query()->count(), DB::table('mcp_write_claims')->count()];
+        $post('decide', ['event_id' => $event->id, 'decision' => 'No', 'rationale' => 'Invalid evidence', 'evidence' => $evidence], 'signed-evidence-'.$key)
+            ->assertUnprocessable()->assertJsonPath('error.code', 'invalid_orchestration_action');
+        expect([WorkOrchestrationDecision::query()->count(), DB::table('mcp_write_claims')->count()])->toBe($before);
+    }
+
+    $post('revise_brief', ['task_id' => $child->id, 'brief' => str_repeat('r', 32000)], 'signed-revise-boundary')->assertOk();
+    $post('steer', ['task_id' => $child->id, 'content' => str_repeat('s', 8000)], 'signed-steer-boundary')->assertOk();
+    foreach ([
+        ['revise_brief', ['task_id' => $child->id, 'brief' => str_repeat('r', 32001)], 'signed-revise-over'],
+        ['steer', ['task_id' => $child->id, 'content' => str_repeat('s', 8001)], 'signed-steer-over'],
+        ['escalate', ['key' => 'missing', 'addressed_actor' => '999999999', 'question' => 'Missing?', 'options' => ['No'], 'recommendation' => 'No'], 'signed-escalate-missing'],
+        ['escalate', ['key' => 'inactive', 'addressed_actor' => (string) $inactive->id, 'question' => 'Inactive?', 'options' => ['No'], 'recommendation' => 'No'], 'signed-escalate-inactive'],
+    ] as [$action, $input, $key]) {
+        $before = [DB::table('work_brief_revisions')->count(), DB::table('work_steers')->count(), WorkEscalation::query()->count(), WorkItem::query()->count(), DB::table('mcp_write_claims')->count()];
+        $post($action, $input, $key)->assertUnprocessable()->assertJsonPath('error.code', 'invalid_orchestration_action');
+        expect([DB::table('work_brief_revisions')->count(), DB::table('work_steers')->count(), WorkEscalation::query()->count(), WorkItem::query()->count(), DB::table('mcp_write_claims')->count()])->toBe($before);
+    }
+    $post('escalate', ['key' => 'valid', 'addressed_actor' => (string) $addressed->id, 'question' => 'Valid?', 'options' => ['Yes'], 'recommendation' => 'Yes'], 'signed-escalate-valid')
+        ->assertOk()->assertJsonPath('outcome', 'accepted');
+    expect(WorkEscalation::query()->where('request_key', 'valid')->sole()->addressed_actor)->toBe((string) $addressed->id);
+});
+
+test('signed queue replay preserves the final child slot and overrun raises one circuit breaker', function (): void {
+    config(['capstan.work.orchestration.child_budget' => 1]);
+    $parent = orchestrationTask();
+    $child = orchestrationTask($parent);
+    orchestrationEvent($parent, 'signed-budget');
+    $turn = orchestrationClaims($parent, orchestrationHost('signed-budget-host'))[0];
+    $link = resolve(WorkWorkerLinks::class)->forItem($turn)['orchestrate'];
+    $body = fn (string $key, string $role): array => [
+        'action' => 'queue_item', 'input' => ['task_id' => $child->id, 'role' => $role], 'idempotency_key' => $key,
+    ];
+
+    $first = $this->postJson($link, $body('final-slot', 'builder'))->assertOk()->assertJsonPath('outcome', 'accepted')->json();
+    $this->postJson($link, $body('final-slot', 'builder'))->assertOk()
+        ->assertJsonPath('outcome', 'already_accepted')->assertJsonPath('item_id', $first['item_id']);
+    $this->postJson($link, $body('overrun', 'reviewer'))->assertOk()
+        ->assertJsonPath('outcome', 'accepted')->assertJsonPath('status', 'budget_exhausted');
+    $this->postJson($link, $body('overrun', 'reviewer'))->assertForbidden();
+
+    expect(orchestrationSeat($parent)->children_created)->toBe(1)
+        ->and($child->items()->where('role', 'builder')->count())->toBe(1)
+        ->and($child->items()->where('role', 'reviewer')->count())->toBe(0)
+        ->and(WorkEscalation::query()->where('request_key', 'circuit-breaker')->count())->toBe(1);
+});
+
+test('signed claimed-turn failure completes only a routed live turn once', function (): void {
+    $parent = orchestrationTask();
+    orchestrationEvent($parent, 'signed-failed');
+    $turn = orchestrationClaims($parent, orchestrationHost('signed-failed-host'))[0];
+    resolve(WorkItemStateService::class)->transition($turn, WorkItemState::Delivered, 'spoke', 'signed-failed-host');
+    resolve(WorkItemStateService::class)->transition($turn->refresh(), WorkItemState::Routed, 'spoke', 'signed-failed-host');
+    $link = resolve(WorkWorkerLinks::class)->forItem($turn->refresh())['orchestrate'];
+    $body = ['action' => 'finish', 'input' => ['state' => 'failed'], 'idempotency_key' => 'signed-failed'];
+
+    $this->postJson($link, $body)->assertOk()->assertJsonPath('outcome', 'accepted')->assertJsonPath('status', 'completed');
+    $this->postJson($link, $body)->assertForbidden();
+    expect($turn->fresh()->state)->toBe(WorkItemState::Failed)
+        ->and($turn->transitions()->where('to_state', WorkItemState::Failed)->count())->toBe(1);
+});
+
+test('ordinary worker links retain only ordinary authority', function (): void {
+    $task = orchestrationTask();
+    $host = orchestrationHost('ordinary-host');
+    $item = $task->items()->create([
+        'role' => 'builder', 'state' => 'claimed', 'fence' => 1, 'claimant_actor' => $host->actor_id,
+        'claimant_spoke_id' => $host->id, 'claimed_at' => now(), 'lease_until' => now()->addMinutes(5),
+    ]);
+
+    expect(array_keys(resolve(WorkWorkerLinks::class)->forItem($item)))->toBe(['brief', 'milestone', 'steers']);
+});
+
+test('signed claimed authority refuses every out-of-subtree target and malformed payload without Work effects', function (): void {
+    $root = orchestrationTask();
+    $parent = orchestrationTask($root);
+    $child = orchestrationTask($parent);
+    $sibling = orchestrationTask($root);
+    $siblingChild = orchestrationTask($sibling);
+    $unrelated = orchestrationTask();
+    $crossTeam = WorkTask::query()->create([
+        'team_id' => Team::query()->create(['name' => 'Cross team', 'slug' => Str::random(16)])->id,
+        'title' => 'Cross team task', 'required_capabilities' => [], 'timebox_minutes' => 10, 'creator_actor' => 'supervisor',
+    ]);
+    foreach ([$root, $parent, $siblingChild, $unrelated, $crossTeam] as $task) {
+        $task->items()->create(['role' => 'builder']);
+    }
+    orchestrationEvent($parent, 'signed-scope');
+    $turn = orchestrationClaims($parent, orchestrationHost('signed-scope-host'))[0];
+    $link = resolve(WorkWorkerLinks::class)->forItem($turn)['orchestrate'];
+    $snapshot = fn (): array => [
+        WorkTask::query()->count(), WorkItem::query()->count(),
+        DB::table('work_brief_revisions')->count(), DB::table('work_steers')->count(),
+    ];
+    $attempt = function (string $action, array $input, string $key) use ($link, $snapshot): void {
+        $before = $snapshot();
+        $this->postJson($link, ['action' => $action, 'input' => $input, 'idempotency_key' => $key])
+            ->assertForbidden()->assertJsonPath('error.code', 'orchestration_forbidden');
+        expect($snapshot())->toBe($before);
+    };
+    foreach ([$root, $siblingChild, $unrelated, $crossTeam] as $index => $outside) {
+        $attempt('create_child', ['under_task_id' => $outside->id, 'title' => 'Forbidden', 'brief' => 'Forbidden'], 'scope-create-'.$index);
+    }
+    foreach ([$root, $parent, $siblingChild, $unrelated, $crossTeam] as $index => $outside) {
+        $attempt('queue_item', ['task_id' => $outside->id, 'role' => 'builder'], 'scope-queue-'.$index);
+        $attempt('steer', ['task_id' => $outside->id, 'content' => 'Forbidden'], 'scope-steer-'.$index);
+        $attempt('cancel_item', ['item_id' => $outside->items()->firstOrFail()->id], 'scope-cancel-'.$index);
+    }
+    $before = $snapshot();
+    $this->postJson($link, ['action' => 'queue_item', 'input' => ['task_id' => $child->id, 'role' => 'human'], 'idempotency_key' => 'scope-reserved'])
+        ->assertUnprocessable()->assertJsonPath('error.code', 'invalid_orchestration_action');
+    $this->postJson($link, ['action' => 'queue_item', 'input' => ['task_id' => $child->id, 'role' => 'builder', 'unknown' => true], 'idempotency_key' => 'scope-malformed'])
+        ->assertUnprocessable()->assertJsonPath('error.code', 'invalid_orchestration_action');
+    expect($snapshot())->toBe($before);
+});
+
+test('signed orchestration links reject stale item and seat fences and cancelled parents before effects', function (string $loss): void {
+    $parent = orchestrationTask();
+    $child = orchestrationTask($parent);
+    orchestrationEvent($parent, 'signed-lost-'.$loss);
+    $turn = orchestrationClaims($parent, orchestrationHost('signed-lost-host-'.$loss))[0];
+    $links = resolve(WorkWorkerLinks::class)->forItem($turn);
+    match ($loss) {
+        'item_fence' => $turn->increment('fence'),
+        'seat_fence' => orchestrationSeat($parent)->increment('fence'),
+        'cancelled_parent' => $parent->update(['cancelled_at' => now()]),
+        'expired_lease' => Date::setTestNow(now()->addSeconds(301)),
+        'expired_link' => Date::setTestNow(now()->addSeconds(361)),
+    };
+    $before = [$child->items()->count(), DB::table('mcp_write_claims')->count()];
+
+    $this->getJson($links['orchestration'])->assertForbidden();
+    $this->postJson($links['orchestrate'], [
+        'action' => 'queue_item', 'input' => ['task_id' => $child->id, 'role' => 'builder'], 'idempotency_key' => 'lost-'.$loss,
+    ])->assertForbidden();
+    expect([$child->items()->count(), DB::table('mcp_write_claims')->count()])->toBe($before);
+})->with(['item_fence', 'seat_fence', 'cancelled_parent', 'expired_lease', 'expired_link']);
+
+test('Work off hides signed orchestration entry points before effects', function (): void {
+    $parent = orchestrationTask();
+    $child = orchestrationTask($parent);
+    orchestrationEvent($parent, 'signed-off');
+    $turn = orchestrationClaims($parent, orchestrationHost('signed-off-host'))[0];
+    $links = resolve(WorkWorkerLinks::class)->forItem($turn);
+    config(['capstan.features.work' => false]);
+    Feature::flushCache();
+    $before = [$child->items()->count(), DB::table('mcp_write_claims')->count()];
+
+    $this->getJson($links['orchestration'])->assertNotFound();
+    $this->postJson($links['orchestrate'], [
+        'action' => 'queue_item', 'input' => ['task_id' => $child->id, 'role' => 'builder'], 'idempotency_key' => 'signed-off',
+    ])->assertNotFound();
+    expect([$child->items()->count(), DB::table('mcp_write_claims')->count()])->toBe($before);
+});
+
 test('records use UUIDv7 and decisions and state revisions reject edits or deletion', function (): void {
     $parent = orchestrationTask();
     $event = orchestrationEvent($parent);
@@ -643,3 +971,128 @@ test('failed conditional orchestration claim rolls back seat acquisition and tak
         ->and($seat->session_ref)->toBe($held ? 'opaque/exact ? CASE' : null);
     expect(orchestrationClaims($parent, $b))->toHaveCount(1);
 })->with(['acquisition' => false, 'takeover' => true]);
+
+test('a current orchestrator turn exercises the complete bounded subtree capability', function (): void {
+    $parent = orchestrationTask();
+    $existing = orchestrationTask($parent);
+    $event = orchestrationEvent($parent, 'capability-current');
+    $host = orchestrationHost();
+    $turn = orchestrationClaims($parent, $host)[0];
+    $context = new WorkOrchestrationContext(
+        $parent->id, $host->actor_id, $host->id, $turn->seat_fence, null, $turn->id, $turn->fence,
+    );
+    $capability = resolve(WorkOrchestrationCapability::class);
+
+    $created = $capability->createChild($context, $parent->id, [
+        'title' => 'Capability child', 'required_capabilities' => [], 'timebox_minutes' => 5,
+    ], 'Capability brief', CarbonImmutable::now());
+    $revision = $capability->reviseBrief($context, $existing->id, 'Revised by orchestrator', CarbonImmutable::now());
+    $item = $capability->queue($context, $existing->id, 'builder', CarbonImmutable::now());
+    $steer = $capability->steer($context, $existing->id, $item->id, 'Proceed safely', CarbonImmutable::now());
+    $cancelled = $capability->cancelItem($context, $item->id, CarbonImmutable::now());
+    $decision = $capability->decide($context, $event->id, 'Proceed', 'Evidence checked', ['proof' => true], CarbonImmutable::now());
+    $wake = $capability->requestWake($context, 'later', CarbonImmutable::now()->addMinute(), 'Recheck', CarbonImmutable::now());
+    $escalation = $capability->escalate($context, 'question', 'supervisor', 'Continue?', ['Yes', 'No'], 'Yes', CarbonImmutable::now());
+    $finished = $capability->finish($context, WorkItemState::Acted, 'Current turn complete', CarbonImmutable::now());
+
+    expect($created->parent_task_id)->toBe($parent->id)
+        ->and($created->briefRevisions()->sole()->content)->toBe('Capability brief')
+        ->and($revision->work_task_id)->toBe($existing->id)
+        ->and($steer->work_item_id)->toBe($item->id)
+        ->and($cancelled->state)->toBe(WorkItemState::Cancelled)
+        ->and($decision->work_task_id)->toBe($parent->id)
+        ->and($wake->work_task_id)->toBe($parent->id)
+        ->and($escalation->work_task_id)->toBe($parent->id)
+        ->and($finished->state)->toBe(WorkItemState::Acted);
+});
+
+test('an interactive holder exercises subtree capability and loses it on expiry release replacement or spoofing', function (): void {
+    $parent = orchestrationTask();
+    $child = orchestrationTask($parent);
+    orchestrationEvent($parent, 'capability-interactive');
+    $a = orchestrationHost('interactive-a');
+    $b = orchestrationHost('interactive-b');
+    $seat = resolve(WorkSeatService::class)->take($parent, $a->actor_id, $a->id, 0, 'opaque-session', true, CarbonImmutable::now(), 10);
+    $context = new WorkOrchestrationContext($parent->id, $a->actor_id, $a->id, $seat->fence, 'opaque-session');
+    $capability = resolve(WorkOrchestrationCapability::class);
+    $created = $capability->createChild($context, $parent->id, [
+        'title' => 'Interactive child', 'required_capabilities' => [], 'timebox_minutes' => 5,
+    ], 'Interactive brief', CarbonImmutable::now());
+    $revision = $capability->reviseBrief($context, $child->id, 'Interactive revision', CarbonImmutable::now());
+    $item = $capability->queue($context, $child->id, 'builder', CarbonImmutable::now());
+    $steer = $capability->steer($context, $child->id, $item->id, 'Interactive steer', CarbonImmutable::now());
+    $cancelled = $capability->cancelItem($context, $item->id, CarbonImmutable::now());
+    $decision = $capability->decide($context, WorkOrchestrationEvent::query()->where('source_key', 'capability-interactive')->sole()->id, 'Continue', 'Interactive proof', [], CarbonImmutable::now());
+    $wake = $capability->requestWake($context, 'interactive-wake', CarbonImmutable::now()->addMinute(), 'Check', CarbonImmutable::now());
+    $escalation = $capability->escalate($context, 'interactive-question', 'supervisor', 'Continue?', ['Yes'], 'Yes', CarbonImmutable::now());
+    $finished = $capability->finish($context, WorkItemState::Acted, 'Interactive complete', CarbonImmutable::now());
+    expect($created->parent_task_id)->toBe($parent->id)
+        ->and($revision->work_task_id)->toBe($child->id)
+        ->and($steer->work_item_id)->toBe($item->id)
+        ->and($cancelled->state)->toBe(WorkItemState::Cancelled)
+        ->and($decision->work_task_id)->toBe($parent->id)
+        ->and($wake->work_task_id)->toBe($parent->id)
+        ->and($escalation->work_task_id)->toBe($parent->id)
+        ->and($finished->state)->toBe(WorkItemState::Acted);
+
+    foreach ([
+        new WorkOrchestrationContext($parent->id, 'spoofed', $a->id, $seat->fence, 'opaque-session'),
+        new WorkOrchestrationContext($parent->id, $a->actor_id, $b->id, $seat->fence, 'opaque-session'),
+        new WorkOrchestrationContext($parent->id, $a->actor_id, $a->id, $seat->fence + 1, 'opaque-session'),
+        new WorkOrchestrationContext($parent->id, $a->actor_id, $a->id, $seat->fence, 'wrong-session'),
+    ] as $spoofed) {
+        expect(fn () => $capability->queue($spoofed, $child->id, 'reviewer', CarbonImmutable::now()))
+            ->toThrow(ApiErrorException::class);
+    }
+    expect($child->items()->count())->toBe(1);
+
+    Date::setTestNow(now()->addSeconds(11));
+    expect(fn () => $capability->queue($context, $child->id, 'expired', CarbonImmutable::now()))
+        ->toThrow(ApiErrorException::class);
+    $replacement = resolve(WorkSeatService::class)->take($parent, $b->actor_id, $b->id, $seat->fence, 'replacement', true, CarbonImmutable::now());
+    expect(fn () => $capability->queue($context, $child->id, 'replaced', CarbonImmutable::now()))
+        ->toThrow(ApiErrorException::class);
+    $replacementContext = new WorkOrchestrationContext($parent->id, $b->actor_id, $b->id, $replacement->fence, 'replacement');
+    resolve(WorkSeatService::class)->release($parent, $b->actor_id, $b->id, $replacement->fence, CarbonImmutable::now());
+    expect(fn () => $capability->queue($replacementContext, $child->id, 'released', CarbonImmutable::now()))
+        ->toThrow(ApiErrorException::class);
+    expect($child->items()->count())->toBe(1);
+});
+
+test('subtree capability refuses ancestors siblings unrelated roots cross team reserved roles and stale turn fences without writes', function (): void {
+    $root = orchestrationTask();
+    $parent = orchestrationTask($root);
+    $child = orchestrationTask($parent);
+    $sibling = orchestrationTask($root);
+    $siblingChild = orchestrationTask($sibling);
+    $other = WorkTask::query()->create([
+        'team_id' => Team::query()->create(['name' => 'Other capability team', 'slug' => Str::random(16)])->id,
+        'title' => 'Other root', 'required_capabilities' => [], 'timebox_minutes' => 10, 'creator_actor' => 'supervisor',
+    ]);
+    orchestrationEvent($parent, 'capability-scope');
+    $host = orchestrationHost('scope-host');
+    $turn = orchestrationClaims($parent, $host)[0];
+    $context = new WorkOrchestrationContext($parent->id, $host->actor_id, $host->id, $turn->seat_fence, null, $turn->id, $turn->fence);
+    $capability = resolve(WorkOrchestrationCapability::class);
+    $before = WorkItem::query()->count();
+
+    foreach ([$root, $parent, $sibling, $siblingChild, $other] as $outside) {
+        try {
+            $capability->queue($context, $outside->id, 'builder', CarbonImmutable::now());
+            $this->fail('Expected subtree refusal.');
+        } catch (ApiErrorException $exception) {
+            expect($exception->status)->toBe(403);
+        }
+    }
+    expect(fn () => $capability->queue($context, $child->id, WorkItem::ROLE_HUMAN, CarbonImmutable::now()))
+        ->toThrow(ApiErrorException::class);
+    $stale = new WorkOrchestrationContext($parent->id, $host->actor_id, $host->id, $turn->seat_fence, null, $turn->id, $turn->fence + 1);
+    expect(fn () => $capability->queue($stale, $child->id, 'builder', CarbonImmutable::now()))
+        ->toThrow(ApiErrorException::class);
+    expect(fn () => $capability->queue($context, (string) Str::uuid7(), 'builder', CarbonImmutable::now()))
+        ->toThrow(ApiErrorException::class);
+    $parent->forceFill(['cancelled_at' => now()])->save();
+    expect(fn () => $capability->queue($context, $child->id, 'builder', CarbonImmutable::now()))
+        ->toThrow(ApiErrorException::class);
+    expect(WorkItem::query()->count())->toBe($before);
+});

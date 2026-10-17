@@ -23,6 +23,16 @@ final class WorkWorkerLinks
             ]);
         }
 
+        if ($item->role === WorkItem::ROLE_ORCHESTRATOR) {
+            foreach (['orchestration', 'orchestrate'] as $action) {
+                $links[$action] = URL::temporarySignedRoute('api.work.worker.'.$action, $expires, [
+                    'item' => $item->id,
+                    'fence' => $item->fence,
+                    'nonce' => (string) Str::uuid7(),
+                ]);
+            }
+        }
+
         return $links;
     }
 }
