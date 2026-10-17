@@ -83,8 +83,12 @@ For cron, preserve the existing crontab before changing it and add one tagged li
 paths made absolute:
 
 ```cron
-* * * * * /usr/bin/python3 /absolute/path/to/drain/capstan_drain.py --config /absolute/private/config.json >> /absolute/private/drain.log 2>&1 # capstan-work-drain
+* * * * * /absolute/path/to/python3 /absolute/path/to/drain/capstan_drain.py --config /absolute/private/config.json >> /absolute/private/drain.log 2>&1 # capstan-work-drain
 ```
+
+Both schedulers need the interpreter's own absolute path. Run `command -v python3` on the machine and
+use exactly what it prints. `/absolute/path/to/python3` above is a placeholder, and `/usr/bin/python3`
+is often wrong on a machine whose Python came from Homebrew, pyenv, or a framework build.
 
 Read the current crontab first. If it cannot be read for a reason other than "no crontab", stop without
 writing. Refuse to add a second line with the same tag. Save the readable prior crontab beside the config
