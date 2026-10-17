@@ -30,13 +30,15 @@ final class UnsafeWorkClaimService
     /** @param list<string> $itemIds */
     public function writeWithoutGuard(array $itemIds, int $spokeId, string $actorId, CarbonImmutable $now): void
     {
-        DB::table('work_items')->whereIn('id', $itemIds)->update([
-            'state' => WorkItemState::Claimed->value,
-            'claimant_spoke_id' => $spokeId,
-            'claimant_actor' => $actorId,
-            'lease_until' => $now->addMinutes(5),
-            'claimed_at' => $now,
-            'updated_at' => $now,
-        ]);
+        foreach ($itemIds as $itemId) {
+            DB::table('work_items')->where('id', $itemId)->update([
+                'state' => WorkItemState::Claimed->value,
+                'claimant_spoke_id' => $spokeId,
+                'claimant_actor' => $actorId,
+                'lease_until' => $now->addMinutes(5),
+                'claimed_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
     }
 }
