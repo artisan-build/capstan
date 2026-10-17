@@ -4,8 +4,12 @@ namespace App\Work;
 
 use App\Enums\WorkItemState;
 use App\Http\ApiErrorException;
+use App\Models\Spoke;
+use App\Models\Team;
 use App\Models\WorkItem;
 use App\Models\WorkTask;
+use App\Support\JsonCanonicalizer;
+use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Validator;
@@ -41,9 +45,9 @@ final readonly class WorkOrchestrationSurface
     }
 
     /** @return array<string, mixed> */
-    public function read(WorkOrchestrationContext $context, int $after, CarbonImmutable $now): array
+    public function read(WorkOrchestrationContext $context, int $after, CarbonImmutable $now, ?string $decisionsAfter = null): array
     {
-        return $this->capability->context($context, $after, $now);
+        return $this->capability->context($context, $after, $now, $decisionsAfter);
     }
 
     /** @param array<string, mixed> $input
@@ -52,6 +56,13 @@ final readonly class WorkOrchestrationSurface
     public function act(WorkOrchestrationContext $context, string $action, array $input, CarbonImmutable $now): array
     {
         $input = $this->validate($action, $input);
+        if ($action === 'create_child' && ! isset($input['user_actor_address'])) {
+            $under = WorkTask::query()->find($input['under_task_id']);
+            $team = $under instanceof WorkTask ? Team::query()->find($under->team_id) : null;
+            if ($team instanceof Team && ! $team->pool_work) {
+                $input['user_actor_address'] = $context->actorId;
+            }
+        }
 
         return match ($action) {
             'create_child' => $this->created($action, $this->capability->createChild(
@@ -96,10 +107,10 @@ final readonly class WorkOrchestrationSurface
         $rules = match ($action) {
             'create_child' => [
                 'under_task_id' => ['required', 'uuid'], 'title' => ['required', 'string', 'min:1', 'max:255'],
-                'brief' => ['required', 'string', 'min:1', 'max:100000'], 'user_actor_address' => ['sometimes', 'string', 'max:255'],
+                'brief' => ['required', 'string', 'min:1', 'max:32000'], 'user_actor_address' => ['sometimes', 'required', 'string', 'regex:/\A[1-9][0-9]{0,18}\z/D'],
                 'device_spoke_id' => ['sometimes', 'integer', 'min:1'], 'failover' => ['sometimes', 'boolean'],
                 'required_capabilities' => ['sometimes', 'array', 'list', 'max:25'], 'required_capabilities.*' => ['string', 'min:1', 'max:64', 'distinct'],
-                'timebox_minutes' => ['sometimes', 'integer', 'min:1', 'max:10080'], 'workflow_ref' => ['sometimes', 'string', 'max:2048'],
+                'timebox_minutes' => ['sometimes', 'integer', 'min:1', 'max:1440'], 'workflow_ref' => ['sometimes', 'string', 'max:2048'],
             ],
             'revise_brief' => ['task_id' => ['required', 'uuid'], 'brief' => ['required', 'string', 'min:1', 'max:100000']],
             'queue_item' => ['task_id' => ['required', 'uuid'], 'role' => ['required', 'string', 'min:1', 'max:64', Rule::notIn([WorkItem::ROLE_HUMAN, WorkItem::ROLE_ORCHESTRATOR])]],
@@ -116,10 +127,48 @@ final readonly class WorkOrchestrationSurface
         }
         $validated = $validator->validated();
         if ($action === 'create_child') {
-            $validated += ['required_capabilities' => [], 'timebox_minutes' => 10, 'failover' => true];
+            if (isset($validated['device_spoke_id']) && ! array_key_exists('failover', $input)) {
+                throw $this->invalid();
+            }
+            if (isset($validated['device_spoke_id'])) {
+                $spoke = Spoke::query()->whereKey($validated['device_spoke_id'])->first();
+                if (! $spoke instanceof Spoke || ! User::query()->whereKey($spoke->actor_id)->exists()) {
+                    throw $this->invalid();
+                }
+            }
+            if (isset($validated['user_actor_address']) && ! User::query()->whereKey($validated['user_actor_address'])->where('status', 'active')->exists()) {
+                throw $this->invalid();
+            }
+            $under = WorkTask::query()->whereKey($validated['under_task_id'])->first();
+            $team = $under instanceof WorkTask ? Team::query()->find($under->team_id) : null;
+            if (! $team instanceof Team) {
+                throw $this->invalid();
+            }
+            $validated += ['required_capabilities' => [], 'timebox_minutes' => 30, 'failover' => (bool) $team->default_failover];
+        }
+        if ($action === 'decide' && (! $this->safeEvidence($validated['evidence']) || strlen(JsonCanonicalizer::encode($validated['evidence'])) > 8000)) {
+            throw $this->invalid();
         }
 
         return $validated;
+    }
+
+    /** @param array<array-key, mixed> $value */
+    private function safeEvidence(array $value, int $depth = 0): bool
+    {
+        if ($depth > 6 || ($depth === 0 && $value !== [] && array_is_list($value))) {
+            return false;
+        }
+        foreach ($value as $entry) {
+            if (is_array($entry) && ! $this->safeEvidence($entry, $depth + 1)) {
+                return false;
+            }
+            if (is_string($entry) && strlen($entry) > 8000) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /** @return array<string, mixed> */

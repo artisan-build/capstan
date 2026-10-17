@@ -24,9 +24,9 @@ final readonly class WorkOrchestrationMcpService
     ) {}
 
     /** @return array<string, mixed> */
-    public function take(int $teamId, string $taskId, string $actor, string $credentialId, ?int $spokeId, string $sessionRef, int $after, CarbonImmutable $now): array
+    public function take(int $teamId, string $taskId, string $actor, string $credentialId, ?int $spokeId, string $sessionRef, int $after, CarbonImmutable $now, ?string $decisionsAfter = null): array
     {
-        return DB::transaction(function () use ($teamId, $taskId, $actor, $credentialId, $spokeId, $sessionRef, $after, $now): array {
+        return DB::transaction(function () use ($teamId, $taskId, $actor, $credentialId, $spokeId, $sessionRef, $after, $now, $decisionsAfter): array {
             $parent = $this->task($teamId, $taskId);
             $spoke = $this->spoke($actor, $credentialId, $spokeId, $now);
             $this->locks->tasks($parent->id);
@@ -49,7 +49,7 @@ final readonly class WorkOrchestrationMcpService
                 throw $this->refused('seat_unavailable');
             }
 
-            return $this->context($parent, $seat, $spoke, $after, $now);
+            return $this->context($parent, $seat, $spoke, $after, $now, $decisionsAfter);
         }, 5);
     }
 
@@ -157,7 +157,7 @@ final readonly class WorkOrchestrationMcpService
     }
 
     /** @return array<string, mixed> */
-    private function context(WorkTask $parent, WorkOrchestratorSeat $seat, Spoke $spoke, int $after, CarbonImmutable $now): array
+    private function context(WorkTask $parent, WorkOrchestratorSeat $seat, Spoke $spoke, int $after, CarbonImmutable $now, ?string $decisionsAfter = null): array
     {
         if ($after > $seat->event_sequence) {
             throw $this->refused('invalid_cursor');
@@ -187,6 +187,7 @@ final readonly class WorkOrchestrationMcpService
                 $this->surface->interactive($parent->id, $spoke->actor_id, $spoke->id, $seat->fence, (string) $seat->session_ref),
                 $after,
                 $now,
+                $decisionsAfter,
             ),
         ];
     }

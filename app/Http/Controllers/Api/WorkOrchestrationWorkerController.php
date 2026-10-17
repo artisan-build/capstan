@@ -18,11 +18,16 @@ final class WorkOrchestrationWorkerController extends Controller
     public function __invoke(Request $request, string $item, WorkOrchestrationSurface $surface, DurableWriteCoordinator $writes): JsonResponse
     {
         abort_unless(Feature::active(Work::class), 404);
-        abort_unless($request->hasValidSignature(), 403);
+        abort_unless($request->hasValidSignatureWhileIgnoring(['after', 'decisions_after']), 403);
         $context = $surface->claimed($item, (int) $request->query('fence'));
 
         if ($request->isMethod('GET')) {
-            return new JsonResponse(['context' => $surface->read($context, 0, CarbonImmutable::now())]);
+            $validated = validator($request->query(), [
+                'after' => ['sometimes', 'integer', 'min:0'],
+                'decisions_after' => ['sometimes', 'uuid'],
+            ])->validate();
+
+            return new JsonResponse(['context' => $surface->read($context, (int) ($validated['after'] ?? 0), CarbonImmutable::now(), $validated['decisions_after'] ?? null)]);
         }
 
         $body = json_decode($request->getContent(), true);

@@ -33,6 +33,7 @@ abstract class WorkOrchestrationTool extends CapstanTool
                 'spoke_id' => $schema->integer()->min(1),
                 'session_ref' => $schema->string()->min(1)->max(2048)->required(),
                 'after' => $schema->integer()->min(0)->default(0),
+                'decisions_after' => $schema->string(),
                 'idempotency_key' => $schema->string()->min(1)->max(255)->required(),
             ],
             'release_seat' => [
@@ -107,7 +108,10 @@ abstract class WorkOrchestrationTool extends CapstanTool
         $context = $schema->object([
             'task' => $task->required(), 'brief' => $brief, 'state' => $state,
             'decisions' => $schema->array()->items($decision)->required(), 'events' => $schema->array()->items($event)->required(),
-            'cursor' => $schema->integer()->required(), 'through' => $schema->integer()->required(), 'has_more' => $schema->boolean()->required(),
+            'cursor' => $schema->integer()->required(), 'next_cursor' => $schema->integer(),
+            'through' => $schema->integer()->required(), 'has_more' => $schema->boolean()->required(),
+            'decisions_cursor' => $schema->string(), 'decisions_next_cursor' => $schema->string(),
+            'decisions_has_more' => $schema->boolean()->required(),
         ])->withoutAdditionalProperties();
 
         $properties = match ($this->name()) {
@@ -176,6 +180,7 @@ abstract class WorkOrchestrationTool extends CapstanTool
                 'task_id', 'escalation_id' => ['required', 'string', 'uuid'],
                 'session_ref' => ['required', 'string', 'min:1', 'max:2048'],
                 'after' => ['sometimes', 'required', 'integer', 'min:0'],
+                'decisions_after' => ['sometimes', 'required', 'string', 'uuid'],
                 'seat_fence' => ['required', 'integer', 'min:1'],
                 'limit' => ['sometimes', 'required', 'integer', 'min:1', 'max:25'],
                 'answer' => ['required', 'string', 'min:1', 'max:10000'],
@@ -210,7 +215,7 @@ abstract class WorkOrchestrationTool extends CapstanTool
                 intent: $input,
                 targetType: 'work_orchestration',
                 operation: fn (): array => match ($this->name()) {
-                    'take_seat' => $work->take($input['team_id'], $input['task_id'], $owner->actorId, $owner->credentialId, $input['spoke_id'] ?? null, $input['session_ref'], $input['after'] ?? 0, CarbonImmutable::now()),
+                    'take_seat' => $work->take($input['team_id'], $input['task_id'], $owner->actorId, $owner->credentialId, $input['spoke_id'] ?? null, $input['session_ref'], $input['after'] ?? 0, CarbonImmutable::now(), $input['decisions_after'] ?? null),
                     'release_seat' => $work->release($input['team_id'], $input['task_id'], $owner->actorId, $owner->credentialId, $input['spoke_id'] ?? null, $input['seat_fence'], CarbonImmutable::now()),
                     'answer_escalation' => $work->answer($input['team_id'], $input['escalation_id'], $owner->actorId, $input['answer'], CarbonImmutable::now()),
                     'orchestrate' => $work->orchestrate($input['team_id'], $input['task_id'], $owner->actorId, $owner->credentialId, $input['spoke_id'] ?? null, $input['seat_fence'], $input['session_ref'], $input['action'], $input['input'], CarbonImmutable::now()),

@@ -67,17 +67,25 @@ final readonly class WorkOrchestrationCapability
     }
 
     /** @return array<string, mixed> */
-    public function context(WorkOrchestrationContext $context, int $after, CarbonImmutable $now): array
+    public function context(WorkOrchestrationContext $context, int $after, CarbonImmutable $now, ?string $decisionsAfter = null): array
     {
-        return $this->authorised($context, $now, function (WorkTask $parent, WorkOrchestratorSeat $seat, ?WorkItem $turn) use ($after): array {
+        return $this->authorised($context, $now, function (WorkTask $parent, WorkOrchestratorSeat $seat, ?WorkItem $turn) use ($after, $decisionsAfter): array {
             $brief = $parent->latestBriefRevision()->first();
             $state = WorkStateRevision::query()->where('work_task_id', $parent->id)->orderByDesc('sequence')->first();
-            $lower = $turn instanceof WorkItem ? (int) ($turn->turn_cursor ?? $seat->completed_cursor) : max($seat->completed_cursor, $after);
+            $floor = $turn instanceof WorkItem ? (int) ($turn->turn_cursor ?? $seat->completed_cursor) : $seat->completed_cursor;
             $upper = $turn instanceof WorkItem ? (int) ($turn->turn_upper_bound ?? $seat->event_sequence) : $seat->event_sequence;
+            if ($after > $upper || ($turn instanceof WorkItem && $after !== 0 && $after < $floor)) {
+                throw new ApiErrorException(422, 'invalid_cursor', 'The orchestration cursor is outside the authorised interval.');
+            }
+            $lower = $turn instanceof WorkItem && $after === 0 ? $floor : max($floor, $after);
             $events = WorkOrchestrationEvent::query()->where('work_task_id', $parent->id)
                 ->where('sequence', '>', $lower)->where('sequence', '<=', $upper)->orderBy('sequence')->limit(26)->get();
-            $decisions = WorkOrchestrationDecision::query()->where('work_task_id', $parent->id)
-                ->orderByDesc('created_at')->orderByDesc('id')->limit(25)->get()->reverse()->values();
+            $decisionQuery = WorkOrchestrationDecision::query()->where('work_task_id', $parent->id);
+            if ($decisionsAfter !== null) {
+                $decisionQuery->where('id', '>', $decisionsAfter);
+            }
+            $decisions = $decisionQuery->orderBy('id')->limit(26)->get();
+            $decisionPage = $decisions->take(25)->values();
 
             return array_filter([
                 'task' => array_filter([
@@ -89,7 +97,7 @@ final readonly class WorkOrchestrationCapability
                     'id' => $state->id, 'sequence' => $state->sequence,
                     'through' => $state->through_cursor, 'content' => $state->content,
                 ],
-                'decisions' => $decisions->map(fn (WorkOrchestrationDecision $decision): array => [
+                'decisions' => $decisionPage->map(fn (WorkOrchestrationDecision $decision): array => [
                     'id' => $decision->id, 'event_id' => $decision->triggering_event_id,
                     'decision' => $decision->decision, 'rationale' => $decision->rationale,
                     'evidence' => $this->boundedJson($decision->evidence),
@@ -98,7 +106,10 @@ final readonly class WorkOrchestrationCapability
                     'id' => $event->id, 'sequence' => $event->sequence, 'kind' => $event->kind,
                     'evidence' => $this->boundedJson($event->evidence),
                 ])->values()->all(),
-                'cursor' => $lower, 'through' => $upper, 'has_more' => $events->count() > 25,
+                'cursor' => $lower, 'next_cursor' => $events->count() > 25 ? (int) $events[24]->sequence : null,
+                'through' => $upper, 'has_more' => $events->count() > 25,
+                'decisions_cursor' => $decisionsAfter, 'decisions_next_cursor' => $decisions->count() > 25 ? (string) $decisionPage->last()->id : null,
+                'decisions_has_more' => $decisions->count() > 25,
             ], fn (mixed $value): bool => $value !== null);
         });
     }
