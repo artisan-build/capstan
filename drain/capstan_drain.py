@@ -7,6 +7,7 @@ import argparse
 import contextlib
 import dataclasses
 import fcntl
+import ipaddress
 import json
 import os
 import re
@@ -133,9 +134,19 @@ def load_config(path: Path) -> Config:
     capstan_url = raw.get("capstan_url")
     if not isinstance(capstan_url, str):
         raise ConfigError("capstan_url must be a URL string")
-    parsed = urllib.parse.urlsplit(capstan_url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
+    try:
+        parsed = urllib.parse.urlsplit(capstan_url)
+        hostname = parsed.hostname
+    except ValueError as exception:
+        raise ConfigError("capstan_url must be a valid URL") from exception
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or not hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ConfigError("capstan_url must be an http(s) URL without credentials, query, or fragment")
+    if parsed.scheme == "http":
+        is_loopback = hostname == "localhost"
+        with contextlib.suppress(ValueError):
+            is_loopback = is_loopback or ipaddress.ip_address(hostname).is_loopback
+        if not is_loopback:
+            raise ConfigError("capstan_url must use HTTPS except for localhost or a loopback IP address")
 
     team_value = raw.get("team")
     if not isinstance(team_value, (str, int)) or isinstance(team_value, bool) or str(team_value).strip() == "":
@@ -258,6 +269,11 @@ class FileLock:
         self.close()
 
 
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+        return None
+
+
 class ApiClient:
     def __init__(self, config: Config, credential: str) -> None:
         self.base = f"{config.capstan_url}/api/v1/work/{urllib.parse.quote(config.team, safe='')}"
@@ -268,14 +284,17 @@ class ApiClient:
             "X-Capstan-Actor-ID": config.actor_id,
         }
         self.timeout = config.request_timeout_seconds
+        self.opener = urllib.request.build_opener(NoRedirectHandler())
 
     def request(self, action: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         request = urllib.request.Request(f"{self.base}/{action}", data=body, headers=self.headers, method="POST")
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with self.opener.open(request, timeout=self.timeout) as response:
                 decoded = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exception:
+            if 300 <= exception.code < 400:
+                raise ApiError(exception.code) from None
             code = "request_failed"
             with contextlib.suppress(Exception):
                 error_body = json.loads(exception.read().decode("utf-8"))

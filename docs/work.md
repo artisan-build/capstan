@@ -19,7 +19,7 @@ one argument per element. They are never shell strings.
 | Key | Meaning |
 | --- | --- |
 | `version` | Config schema version. The current value is `1`. |
-| `capstan_url` | Root URL of the Capstan installation. Do not include credentials or a query string. |
+| `capstan_url` | Root URL of the Capstan installation. Use HTTPS except for local development at `localhost` or a loopback IP. Do not include credentials or a query string. |
 | `team` | Team id or route key used by the team-scoped drain endpoints. |
 | `actor_id` | Non-secret numeric actor id sent in `X-Capstan-Actor-ID`. It must match the bound credential. |
 | `credential_file` | File containing only the `capstan.work.drain` bearer. Mode must be `0600` or stricter. |

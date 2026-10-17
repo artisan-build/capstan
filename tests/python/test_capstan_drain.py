@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import http.server
 import importlib.util
 import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -202,6 +204,85 @@ class AdmissionAndLockTests(DrainTestCase):
         self.assertIn("no item was claimed", output[0])
 
 
+class ApiTransportTests(DrainTestCase):
+    def test_redirect_is_refused_without_forwarding_bound_credentials(self) -> None:
+        source_credentials: list[tuple[str | None, str | None]] = []
+        target_requests: list[dict[str, str]] = []
+
+        class TargetHandler(http.server.BaseHTTPRequestHandler):
+            def record(self) -> None:
+                target_requests.append(dict(self.headers))
+                self.send_response(204)
+                self.end_headers()
+
+            do_GET = record
+            do_POST = record
+
+            def log_message(self, *_: object) -> None:
+                pass
+
+        target = http.server.ThreadingHTTPServer(("127.0.0.1", 0), TargetHandler)
+        target_thread = threading.Thread(target=target.serve_forever, daemon=True)
+        target_thread.start()
+        target_url = f"http://127.0.0.1:{target.server_port}/location-secret?signature=redirect-secret"
+
+        class RedirectHandler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                source_credentials.append((self.headers.get("Authorization"), self.headers.get("X-Capstan-Actor-ID")))
+                body = b'{"error":{"code":"redirect_body_secret"}}'
+                self.send_response(302)
+                self.send_header("Location", target_url)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_: object) -> None:
+                pass
+
+        source = http.server.ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
+        source_thread = threading.Thread(target=source.serve_forever, daemon=True)
+        source_thread.start()
+        try:
+            self.write_config(capstan_url=f"http://127.0.0.1:{source.server_port}", actor_id="918273645")
+            client = drain.ApiClient(drain.load_config(self.config_path), "secret-bearer")
+            with self.assertRaises(drain.ApiError) as failure:
+                client.claim(0, ["builder"], ["php"])
+        finally:
+            source.shutdown()
+            target.shutdown()
+            source.server_close()
+            target.server_close()
+            source_thread.join()
+            target_thread.join()
+
+        self.assertEqual(source_credentials, [("Bearer secret-bearer", "918273645")])
+        self.assertEqual(target_requests, [])
+        self.assertEqual((failure.exception.status, failure.exception.code), (302, "request_failed"))
+        self.assertEqual(str(failure.exception), "API request failed (302 request_failed)")
+        for sensitive in ("secret-bearer", "918273645", "location-secret", "redirect-secret", "redirect_body_secret"):
+            self.assertNotIn(sensitive, str(failure.exception))
+
+    def test_capstan_url_requires_https_except_for_local_loopback_http(self) -> None:
+        accepted = (
+            "https://capstan.test",
+            "https://192.0.2.1",
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+            "http://[::1]:8000",
+        )
+        for url in accepted:
+            with self.subTest(accepted=url):
+                self.write_config(capstan_url=url)
+                self.assertEqual(drain.load_config(self.config_path).capstan_url, url)
+
+        for url in ("http://capstan.test", "http://192.0.2.1"):
+            with self.subTest(rejected=url):
+                self.write_config(capstan_url=url)
+                with self.assertRaisesRegex(drain.ConfigError, "must use HTTPS"):
+                    drain.load_config(self.config_path)
+
+
 class LifecycleTests(DrainTestCase):
     def test_claim_launch_deliver_route_uses_item_cwd_and_recoverable_secret_free_state(self) -> None:
         client = FakeClient(claimed=[self.claim()])
@@ -330,6 +411,7 @@ class ContractTests(DrainTestCase):
         self.assertEqual(loaded["claude.json"].role_commands["builder"], ("claude", "-p"))
         self.assertEqual(loaded["opencode-mini.json"].role_commands["builder"][:3], ("opencode", "mini", "--prompt"))
         self.assertIn("{config_dir}/../harness/stub_worker.py", loaded["generic.json"].role_commands["builder"])
+        self.assertTrue(all(config.capstan_url.startswith("http://127.0.0.1:") for config in loaded.values()))
 
     def test_config_requires_role_map_argv_and_rejects_shell_strings(self) -> None:
         self.write_config(role_commands={"builder": "worker --unsafe"})
