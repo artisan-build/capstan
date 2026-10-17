@@ -128,6 +128,7 @@ test('advertises the four exact page tools through their effect doors', function
         'list_layouts',
         'list_pages',
         'list_work',
+        'orchestrate',
         'postmaster_messages',
         'postmaster_spokes',
         'preview_brand_draft',

@@ -140,6 +140,7 @@ test('mounts the complete write family behind the write ceiling', function (): v
             'list_layouts',
             'list_pages',
             'list_work',
+            'orchestrate',
             'postmaster_messages',
             'postmaster_spokes',
             'preview_brand_draft',

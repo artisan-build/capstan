@@ -202,6 +202,7 @@ test('keeps the exact read-effect tools on the read door when the write door is 
             'list_layouts',
             'list_pages',
             'list_work',
+            'orchestrate',
             'postmaster_messages',
             'postmaster_spokes',
             'preview_brand_draft',
