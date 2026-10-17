@@ -132,6 +132,7 @@ final readonly class WorkClaimService
                     'work_items.role',
                     'work_items.fence',
                     'work_items.created_at',
+                    'work_items.updated_at as item_updated_at',
                     'work_tasks.updated_at as task_updated_at',
                     'work_tasks.required_capabilities',
                     'work_tasks.device_spoke_id',
@@ -155,7 +156,11 @@ final readonly class WorkClaimService
             foreach ($page as $candidate) {
                 if ($candidate->role === WorkItem::ROLE_ORCHESTRATOR) {
                     $seat = WorkOrchestratorSeat::query()->where('work_task_id', $candidate->work_task_id)->first();
-                    if (! $this->seats->eligible($seat, $actorId, $spokeId, $now, $candidate->device_spoke_id === null ? null : (int) $candidate->device_spoke_id)) {
+                    if (! $this->seats->eligible(
+                        $seat, $actorId, $spokeId, $now,
+                        $candidate->device_spoke_id === null ? null : (int) $candidate->device_spoke_id,
+                        $candidate->id, CarbonImmutable::parse($candidate->item_updated_at),
+                    )) {
                         continue;
                     }
                     if (WorkItem::query()->where('work_task_id', $candidate->work_task_id)->where('role', WorkItem::ROLE_ORCHESTRATOR)

@@ -204,6 +204,38 @@ test('pinned parent failover transfers and fences a held turn without losing mem
     expect(orchestrationClaims($parent, $a))->toBe([])->and(orchestrationClaims($parent, $b))->toHaveCount(1);
 })->with(['seat sweep' => true, 'claim takeover' => false]);
 
+test('never held pinned failover waits for the timeout then transfers without changing pins or leaf placement', function (): void {
+    config(['capstan.work.failover_after_seconds' => 300]);
+    $parent = orchestrationTask();
+    $a = orchestrationHost();
+    $b = orchestrationHost('host-b');
+    $parent->update(['device_spoke_id' => $a->id, 'failover' => true]);
+    $child = orchestrationTask($parent);
+    $child->update(['device_spoke_id' => $a->id, 'failover' => false]);
+    $leaf = $child->items()->create(['role' => 'builder']);
+    orchestrationEvent($parent);
+    $item = $parent->items()->where('role', 'orchestrator')->sole();
+    $notifier = Mockery::mock(WorkNotifier::class);
+    $notifier->shouldNotReceive('seatWaiting');
+    app()->instance(WorkNotifier::class, $notifier);
+
+    expect(orchestrationClaims($parent, $b, ['orchestrator', 'builder']))->toBe([]);
+    Date::setTestNow(now()->addSeconds(299));
+    expect(orchestrationClaims($parent, $b, ['orchestrator', 'builder']))->toBe([]);
+    Date::setTestNow(now()->addSecond());
+    $replacement = orchestrationClaims($parent, $b, ['orchestrator', 'builder']);
+
+    expect($replacement)->toHaveCount(1)
+        ->and($replacement[0]->id)->toBe($item->id)
+        ->and($replacement[0]->role)->toBe(WorkItem::ROLE_ORCHESTRATOR)
+        ->and($parent->fresh()->device_spoke_id)->toBe($a->id)
+        ->and($child->fresh()->device_spoke_id)->toBe($a->id)
+        ->and($leaf->fresh()->state)->toBe(WorkItemState::Queued)
+        ->and(orchestrationSeat($parent)->holder_spoke_id)->toBe($b->id)
+        ->and(orchestrationSeat($parent)->waiting_at)->toBeNull()
+        ->and(orchestrationSeat($parent)->notified_at)->toBeNull();
+});
+
 test('non failover seat waits and notifies once then resumes only its holder', function (): void {
     $parent = orchestrationTask();
     $parent->update(['failover' => false]);
@@ -555,9 +587,12 @@ test('pinned non failover parents wait once per outage including a never held se
     Log::shouldReceive('warning')->twice()->with('Work orchestrator waiting on pinned host.', [
         'task_id' => $parent->id, 'seat_id' => orchestrationSeat($parent)->id,
     ]);
+    expect(orchestrationClaims($parent, $b))->toBe([]);
     Date::setTestNow(now()->addSeconds(299));
     $seats->sweep(CarbonImmutable::now());
-    expect(orchestrationSeat($parent)->waiting_at)->toBeNull()->and($item->fresh()->waiting_on_host_at)->toBeNull();
+    expect(orchestrationSeat($parent)->waiting_at)->toBeNull()
+        ->and($item->fresh()->waiting_on_host_at)->toBeNull()
+        ->and(orchestrationClaims($parent, $b))->toBe([]);
     Date::setTestNow(now()->addSecond());
     foreach (range(1, 2) as $outage) {
         $seats->sweep(CarbonImmutable::now());

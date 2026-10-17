@@ -97,15 +97,25 @@ final readonly class WorkSeatService
     }
 
     /** Read-only candidate hint. The locked claim rechecks it. */
-    public function eligible(?WorkOrchestratorSeat $seat, string $actor, int $spoke, CarbonImmutable $now, ?int $deviceSpokeId = null): bool
-    {
+    public function eligible(
+        ?WorkOrchestratorSeat $seat,
+        string $actor,
+        int $spoke,
+        CarbonImmutable $now,
+        ?int $deviceSpokeId = null,
+        ?string $activeItemId = null,
+        ?CarbonImmutable $queuedAt = null,
+    ): bool {
         if (! Feature::active(Work::class)) {
             return false;
         }
-        // A device pin governs initial placement. Only an established failover
-        // seat may move off it; ordinary items keep their own device predicate.
+        $neverHeldTimedOut = $seat !== null && $seat->failover && $seat->fence === 0
+            && $seat->holder_actor === null && $seat->active_item_id === $activeItemId
+            && $queuedAt !== null && $queuedAt->lte($now->subSeconds(max(1, (int) config('capstan.work.failover_after_seconds', 300))));
+        // A device pin governs initial placement until a never-held turn times out.
+        // Established failover seats retain their existing off-pin recovery path.
         if ($deviceSpokeId !== null && $deviceSpokeId !== $spoke
-            && ! ($seat !== null && $seat->failover && $seat->fence > 0)) {
+            && ! ($seat !== null && $seat->failover && ($seat->fence > 0 || $neverHeldTimedOut))) {
             return false;
         }
         if ($seat === null || $seat->holder_actor === null) {
@@ -130,7 +140,7 @@ final readonly class WorkSeatService
             return null;
         }
         $seat = $this->locks->seat($parent);
-        if (! $this->eligible($seat, $actor, $spoke, $now, $parent->device_spoke_id)) {
+        if (! $this->eligible($seat, $actor, $spoke, $now, $parent->device_spoke_id, $item->id, $item->updated_at)) {
             return null;
         }
         if ($seat->active_item_id !== null && $seat->active_item_id !== $item->id) {
