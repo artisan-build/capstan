@@ -24,11 +24,15 @@ return new class extends Migration
             $table->unsignedInteger('timebox_minutes');
             $table->string('creator_actor');
             $table->timestamp('cancelled_at')->nullable();
-            $table->foreignUuid('parent_task_id')->nullable()->constrained('work_tasks')->nullOnDelete();
+            $table->uuid('parent_task_id')->nullable()->index();
             $table->string('workflow_ref', 2048)->nullable();
             $table->timestamps();
 
             $table->index(['team_id', 'created_at']);
+        });
+
+        Schema::table('work_tasks', function (Blueprint $table): void {
+            $table->foreign('parent_task_id')->references('id')->on('work_tasks')->nullOnDelete();
         });
 
         Schema::create('work_brief_revisions', function (Blueprint $table): void {

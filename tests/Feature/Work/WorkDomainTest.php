@@ -10,6 +10,7 @@ use App\Models\WorkSteer;
 use App\Models\WorkTask;
 use App\Work\BriefRevisionService;
 use App\Work\WorkItemStateService;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
@@ -251,4 +252,57 @@ test('steers expose their task and optional item relationships', function (): vo
     expect($steer->fresh()?->workTask->is($task))->toBeTrue()
         ->and($steer->fresh()?->workItem?->is($item))->toBeTrue()
         ->and($steer->fresh()?->read_at)->not->toBeNull();
+});
+
+test('the task parent foreign key is added only after the task table is created', function (): void {
+    $connection = DB::connection();
+    $operations = [];
+
+    $capture = function (string $operation, string $table, Closure $callback) use ($connection, &$operations): void {
+        $blueprint = new Blueprint($connection, $table);
+
+        if ($operation === 'create') {
+            $blueprint->create();
+        }
+
+        $callback($blueprint);
+        $operations[] = compact('operation', 'table', 'blueprint');
+    };
+
+    Schema::shouldReceive('create')
+        ->andReturnUsing(fn (string $table, Closure $callback) => $capture('create', $table, $callback));
+    Schema::shouldReceive('table')
+        ->andReturnUsing(fn (string $table, Closure $callback) => $capture('table', $table, $callback));
+
+    $migration = require database_path('migrations/2026_10_17_000000_create_work_domain_tables.php');
+    $migration->up();
+
+    $workTaskOperations = collect($operations)
+        ->filter(fn (array $operation): bool => $operation['table'] === 'work_tasks')
+        ->values();
+
+    expect($workTaskOperations->pluck('operation')->all())->toBe(['create', 'table']);
+
+    /** @var Blueprint $createBlueprint */
+    $createBlueprint = $workTaskOperations[0]['blueprint'];
+    $parentColumn = collect($createBlueprint->getColumns())
+        ->first(fn ($column): bool => $column->name === 'parent_task_id');
+    $inlineParentForeign = collect($createBlueprint->getCommands())
+        ->first(fn ($command): bool => $command->name === 'foreign' && $command->columns === ['parent_task_id']);
+
+    expect($parentColumn)->not->toBeNull()
+        ->and($parentColumn->type)->toBe('uuid')
+        ->and($parentColumn->nullable)->toBeTrue()
+        ->and($parentColumn->index)->toBeTrue()
+        ->and($inlineParentForeign)->toBeNull();
+
+    /** @var Blueprint $alterBlueprint */
+    $alterBlueprint = $workTaskOperations[1]['blueprint'];
+    $parentForeign = collect($alterBlueprint->getCommands())
+        ->first(fn ($command): bool => $command->name === 'foreign' && $command->columns === ['parent_task_id']);
+
+    expect($parentForeign)->not->toBeNull()
+        ->and($parentForeign->references)->toBe('id')
+        ->and($parentForeign->on)->toBe('work_tasks')
+        ->and($parentForeign->onDelete)->toBe('set null');
 });
