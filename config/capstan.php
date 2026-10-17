@@ -41,6 +41,11 @@ return [
         'steer_recent_seconds' => 86400,
         'missed_heartbeat_seconds' => 180,
         'failover_after_seconds' => 300,
+        'orchestration' => [
+            'turn_budget' => 20,
+            'child_budget' => 100,
+            'attempt_cap' => 3,
+        ],
     ],
 
     'artifacts' => [

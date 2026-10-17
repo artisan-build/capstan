@@ -1,6 +1,9 @@
 <?php
 
+use App\Models\WorkItem;
+use App\Models\WorkTask;
 use App\Work\WorkClaimService;
+use App\Work\WorkOrchestrationService;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Support\Facades\DB;
@@ -18,6 +21,13 @@ if ($argc !== 8) {
 try {
     $app = require dirname(__DIR__, 2).'/bootstrap/app.php';
     $app->make(Kernel::class)->bootstrap();
+    if (str_starts_with($mode, 'orchestration')) {
+        config([
+            'capstan.features.work' => true,
+            'capstan.work.orchestration.turn_budget' => $mode === 'orchestration-budget' ? 1 : 20,
+            'capstan.work.orchestration.child_budget' => 1,
+        ]);
+    }
 
     if (DB::getDriverName() === 'sqlite') {
         DB::statement('PRAGMA busy_timeout = 15000');
@@ -41,6 +51,22 @@ try {
 
     $now = CarbonImmutable::parse('2026-10-17 16:00:00 UTC');
 
+    if (str_starts_with($mode, 'orchestration')) {
+        $parent = WorkTask::query()->where('team_id', (int) $teamId)->whereNull('parent_task_id')->sole();
+        if ($mode === 'orchestration-child-budget') {
+            $turn = WorkItem::query()->where('work_task_id', $parent->id)->where('role', 'orchestrator')->sole();
+            $child = WorkTask::query()->where('parent_task_id', $parent->id)->sole();
+            try {
+                resolve(WorkOrchestrationService::class)->queueChild($turn, 1, 1, $child, 'builder', $now);
+            } catch (DomainException) {
+                // Another worker tripped the breaker and invalidated this turn.
+            }
+            fwrite(STDOUT, json_encode(['worker' => (int) $worker, 'ids' => []], JSON_THROW_ON_ERROR));
+            exit(0);
+        }
+        resolve(WorkOrchestrationService::class)->event($parent, 'process-'.$worker, 'race_fact');
+    }
+
     if ($mode === 'unsafe') {
         $unsafe->writeWithoutGuard($selected, (int) $spokeId, $actorId, $now);
         $ids = $selected;
@@ -51,7 +77,7 @@ try {
                 (int) $teamId,
                 $actorId,
                 (int) $spokeId,
-                ['builder'],
+                str_starts_with($mode, 'orchestration') ? ['orchestrator', 'human'] : ['builder'],
                 ['php'],
                 (int) $capacity,
                 $now,

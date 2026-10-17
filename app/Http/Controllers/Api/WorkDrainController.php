@@ -148,14 +148,16 @@ final class WorkDrainController extends Controller
     /** @return array<string, mixed> */
     private function claimItem(WorkItem $item): array
     {
-        return [
+        return array_filter([
             'id' => $item->id,
             'task_id' => $item->work_task_id,
             'role' => $item->role,
             'fence' => $item->fence,
             'lease_until' => $item->lease_until->toISOString(),
             'links' => resolve(WorkWorkerLinks::class)->forItem($item),
-        ];
+            'session_ref' => $item->session_ref,
+            'seat_fence' => $item->seat_fence,
+        ], fn ($value): bool => $value !== null);
     }
 
     /** @return array<string, int|string> */

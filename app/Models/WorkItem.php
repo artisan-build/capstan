@@ -22,6 +22,10 @@ use InvalidArgumentException;
  * @property CarbonImmutable|null $claimed_at
  * @property int $fence
  * @property int $attempts
+ * @property int|null $turn_cursor
+ * @property int|null $turn_upper_bound
+ * @property int|null $seat_fence
+ * @property string|null $addressed_actor
  * @property string|null $fetched_brief_revision_id
  * @property string|null $last_progress
  * @property CarbonImmutable|null $stalled_at
@@ -40,6 +44,9 @@ use InvalidArgumentException;
 class WorkItem extends Model
 {
     use HasUuids;
+
+    // Claim result metadata, not a second persisted copy of the opaque seat reference.
+    public ?string $session_ref = null;
 
     public const string ROLE_ORCHESTRATOR = 'orchestrator';
 
@@ -65,6 +72,10 @@ class WorkItem extends Model
         'claimed_at',
         'fence',
         'attempts',
+        'turn_cursor',
+        'turn_upper_bound',
+        'seat_fence',
+        'addressed_actor',
         'fetched_brief_revision_id',
         'last_progress',
         'stalled_at',
@@ -82,6 +93,9 @@ class WorkItem extends Model
             'claimed_at' => 'datetime',
             'fence' => 'integer',
             'attempts' => 'integer',
+            'turn_cursor' => 'integer',
+            'turn_upper_bound' => 'integer',
+            'seat_fence' => 'integer',
             'stalled_at' => 'datetime',
             'waiting_on_host_at' => 'datetime',
             'waiting_on_host_notified_at' => 'datetime',

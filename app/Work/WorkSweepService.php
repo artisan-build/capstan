@@ -26,6 +26,7 @@ final readonly class WorkSweepService
         foreach ($this->workers->activeQuery()->with('workTask')->get() as $item) {
             $afterIdentified?->__invoke($item);
             DB::transaction(function () use ($item, $now): void {
+                resolve(WorkOrchestrationLock::class)->tasks($item->work_task_id);
                 // Inspect the timebox before requeuing an expired lease so a
                 // deadline and expiry in the same minute still records a stall.
                 if ($item->claimed_at !== null && $item->claimed_at->addMinutes($item->workTask->timebox_minutes)->lte($now)) {
@@ -40,6 +41,7 @@ final readonly class WorkSweepService
                         ->whereDoesntHave('milestones', fn ($query) => $query->where('fence', $item->fence)->where('created_at', '<=', $deadline))
                         ->update(['stalled_at' => $now]);
                     if ($updated === 1) {
+                        resolve(WorkEventProjector::class)->stalled($item->fresh());
                         $this->notifier->stalled($item->fresh());
                     }
                 }
@@ -53,6 +55,7 @@ final readonly class WorkSweepService
                     ]);
                     if ($updated === 1) {
                         $this->audit($item, WorkItemState::Queued, $now, 'lease-expiry');
+                        resolve(WorkEventProjector::class)->expired($item->fresh());
                     }
                 }
             }, 5);

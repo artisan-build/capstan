@@ -39,6 +39,9 @@ final readonly class WorkToolService
                 ->whereKey($input['item_id'])
                 ->whereHas('workTask', fn ($query) => $query->where('team_id', $input['team_id']))
                 ->value('work_task_id');
+            if (is_string($taskId) && WorkTask::query()->whereKey($taskId)->where('team_id', $input['team_id'])->exists()) {
+                resolve(WorkOrchestrationLock::class)->tasks($taskId);
+            }
             $task = $this->task($input['team_id'], $taskId, true);
 
             if ($tool === 'cancel_item') {

@@ -4,6 +4,7 @@ namespace App\Work;
 
 use App\Enums\WorkItemState;
 use App\Models\WorkItem;
+use App\Models\WorkOrchestratorSeat;
 use Carbon\CarbonImmutable;
 use DomainException;
 use Illuminate\Database\Eloquent\Builder;
@@ -48,6 +49,10 @@ class WorkItemStateService
     ): WorkItem {
         return DB::transaction(function () use ($item, $claimantSpokeId, $claimantActor, $leaseUntil, $actorKind, $actorId, $at): WorkItem {
             $locked = $this->lock($item);
+
+            if (in_array($locked->role, [WorkItem::ROLE_HUMAN, WorkItem::ROLE_ORCHESTRATOR], true)) {
+                throw new DomainException('Reserved roles require engine claim arbitration.');
+            }
 
             if ($locked->state !== WorkItemState::Queued) {
                 throw new DomainException("Work item cannot transition from {$locked->state->value} to claimed.");
@@ -99,6 +104,8 @@ class WorkItemStateService
         CarbonImmutable $at,
     ): ?WorkItem {
         return DB::transaction(function () use ($item, $to, $teamId, $claimantSpokeId, $claimantActor, $fence, $at): ?WorkItem {
+            resolve(WorkOrchestrationLock::class)->tasks($item->work_task_id);
+            $this->assertNotTurnDone($item, $to);
             $from = $item->state;
 
             if (! $this->canTransition($from, $to)) {
@@ -138,6 +145,7 @@ class WorkItemStateService
         CarbonImmutable $at,
     ): ?WorkItem {
         return DB::transaction(function () use ($item, $teamId, $claimantSpokeId, $claimantActor, $fence, $at): ?WorkItem {
+            resolve(WorkOrchestrationLock::class)->tasks($item->work_task_id);
             $from = $item->state;
 
             if (! $this->canRequeue($from)) {
@@ -184,6 +192,7 @@ class WorkItemStateService
         CarbonImmutable $leaseUntil,
     ): ?WorkItem {
         return DB::transaction(function () use ($item, $teamId, $claimantSpokeId, $claimantActor, $fence, $at, $leaseUntil): ?WorkItem {
+            resolve(WorkOrchestrationLock::class)->tasks($item->work_task_id);
             $updated = $this->guardedClaimQuery(
                 $item,
                 [WorkItemState::Claimed, WorkItemState::Delivered, WorkItemState::Routed],
@@ -197,9 +206,20 @@ class WorkItemStateService
                 'updated_at' => $at,
             ]);
 
-            return $updated === 1
-                ? WorkItem::query()->whereKey($item->id)->firstOrFail()
-                : null;
+            if ($updated !== 1) {
+                return null;
+            }
+            $renewed = WorkItem::query()->whereKey($item->id)->firstOrFail();
+            if ($renewed->role === WorkItem::ROLE_ORCHESTRATOR && $renewed->seat_fence !== null) {
+                $seat = WorkOrchestratorSeat::query()->where('work_task_id', $renewed->work_task_id)->firstOrFail();
+                resolve(WorkSeatService::class)->renew(
+                    $renewed->workTask, $claimantActor, $claimantSpokeId, $renewed->seat_fence,
+                    $seat->session_ref, $at, max(1, (int) $at->diffInSeconds($leaseUntil)),
+                );
+                $renewed->session_ref = $seat->session_ref;
+            }
+
+            return $renewed;
         });
     }
 
@@ -229,7 +249,7 @@ class WorkItemStateService
             $locked->claimed_at = null;
             $locked->stalled_at = null;
 
-            return $this->persist(
+            $requeued = $this->persist(
                 $locked,
                 $from,
                 WorkItemState::Queued,
@@ -237,6 +257,11 @@ class WorkItemStateService
                 $actorId,
                 $at,
             );
+            if ($requireExpiredLease) {
+                resolve(WorkEventProjector::class)->expired($requeued);
+            }
+
+            return $requeued;
         });
     }
 
@@ -285,6 +310,8 @@ class WorkItemStateService
 
     private function lock(WorkItem $item): WorkItem
     {
+        resolve(WorkOrchestrationLock::class)->tasks($item->work_task_id);
+
         return WorkItem::query()->whereKey($item->getKey())->lockForUpdate()->firstOrFail();
     }
 
@@ -296,6 +323,7 @@ class WorkItemStateService
         string $actorId,
         CarbonImmutable $at,
     ): WorkItem {
+        $this->assertNotTurnDone($item, $to);
         $item->state = $to;
         $item->save();
 
@@ -320,5 +348,13 @@ class WorkItemStateService
             'fence' => $item->fence,
             'occurred_at' => $at,
         ]);
+        resolve(WorkEventProjector::class)->terminal($item);
+    }
+
+    private function assertNotTurnDone(WorkItem $item, WorkItemState $to): void
+    {
+        if ($item->role === WorkItem::ROLE_ORCHESTRATOR && $to === WorkItemState::Acted) {
+            throw new DomainException('Orchestrator turns require turn_done.');
+        }
     }
 }

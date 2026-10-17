@@ -5,6 +5,7 @@ namespace App\Work;
 use App\Enums\WorkItemState;
 use App\Models\WorkItem;
 use App\Models\WorkItemTransition;
+use App\Models\WorkOrchestratorSeat;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
@@ -14,6 +15,8 @@ use Throwable;
 
 final class WorkClaimService
 {
+    public function __construct(private readonly WorkSeatService $seats, private readonly WorkOrchestrationLock $locks) {}
+
     private const int CANDIDATE_PAGE_SIZE = 200;
 
     private const int SQLITE_LOCK_ATTEMPTS = 50;
@@ -47,6 +50,7 @@ final class WorkClaimService
                 $roles,
                 $capabilities,
                 $capacity - count($claimed),
+                $now,
             );
 
             if ($candidates === []) {
@@ -75,7 +79,7 @@ final class WorkClaimService
                 }
             }
 
-            if ($won === 0 && $this->candidates($teamId, $actorId, $spokeId, $roles, $capabilities, 1) === []) {
+            if ($won === 0 && $this->candidates($teamId, $actorId, $spokeId, $roles, $capabilities, 1, $now) === []) {
                 break;
             }
         }
@@ -99,6 +103,7 @@ final class WorkClaimService
         array $roles,
         array $capabilities,
         int $wanted,
+        CarbonImmutable $now,
     ): array {
         $eligible = [];
         $afterCreatedAt = null;
@@ -146,6 +151,20 @@ final class WorkClaimService
             $page = $query->get();
 
             foreach ($page as $candidate) {
+                if ($candidate->role === WorkItem::ROLE_ORCHESTRATOR) {
+                    $seat = WorkOrchestratorSeat::query()->where('work_task_id', $candidate->work_task_id)->first();
+                    if (! $this->seats->eligible($seat, $actorId, $spokeId, $now)) {
+                        continue;
+                    }
+                    if (WorkItem::query()->where('work_task_id', $candidate->work_task_id)->where('role', WorkItem::ROLE_ORCHESTRATOR)
+                        ->whereIn('state', ['claimed', 'delivered', 'routed'])->exists()) {
+                        continue;
+                    }
+                    if ($seat?->active_item_id !== null && $seat->active_item_id !== $candidate->id
+                        && WorkItem::query()->whereKey($seat->active_item_id)->whereIn('state', ['queued', 'claimed', 'delivered', 'routed'])->exists()) {
+                        continue;
+                    }
+                }
                 if ($this->hasEveryCapability($candidate->required_capabilities, $capabilities)) {
                     $eligible[] = $candidate;
                 }
@@ -190,6 +209,18 @@ final class WorkClaimService
         beginning:
         try {
             return DB::transaction(function () use ($candidate, $teamId, $actorId, $spokeId, $now, $leaseSeconds): ?WorkItem {
+                $seat = null;
+                if ($candidate->role === WorkItem::ROLE_ORCHESTRATOR) {
+                    $this->locks->tasks($candidate->work_task_id);
+                    $turn = WorkItem::query()->whereKey($candidate->id)->firstOrFail();
+                    if ($turn->state !== WorkItemState::Queued || $turn->fence !== (int) $candidate->fence) {
+                        return null;
+                    }
+                    $seat = $this->seats->forClaim($turn->workTask, $turn, $actorId, $spokeId, $now, $leaseSeconds);
+                    if ($seat === null) {
+                        return null;
+                    }
+                }
                 $nextFence = ((int) $candidate->fence) + 1;
                 $leaseUntil = $now->addSeconds($leaseSeconds);
                 $updated = WorkItem::query()
@@ -235,7 +266,20 @@ final class WorkClaimService
                     'occurred_at' => $now,
                 ]);
 
-                return WorkItem::query()->whereKey($candidate->id)->firstOrFail();
+                $claimed = WorkItem::query()->whereKey($candidate->id)->firstOrFail();
+                if ($seat !== null) {
+                    if (! resolve(WorkOrchestrationService::class)->startTurn($claimed->workTask, $seat, $claimed)) {
+                        return null;
+                    }
+                    $claimed->fill([
+                        'turn_cursor' => $claimed->turn_cursor ?? $seat->completed_cursor,
+                        'turn_upper_bound' => $claimed->turn_upper_bound ?? $seat->event_sequence,
+                        'seat_fence' => $seat->fence,
+                    ])->save();
+                    $claimed->session_ref = $seat->session_ref;
+                }
+
+                return $claimed;
             });
         } catch (QueryException $exception) {
             $attempt++;
