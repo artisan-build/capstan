@@ -618,6 +618,7 @@ test('feature gating and unsupported subject types fail closed without changing 
         'capstan-user:'.$user->id,
         SubjectType::ExternalConsumer,
     );
+    config(['app.debug' => false]);
 
     capstanMcpReadCall('postmaster_spokes', (object) [], $unsupported)
         ->assertOk()
