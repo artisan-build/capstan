@@ -50,6 +50,9 @@ jobs:
       - name: Run Pest
         run: php artisan test
 
+      - name: Run Python drain tests
+        run: python3 -m unittest discover -s tests/python -p 'test_*.py'
+
       - name: Run Work claim process race
         run: php artisan test tests/Concurrency/WorkClaimRaceTest.php
 

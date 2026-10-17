@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "capstan_url": "http://127.0.0.1:8000",
+  "team": 1,
+  "actor_id": "1",
+  "credential_file": "./credentials/work-drain.token",
+  "max_concurrent": 2,
+  "max_load_1m": 6.0,
+  "max_memory_percent": 90.0,
+  "capabilities": ["php", "git"],
+  "roles": ["builder"],
+  "state_file": "./var/opencode-state.json",
+  "work_dir": "./var/opencode-work",
+  "lock_file": "./var/opencode.lock",
+  "prompt_template": "../worker-prompt.md",
+  "orchestrator_prompt_template": "../orchestrator-prompt.md",
+  "request_timeout_seconds": 15,
+  "role_commands": {
+    "builder": ["opencode", "run", "--standalone", "-f", "{prompt_file}", "Follow the attached work brief exactly."]
+  }
+}
