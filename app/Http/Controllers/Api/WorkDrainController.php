@@ -54,7 +54,7 @@ final class WorkDrainController extends Controller
         );
 
         return new JsonResponse([
-            'items' => array_map(fn (WorkItem $item): array => $this->claimItem($item), $items),
+            'items' => array_map($this->claimItem(...), $items),
         ]);
     }
 

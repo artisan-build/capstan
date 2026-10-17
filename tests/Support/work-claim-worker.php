@@ -4,6 +4,7 @@ use App\Work\WorkClaimService;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Sleep;
 use Tests\Support\UnsafeWorkClaimService;
 
 require dirname(__DIR__, 2).'/vendor/autoload.php';
@@ -35,7 +36,7 @@ while (! file_exists($release)) {
         exit(3);
     }
 
-    usleep(10_000);
+    Sleep::usleep(10_000);
 }
 
 $now = CarbonImmutable::parse('2026-10-17 16:00:00 UTC');

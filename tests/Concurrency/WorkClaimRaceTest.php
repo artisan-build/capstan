@@ -8,6 +8,7 @@ use App\Work\WorkItemStateService;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Sleep;
 use Illuminate\Support\Str;
 use Symfony\Component\Process\Process;
 use Tests\TestCase;
@@ -108,17 +109,15 @@ function seedWorkRaceQueue(int $count, ?int $teamId = null): array
 {
     $now = '2026-10-17 15:00:00';
 
-    if ($teamId === null) {
-        $teamId = DB::table('teams')->insertGetId([
-            'name' => 'Work claim race team',
-            'slug' => 'work-claim-race-'.Str::lower(Str::random(8)),
-            'is_default' => false,
-            'pool_work' => false,
-            'default_failover' => true,
-            'created_at' => $now,
-            'updated_at' => $now,
-        ]);
-    }
+    $teamId ??= DB::table('teams')->insertGetId([
+        'name' => 'Work claim race team',
+        'slug' => 'work-claim-race-'.Str::lower(Str::random(8)),
+        'is_default' => false,
+        'pool_work' => false,
+        'default_failover' => true,
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
 
     $workers = [];
 
@@ -230,7 +229,7 @@ function runWorkClaimProcesses(string $mode, int $teamId, array $workers, array 
                 throw new RuntimeException('Claim workers did not reach the barrier.');
             }
 
-            usleep(10_000);
+            Sleep::usleep(10_000);
         }
 
         touch($barrier.'/release');
@@ -374,7 +373,7 @@ function runWorkFenceProcess(string $mode, array $connection, array $scenario, C
                 throw new RuntimeException('Fence worker did not reach the barrier.');
             }
 
-            usleep(10_000);
+            Sleep::usleep(10_000);
         }
 
         $whilePaused();

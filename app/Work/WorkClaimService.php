@@ -8,6 +8,7 @@ use App\Models\WorkItemTransition;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Sleep;
 use stdClass;
 use Throwable;
 
@@ -128,7 +129,7 @@ final class WorkClaimService
                     'work_tasks.updated_at as task_updated_at',
                     'work_tasks.required_capabilities',
                 ])
-                ->orderBy('work_items.created_at')
+                ->oldest('work_items.created_at')
                 ->orderBy('work_items.id')
                 ->limit(self::CANDIDATE_PAGE_SIZE);
 
@@ -238,7 +239,7 @@ final class WorkClaimService
             $attempt++;
 
             if ($attempt < self::SQLITE_LOCK_ATTEMPTS && $this->isSqliteLock($exception)) {
-                usleep(random_int(1_000, 20_000));
+                Sleep::usleep(random_int(1_000, 20_000));
                 goto beginning;
             }
 

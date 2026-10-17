@@ -5,6 +5,7 @@ use App\Work\WorkDrainService;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Sleep;
 
 require dirname(__DIR__, 2).'/vendor/autoload.php';
 
@@ -31,7 +32,7 @@ $pause = static function () use ($barrier): void {
             throw new RuntimeException('Barrier release timed out.');
         }
 
-        usleep(10_000);
+        Sleep::usleep(10_000);
     }
 };
 $drain = resolve(WorkDrainService::class);
