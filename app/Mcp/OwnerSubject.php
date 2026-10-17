@@ -9,5 +9,6 @@ final readonly class OwnerSubject
         public string $ref,
         public string $actorId,
         public ?string $credentialId = null,
+        public bool $credentialBacked = true,
     ) {}
 }

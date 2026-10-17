@@ -24,11 +24,11 @@ final readonly class WorkOrchestrationMcpService
     ) {}
 
     /** @return array<string, mixed> */
-    public function take(int $teamId, string $taskId, string $actor, string $credentialId, ?int $spokeId, string $sessionRef, int $after, CarbonImmutable $now, ?string $decisionsAfter = null): array
+    public function take(int $teamId, string $taskId, string $actor, string $credentialId, ?int $spokeId, string $sessionRef, int $after, CarbonImmutable $now, ?string $decisionsAfter = null, bool $credentialBacked = true): array
     {
-        return DB::transaction(function () use ($teamId, $taskId, $actor, $credentialId, $spokeId, $sessionRef, $after, $now, $decisionsAfter): array {
+        return DB::transaction(function () use ($teamId, $taskId, $actor, $credentialId, $spokeId, $sessionRef, $after, $now, $decisionsAfter, $credentialBacked): array {
             $parent = $this->task($teamId, $taskId);
-            $spoke = $this->spoke($actor, $credentialId, $spokeId, $now);
+            $spoke = $this->spoke($actor, $credentialId, $spokeId, $now, $credentialBacked);
             $this->locks->tasks($parent->id);
             $seat = $this->locks->seat($parent);
             $same = $seat->holder_actor === $actor && $seat->holder_spoke_id === $spoke->id;
@@ -56,10 +56,10 @@ final readonly class WorkOrchestrationMcpService
     /** @param array<string, mixed> $input
      * @return array<string, mixed>
      */
-    public function orchestrate(int $teamId, string $taskId, string $actor, string $credentialId, ?int $spokeId, int $seatFence, string $sessionRef, string $action, array $input, CarbonImmutable $now): array
+    public function orchestrate(int $teamId, string $taskId, string $actor, string $credentialId, ?int $spokeId, int $seatFence, string $sessionRef, string $action, array $input, CarbonImmutable $now, bool $credentialBacked = true): array
     {
         $parent = $this->task($teamId, $taskId);
-        $spoke = $this->spoke($actor, $credentialId, $spokeId, $now);
+        $spoke = $this->spoke($actor, $credentialId, $spokeId, $now, $credentialBacked);
         $context = $this->surface->interactive($parent->id, $actor, $spoke->id, $seatFence, $sessionRef);
 
         return $this->surface->act($context, $action, $input, $now);
@@ -72,11 +72,11 @@ final readonly class WorkOrchestrationMcpService
     }
 
     /** @return array{released: true, task_id: string, seat_fence: int} */
-    public function release(int $teamId, string $taskId, string $actor, string $credentialId, ?int $spokeId, int $seatFence, CarbonImmutable $now): array
+    public function release(int $teamId, string $taskId, string $actor, string $credentialId, ?int $spokeId, int $seatFence, CarbonImmutable $now, bool $credentialBacked = true): array
     {
-        return DB::transaction(function () use ($teamId, $taskId, $actor, $credentialId, $spokeId, $seatFence, $now): array {
+        return DB::transaction(function () use ($teamId, $taskId, $actor, $credentialId, $spokeId, $seatFence, $now, $credentialBacked): array {
             $parent = $this->task($teamId, $taskId);
-            $spoke = $this->spoke($actor, $credentialId, $spokeId, $now);
+            $spoke = $this->spoke($actor, $credentialId, $spokeId, $now, $credentialBacked);
             $this->locks->tasks($parent->id);
             $seat = $this->locks->seat($parent);
             if (! $seat->interactive || $seat->fence !== $seatFence || $seat->holder_actor !== $actor
@@ -143,10 +143,10 @@ final readonly class WorkOrchestrationMcpService
         return $task;
     }
 
-    private function spoke(string $actor, string $credentialId, ?int $spokeId, CarbonImmutable $now): Spoke
+    private function spoke(string $actor, string $credentialId, ?int $spokeId, CarbonImmutable $now, bool $credentialBacked): Spoke
     {
         if ($spokeId === null) {
-            return $this->spokes->resolve($actor, $credentialId, $now);
+            return $this->spokes->resolve($actor, $credentialId, $now, $credentialBacked);
         }
         $spoke = Spoke::query()->whereKey($spokeId)->where('actor_id', $actor)->lockForUpdate()->first();
         if (! $spoke instanceof Spoke) {

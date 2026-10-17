@@ -17,7 +17,7 @@
         </div>
         <flux:menu.separator />
         <flux:menu.radio.group>
-            <flux:menu.item :href="route('bfc.ui.home')" icon="cog">
+            <flux:menu.item data-testid="desktop-settings-navigation" :href="route('bfc.ui.home')" icon="cog">
                 {{ __('Settings') }}
             </flux:menu.item>
             <form method="POST" action="{{ route('bfc.ui.logout') }}" class="w-full">

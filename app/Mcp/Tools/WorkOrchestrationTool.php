@@ -6,17 +6,18 @@ use App\Features\Work;
 use App\Mcp\DurableWriteCoordinator;
 use App\Mcp\OwnerSubjectResolver;
 use App\Mcp\ToolResponse;
+use App\Mcp\UnsupportedMcpPrincipal;
 use App\Models\Team;
 use App\Work\WorkOrchestrationMcpService;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\RolePolicy;
 use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\JsonSchemaTypeFactory;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
-use Laravel\Mcp\Exceptions\JsonRpcException;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
@@ -195,13 +196,13 @@ abstract class WorkOrchestrationTool extends CapstanTool
         $user = User::query()->find($owner->actorId);
         if (! $user instanceof User || $user->status !== 'active' || ! RolePolicy::canManageMembers($user->role)
             || OffboardedSubject::userIsOffboarded($owner->actorId)) {
-            throw new JsonRpcException('Only an admitted Owner or Admin may manage Work.', -32001);
+            throw new AuthorizationException('Only an admitted Owner or Admin may manage Work.');
         }
         if (! Team::query()->whereKey($input['team_id'])->exists()) {
             return Response::error('Work team is unavailable.');
         }
         if ($owner->credentialId === null) {
-            throw new JsonRpcException('This MCP principal is not supported.', -32001);
+            throw new UnsupportedMcpPrincipal;
         }
         if ($this->name() === 'orchestrate') {
             $work->validateAction($input['action'], $input['input']);
@@ -215,10 +216,10 @@ abstract class WorkOrchestrationTool extends CapstanTool
                 intent: $input,
                 targetType: 'work_orchestration',
                 operation: fn (): array => match ($this->name()) {
-                    'take_seat' => $work->take($input['team_id'], $input['task_id'], $owner->actorId, $owner->credentialId, $input['spoke_id'] ?? null, $input['session_ref'], $input['after'] ?? 0, CarbonImmutable::now(), $input['decisions_after'] ?? null),
-                    'release_seat' => $work->release($input['team_id'], $input['task_id'], $owner->actorId, $owner->credentialId, $input['spoke_id'] ?? null, $input['seat_fence'], CarbonImmutable::now()),
+                    'take_seat' => $work->take($input['team_id'], $input['task_id'], $owner->actorId, $owner->credentialId, $input['spoke_id'] ?? null, $input['session_ref'], $input['after'] ?? 0, CarbonImmutable::now(), $input['decisions_after'] ?? null, $owner->credentialBacked),
+                    'release_seat' => $work->release($input['team_id'], $input['task_id'], $owner->actorId, $owner->credentialId, $input['spoke_id'] ?? null, $input['seat_fence'], CarbonImmutable::now(), $owner->credentialBacked),
                     'answer_escalation' => $work->answer($input['team_id'], $input['escalation_id'], $owner->actorId, $input['answer'], CarbonImmutable::now()),
-                    'orchestrate' => $work->orchestrate($input['team_id'], $input['task_id'], $owner->actorId, $owner->credentialId, $input['spoke_id'] ?? null, $input['seat_fence'], $input['session_ref'], $input['action'], $input['input'], CarbonImmutable::now()),
+                    'orchestrate' => $work->orchestrate($input['team_id'], $input['task_id'], $owner->actorId, $owner->credentialId, $input['spoke_id'] ?? null, $input['seat_fence'], $input['session_ref'], $input['action'], $input['input'], CarbonImmutable::now(), $owner->credentialBacked),
                     default => throw new \LogicException('Unknown Work orchestration write.'),
                 },
             );

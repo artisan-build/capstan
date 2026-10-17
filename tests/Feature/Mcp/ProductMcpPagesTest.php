@@ -691,6 +691,7 @@ test('invalid page writes and unavailable feature configurations leave no durabl
         SubjectType::ExternalConsumer,
         'external-consumer:test-pages',
     );
+    config(['app.debug' => false]);
     pagesMcpCall('publish_page', publishPageArguments('unsupported', 'Title', 'Recipe', 'test'), $unsupported)
         ->assertOk()
         ->assertJsonPath('result.isError', true)

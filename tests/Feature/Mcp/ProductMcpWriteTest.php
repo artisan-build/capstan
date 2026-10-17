@@ -234,6 +234,7 @@ test('scopes writes and textual idempotency keys by type qualified actor', funct
         ->and(DB::table('mcp_write_claims')->where('idempotency_key', 'shared-key')->count())->toBe(2);
 
     $unsupported = capstanMcpWriteToken($alice, 'capstan-user:'.$alice->id, SubjectType::ExternalConsumer);
+    config(['app.debug' => false]);
     capstanMcpWriteCall('send_postmaster_message', capstanMcpWriteSendArguments('unsupported'), $unsupported)
         ->assertOk()
         ->assertJsonPath('result.isError', true)

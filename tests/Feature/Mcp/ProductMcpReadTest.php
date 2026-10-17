@@ -16,6 +16,7 @@ use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\Hmac\SigningRootLifecycle;
 use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
+use ArtisanBuild\BuiltForCloud\ManagedAccountAccess;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\McpDelegatedTools;
 use ArtisanBuild\BuiltForCloud\Testing\McpProductAdmission;
@@ -383,7 +384,7 @@ test('reading spokes performs no writes with the production database cache store
 
     $response = resolve(PostmasterSpokesTool::class)->handle(
         new McpRequest(['limit' => 1]),
-        new OwnerSubjectResolver($httpRequest),
+        new OwnerSubjectResolver($httpRequest, resolve(ManagedAccountAccess::class)),
         resolve(SignedCursor::class),
     );
     expect($response)->toBeInstanceOf(ResponseFactory::class)
@@ -618,6 +619,7 @@ test('feature gating and unsupported subject types fail closed without changing 
         'capstan-user:'.$user->id,
         SubjectType::ExternalConsumer,
     );
+    config(['app.debug' => false]);
 
     capstanMcpReadCall('postmaster_spokes', (object) [], $unsupported)
         ->assertOk()

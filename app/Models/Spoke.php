@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int $id
  * @property string $actor_id
  * @property string $credential_id
+ * @property bool $credential_backed
  * @property string|null $name
  * @property CarbonImmutable|null $last_polled_at
  * @property CarbonImmutable|null $work_heartbeat_notified_at
@@ -30,6 +31,7 @@ class Spoke extends Model
     protected $fillable = [
         'actor_id',
         'credential_id',
+        'credential_backed',
         'name',
         'last_polled_at',
         'work_heartbeat_notified_at',
@@ -42,6 +44,7 @@ class Spoke extends Model
     protected function casts(): array
     {
         return [
+            'credential_backed' => 'boolean',
             'last_polled_at' => 'datetime',
             'work_heartbeat_notified_at' => 'datetime',
             'probe_status' => SpokeLiveness::class,
