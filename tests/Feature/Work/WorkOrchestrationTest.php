@@ -2,6 +2,7 @@
 
 use App\Enums\WorkItemState;
 use App\Enums\WorkMilestoneKind;
+use App\Http\ApiErrorException;
 use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkEscalation;
@@ -11,9 +12,11 @@ use App\Models\WorkOrchestrationEvent;
 use App\Models\WorkOrchestratorSeat;
 use App\Models\WorkStateRevision;
 use App\Models\WorkTask;
+use App\Work\LogWorkNotifier;
 use App\Work\WorkClaimService;
 use App\Work\WorkItemStateService;
 use App\Work\WorkNotifier;
+use App\Work\WorkOrchestrationAuthor;
 use App\Work\WorkOrchestrationService;
 use App\Work\WorkSeatService;
 use App\Work\WorkSweepService;
@@ -23,6 +26,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Laravel\Pennant\Feature;
 
@@ -87,6 +91,8 @@ test('five mixed source facts coalesce durably and own subtree writes never self
     $own = $child->items()->create(['role' => 'builder']);
     $engine->authored($turn, $turn->fence, $turn->seat_fence, CarbonImmutable::now(), fn () => $states->transition($own, WorkItemState::Cancelled, 'orchestrator', $parent->id));
     expect(WorkOrchestrationEvent::query()->where('wakes', false)->count())->toBe(1);
+    expect(WorkOrchestrationEvent::query()->where('wakes', false)->sole()->author_task_id)->toBe($parent->id)
+        ->and(Str::isUuid(WorkOrchestrationEvent::query()->where('wakes', false)->sole()->author_task_id))->toBeTrue();
     $engine->turnDone($turn, $turn->fence, $turn->seat_fence, 'Completed batch', CarbonImmutable::now());
     expect(orchestrationSeat($parent)->completed_cursor)->toBe(5)
         ->and($parent->items()->where('state', 'queued')->count())->toBe(0)
@@ -215,19 +221,32 @@ test('due wakes and addressed human answers are idempotent durable events', func
     $wake = $engine->requestWake($parent, 'check', CarbonImmutable::now(), 'Check result');
     expect($engine->requestWake($parent, 'check', CarbonImmutable::now()->addHour(), 'Duplicate')->id)->toBe($wake->id);
     $future = $engine->requestWake($parent, 'later', CarbonImmutable::now()->addHour(), 'Future');
-    $human = $engine->escalate($parent, 'question', 'supervisor', 'Which direction?');
-    expect($engine->escalate($parent, 'question', 'supervisor', 'Duplicate')->id)->toBe($human->id);
+    $options = ['Continue exactly / CASE', "Stop\nfor review"];
+    $recommendation = 'Continue exactly / CASE';
+    $notifier = Mockery::mock(WorkNotifier::class);
+    $notifier->shouldReceive('escalated')->once()->withArgs(fn (WorkEscalation $arg): bool => $arg->request_key === 'question' && $arg->notified_at !== null);
+    app()->instance(WorkNotifier::class, $notifier);
+    $human = $engine->escalate($parent, 'question', 'supervisor', 'Which direction?', $options, $recommendation);
+    expect(resolve(WorkOrchestrationService::class)->escalate($parent, 'question', 'supervisor', 'Duplicate', ['Different'], 'Different')->id)->toBe($human->id);
+    expect($human->fresh()->question)->toBe('Which direction?')
+        ->and($human->fresh()->metadata)->toBe(['options' => $options, 'recommendation' => $recommendation])
+        ->and($human->fresh()->notified_at)->not->toBeNull()
+        ->and($parent->items()->where('role', 'human')->count())->toBe(1);
     $host = orchestrationHost();
     expect(orchestrationClaims($parent, $host, ['human', 'orchestrator']))->toBe([]);
     expect(fn () => $engine->answer($human, 'other', 'Wrong actor', CarbonImmutable::now()))->toThrow(DomainException::class);
-    $engine->answer($human, 'supervisor', 'Continue', CarbonImmutable::now());
+    WorkOrchestrationAuthor::run($parent->id, fn () => $engine->answer($human, 'supervisor', 'Continue', CarbonImmutable::now()));
     $engine->answer($human, 'supervisor', 'Duplicate', CarbonImmutable::now());
-    $engine->dueWakes(CarbonImmutable::now());
+    WorkOrchestrationAuthor::run($parent->id, fn () => $engine->dueWakes(CarbonImmutable::now()));
     $engine->dueWakes(CarbonImmutable::now());
     expect($human->fresh()->answer)->toBe('Continue')->and($wake->fresh()->fired_at)->not->toBeNull()
         ->and($future->fresh()->fired_at)->toBeNull()->and(WorkOrchestrationEvent::query()->count())->toBe(2)
         ->and($parent->items()->where('role', 'orchestrator')->count())->toBe(1)
         ->and(orchestrationClaims($parent, $host, ['human', 'orchestrator']))->toHaveCount(1);
+    foreach (WorkOrchestrationEvent::query()->get() as $event) {
+        expect($event->author_task_id)->toBeNull()->and($event->wakes)->toBeTrue();
+    }
+    expect(WorkOrchestrationEvent::query()->pluck('kind')->all())->toBe(['escalation_answered', 'wake_due']);
 });
 
 test('attempt cap projection is atomic idempotent and includes all ancestors', function (): void {
@@ -248,8 +267,85 @@ test('attempt cap projection is atomic idempotent and includes all ancestors', f
         ->and($parent->items()->where('role', 'orchestrator')->count())->toBe(1);
 });
 
+test('ordinary queue writes reject reserved roles without creating items', function (string $role): void {
+    $parent = orchestrationTask();
+    $input = ['team_id' => $parent->team_id, 'task_id' => $parent->id, 'role' => $role];
+    foreach (range(1, 2) as $attempt) {
+        expect(fn () => resolve(WorkToolService::class)->write('queue_item', $input, 'supervisor'))
+            ->toThrow(ApiErrorException::class);
+        expect($parent->items()->count())->toBe(0)->and(WorkEscalation::query()->count())->toBe(0);
+    }
+    resolve(WorkToolService::class)->write('queue_item', array_replace($input, ['role' => 'custom_review']), 'supervisor');
+    expect($parent->items()->sole()->role)->toBe('custom_review');
+})->with(['orchestrator', 'human']);
+
+test('first answers require a live queued addressed human item without partial effects', function (string $invalid): void {
+    $engine = resolve(WorkOrchestrationService::class);
+    $parent = orchestrationTask();
+    $human = $engine->escalate($parent, 'guard', 'supervisor', 'Question', ['Continue'], 'Continue');
+    $item = WorkItem::query()->findOrFail($human->work_item_id);
+    match ($invalid) {
+        'cancel_item' => resolve(WorkToolService::class)->write('cancel_item', ['team_id' => $parent->team_id, 'item_id' => $item->id], 'supervisor'),
+        'cancel_task' => resolve(WorkToolService::class)->write('cancel_task', ['team_id' => $parent->team_id, 'task_id' => $parent->id], 'supervisor'),
+        'task_only' => $parent->forceFill(['cancelled_at' => now()])->save(),
+        'role' => $item->forceFill(['role' => 'builder'])->save(),
+        'actor' => $item->forceFill(['addressed_actor' => 'other'])->save(),
+        'task' => $item->forceFill(['work_task_id' => orchestrationTask()->id])->save(),
+        'acted' => $item->forceFill(['state' => WorkItemState::Acted])->save(),
+    };
+    $tables = ['work_escalations', 'work_items', 'work_item_transitions', 'work_orchestration_events', 'work_orchestrator_seats'];
+    $snapshot = fn () => array_map(fn ($table) => DB::table($table)->orderBy('id')->get()->toJson(), $tables);
+    $before = $snapshot();
+    expect(fn () => $engine->answer($human, 'supervisor', 'Rejected', CarbonImmutable::now()))->toThrow(DomainException::class);
+    expect($snapshot())->toBe($before)->and($human->fresh()->answer)->toBeNull()
+        ->and($human->fresh()->answered_at)->toBeNull()->and($human->fresh()->answered_by)->toBeNull();
+})->with(['cancel_item', 'cancel_task', 'task_only', 'role', 'actor', 'task', 'acted']);
+
+test('accepted answers replay only for the addressee even after task cancellation', function (): void {
+    $engine = resolve(WorkOrchestrationService::class);
+    $parent = orchestrationTask();
+    $human = $engine->escalate($parent, 'replay', 'supervisor', 'Question', ['Continue'], 'Continue');
+    $engine->answer($human, 'supervisor', 'Accepted', CarbonImmutable::now());
+    resolve(WorkToolService::class)->write('cancel_task', ['team_id' => $parent->team_id, 'task_id' => $parent->id], 'supervisor');
+    $item = WorkItem::query()->findOrFail($human->work_item_id);
+    $before = [$item->transitions()->count(), WorkOrchestrationEvent::query()->count()];
+    expect($engine->answer($human, 'supervisor', 'Changed', CarbonImmutable::now())->answer)->toBe('Accepted');
+    expect(fn () => $engine->answer($human, 'other', 'Changed', CarbonImmutable::now()))->toThrow(DomainException::class);
+    expect([$item->transitions()->count(), WorkOrchestrationEvent::query()->count()])->toBe($before);
+});
+
+test('escalation options and recommendation reject invalid shapes and bounds before writes', function (array $options, string $recommendation): void {
+    $parent = orchestrationTask();
+    expect(fn () => resolve(WorkOrchestrationService::class)->escalate($parent, 'invalid', 'supervisor', 'Question', $options, $recommendation))->toThrow(DomainException::class);
+    expect(WorkEscalation::query()->count())->toBe(0)->and($parent->items()->count())->toBe(0);
+})->with([
+    [[], 'Continue'], [['key' => 'Continue'], 'Continue'], [[123], 'Continue'], [[''], 'Continue'],
+    [[str_repeat('x', 2001)], 'Continue'], [array_fill(0, 11, 'Continue'), 'Continue'],
+    [['Continue'], ''], [['Continue'], str_repeat('x', 2001)],
+]);
+
+test('escalation logging includes identifiers only', function (): void {
+    $parent = orchestrationTask();
+    $human = resolve(WorkOrchestrationService::class)->escalate($parent, 'logging', 'supervisor', 'Private question', ['Private option'], 'Private recommendation');
+    $human->forceFill(['answer' => 'Private answer'])->save();
+    Log::shouldReceive('warning')->once()->with('Work escalation requires an answer.', [
+        'task_id' => $parent->id, 'item_id' => $human->work_item_id, 'escalation_id' => $human->id,
+    ]);
+    (new LogWorkNotifier)->escalated($human);
+});
+
+test('events refuse invalid UUID authors without durable effects', function (): void {
+    $parent = orchestrationTask();
+    expect(fn () => resolve(WorkOrchestrationService::class)->event($parent, 'bad', 'test', authorTaskId: 'human'))->toThrow(DomainException::class);
+    expect(WorkOrchestrationEvent::query()->count())->toBe(0)->and(WorkOrchestratorSeat::query()->count())->toBe(0)
+        ->and($parent->items()->count())->toBe(0);
+});
+
 test('turn budget stops automatic work with one addressed unclaimable circuit breaker', function (): void {
     config(['capstan.work.orchestration.turn_budget' => 1]);
+    $notifier = Mockery::mock(WorkNotifier::class);
+    $notifier->shouldReceive('escalated')->once()->withArgs(fn (WorkEscalation $arg): bool => $arg->request_key === 'circuit-breaker' && $arg->notified_at !== null);
+    app()->instance(WorkNotifier::class, $notifier);
     $parent = orchestrationTask();
     $host = orchestrationHost();
     orchestrationEvent($parent);
@@ -261,6 +357,8 @@ test('turn budget stops automatic work with one addressed unclaimable circuit br
     }
     $human = WorkEscalation::query()->sole();
     expect($human->metadata['reason'])->toBe('turn_budget')->and($human->addressed_actor)->toBe('supervisor')
+        ->and($human->metadata['options'])->toBe(['Review the task before resuming', 'Cancel the task'])
+        ->and($human->metadata['recommendation'])->toBe('Review the task before resuming')
         ->and(WorkItem::query()->findOrFail($human->work_item_id)->addressed_actor)->toBe('supervisor')
         ->and($parent->items()->where('role', 'human')->count())->toBe(1)
         ->and(orchestrationSeat($parent)->stopped_at)->not->toBeNull()
@@ -297,7 +395,7 @@ test('records use UUIDv7 and decisions and state revisions reject edits or delet
     $decision = $engine->decide($turn, 1, $turn->seat_fence, $event->id, Str::random(), Str::random(), ['absent' => null, 'present' => 'proof'], CarbonImmutable::now());
     $revision = $engine->turnDone($turn, 1, $turn->seat_fence, Str::random(), CarbonImmutable::now());
     $wake = $engine->requestWake($parent, 'uuid', CarbonImmutable::now(), 'Check');
-    $human = $engine->escalate($parent, 'uuid', 'supervisor', 'Question');
+    $human = $engine->escalate($parent, 'uuid', 'supervisor', 'Question', ['Continue'], 'Continue');
     foreach ([$event, $decision, $revision, $wake, $human, orchestrationSeat($parent)] as $record) {
         expect($record->id[14])->toBe('7');
     }
@@ -314,7 +412,7 @@ test('work off engine services and scheduled execution have no durable effects',
     orchestrationEvent($parent);
     $turn = orchestrationClaims($parent, $host)[0];
     $engine = resolve(WorkOrchestrationService::class);
-    $human = $engine->escalate($parent, 'off', 'supervisor', 'Question');
+    $human = $engine->escalate($parent, 'off', 'supervisor', 'Question', ['Continue'], 'Continue');
     $engine->requestWake($parent, 'off', CarbonImmutable::now(), 'Due');
     Date::setTestNow(now()->addMinutes(6));
     $tables = ['work_items', 'work_orchestrator_seats', 'work_orchestration_events', 'work_orchestration_decisions', 'work_state_revisions', 'work_wakes', 'work_escalations'];
@@ -324,7 +422,7 @@ test('work off engine services and scheduled execution have no durable effects',
     Feature::flushCache();
     $engine->event($parent, 'off', 'off');
     $engine->requestWake($parent, 'off-new', CarbonImmutable::now(), 'Off');
-    $engine->escalate($parent, 'off-new', 'supervisor', 'Off');
+    $engine->escalate($parent, 'off-new', 'supervisor', 'Off', ['Continue'], 'Continue');
     $engine->answer($human, 'supervisor', 'Off', CarbonImmutable::now());
     $engine->turnDone($turn, 1, $turn->seat_fence, 'Off', CarbonImmutable::now());
     resolve(WorkSeatService::class)->renew($parent, $host->actor_id, $host->id, $turn->seat_fence, 'Off', CarbonImmutable::now());

@@ -17,6 +17,7 @@ use Illuminate\Database\Eloquent\Model;
  * @property string|null $answer
  * @property string|null $answered_by
  * @property CarbonImmutable|null $answered_at
+ * @property CarbonImmutable|null $notified_at
  */
 class WorkEscalation extends Model
 {
@@ -28,6 +29,6 @@ class WorkEscalation extends Model
     /** @return array<string, string> */
     protected function casts(): array
     {
-        return ['metadata' => 'array', 'answered_at' => 'datetime'];
+        return ['metadata' => 'array', 'answered_at' => 'datetime', 'notified_at' => 'datetime'];
     }
 }

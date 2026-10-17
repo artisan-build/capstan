@@ -58,6 +58,10 @@ final readonly class WorkToolService
                 throw new ApiErrorException(409, 'task_cancelled', 'Work task is cancelled.');
             }
 
+            if ($tool === 'queue_item' && in_array($input['role'], [WorkItem::ROLE_ORCHESTRATOR, WorkItem::ROLE_HUMAN], true)) {
+                throw new ApiErrorException(409, 'reserved_role', 'Reserved Work roles require orchestration or escalation.');
+            }
+
             return match ($tool) {
                 'revise_brief' => ['revision' => $this->representation->revision($this->briefs->append($task, $input['brief'], $actor))],
                 'queue_item' => ['item' => $this->representation->item($task->items()->create(['role' => $input['role']])->load('milestones'))],

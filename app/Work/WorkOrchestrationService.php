@@ -16,6 +16,7 @@ use Carbon\CarbonImmutable;
 use Closure;
 use DomainException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Laravel\Pennant\Feature;
 
 final readonly class WorkOrchestrationService
@@ -25,20 +26,23 @@ final readonly class WorkOrchestrationService
     /** Source writers call this inside the source transaction, after root-first locking.
      * @param  array<string, mixed>  $evidence
      */
-    public function event(WorkTask $parent, string $sourceKey, string $kind, array $evidence = [], ?string $authorTaskId = null): ?WorkOrchestrationEvent
+    public function event(WorkTask $parent, string $sourceKey, string $kind, array $evidence = [], ?string $authorTaskId = null, bool $inheritAuthor = true): ?WorkOrchestrationEvent
     {
         if (! Feature::active(Work::class)) {
             return null;
         }
 
-        return DB::transaction(function () use ($parent, $sourceKey, $kind, $evidence, $authorTaskId): WorkOrchestrationEvent {
+        return DB::transaction(function () use ($parent, $sourceKey, $kind, $evidence, $authorTaskId, $inheritAuthor): WorkOrchestrationEvent {
             $this->locks->tasks($parent->id);
             $seat = $this->locks->seat($parent);
             $existing = WorkOrchestrationEvent::query()->where('work_task_id', $parent->id)->where('source_key', $sourceKey)->first();
             if ($existing !== null) {
                 return $existing;
             }
-            $author = $authorTaskId ?? WorkOrchestrationAuthor::current();
+            $author = $authorTaskId ?? ($inheritAuthor ? WorkOrchestrationAuthor::current() : null);
+            if ($author !== null && ! Str::isUuid($author)) {
+                throw new DomainException('Event author must be a task UUID.');
+            }
             $seat->event_sequence++;
             $seat->save();
             $event = WorkOrchestrationEvent::query()->create([
@@ -261,16 +265,29 @@ final readonly class WorkOrchestrationService
         }, 5);
     }
 
-    public function escalate(WorkTask $parent, string $key, string $actor, string $question): ?WorkEscalation
+    /** Validate caller-supplied options into a bounded list of nonempty strings.
+     * @param array<array-key, mixed> $options
+     */
+    public function escalate(WorkTask $parent, string $key, string $actor, string $question, array $options, string $recommendation): ?WorkEscalation
     {
         if (! Feature::active(Work::class)) {
             return null;
         }
 
-        return DB::transaction(function () use ($parent, $key, $actor, $question): WorkEscalation {
+        if (trim($question) === '' || mb_strlen($question) > 10000 || ! array_is_list($options)
+            || count($options) < 1 || count($options) > 10 || trim($recommendation) === '' || mb_strlen($recommendation) > 2000) {
+            throw new DomainException('Escalation requires a bounded question, options and recommendation.');
+        }
+        foreach ($options as $option) {
+            if (! is_string($option) || trim($option) === '' || mb_strlen($option) > 2000) {
+                throw new DomainException('Escalation options must be nonempty bounded strings.');
+            }
+        }
+
+        return DB::transaction(function () use ($parent, $key, $actor, $question, $options, $recommendation): WorkEscalation {
             $this->locks->tasks($parent->id);
 
-            return $this->createEscalation($parent, $key, $actor, $question, []);
+            return $this->createEscalation($parent, $key, $actor, $question, ['options' => $options, 'recommendation' => $recommendation]);
         }, 5);
     }
 
@@ -287,8 +304,13 @@ final readonly class WorkOrchestrationService
                 throw new DomainException('Escalation is addressed to another actor.');
             }
             if ($locked->answered_at === null) {
+                $item = WorkItem::query()->whereKey($locked->work_item_id)->lockForUpdate()->firstOrFail();
+                $parent = WorkTask::query()->findOrFail($locked->work_task_id);
+                if ($item->work_task_id !== $parent->id || $item->role !== WorkItem::ROLE_HUMAN
+                    || $item->addressed_actor !== $actor || $item->state !== WorkItemState::Queued || $parent->cancelled_at !== null) {
+                    throw new DomainException('Escalation item is unavailable.');
+                }
                 $locked->fill(['answer' => $answer, 'answered_by' => $actor, 'answered_at' => $now])->save();
-                $item = WorkItem::query()->findOrFail($locked->work_item_id);
                 $from = $item->state;
                 $item->state = WorkItemState::Acted;
                 $item->save();
@@ -297,7 +319,7 @@ final readonly class WorkOrchestrationService
                     'actor_kind' => 'human', 'actor_id' => $actor, 'fence' => $item->fence, 'occurred_at' => $now,
                 ]);
                 // An answer is external input, even if requested during an authored operation.
-                $this->event(WorkTask::query()->findOrFail($locked->work_task_id), 'answer:'.$locked->id, 'escalation_answered', ['escalation_id' => $locked->id], 'human');
+                $this->event($parent, 'answer:'.$locked->id, 'escalation_answered', ['escalation_id' => $locked->id], inheritAuthor: false);
             }
 
             return $locked;
@@ -314,7 +336,7 @@ final readonly class WorkOrchestrationService
                 $this->locks->tasks($wake->work_task_id);
                 $updated = WorkWake::query()->whereKey($wake->id)->whereNull('fired_at')->where('due_at', '<=', $now)->update(['fired_at' => $now]);
                 if ($updated === 1) {
-                    $this->event(WorkTask::query()->findOrFail($wake->work_task_id), 'wake:'.$wake->id, 'wake_due', ['wake_id' => $wake->id], 'clock');
+                    $this->event(WorkTask::query()->findOrFail($wake->work_task_id), 'wake:'.$wake->id, 'wake_due', ['wake_id' => $wake->id], inheritAuthor: false);
                 }
             }, 5);
         }
@@ -342,7 +364,7 @@ final readonly class WorkOrchestrationService
             $seat->save();
         }
         $this->createEscalation($parent, 'circuit-breaker', $parent->user_actor_address ?? $parent->creator_actor,
-            'Automatic orchestration budget exhausted.', ['reason' => $reason, 'turns' => $seat->turns_completed, 'turns_started' => $seat->turns_started, 'children' => $seat->children_created]);
+            'Automatic orchestration budget exhausted.', ['options' => ['Review the task before resuming', 'Cancel the task'], 'recommendation' => 'Review the task before resuming', 'reason' => $reason, 'turns' => $seat->turns_completed, 'turns_started' => $seat->turns_started, 'children' => $seat->children_created]);
     }
 
     /** @param array<string, mixed> $metadata */
@@ -354,9 +376,13 @@ final readonly class WorkOrchestrationService
         }
         $item = $parent->items()->create(['role' => WorkItem::ROLE_HUMAN, 'addressed_actor' => $actor]);
 
-        return WorkEscalation::query()->create([
+        $escalation = WorkEscalation::query()->create([
             'work_task_id' => $parent->id, 'work_item_id' => $item->id, 'request_key' => $key,
             'addressed_actor' => $actor, 'question' => $question, 'metadata' => $metadata,
         ]);
+        $escalation->forceFill(['notified_at' => CarbonImmutable::now()])->save();
+        resolve(WorkNotifier::class)->escalated($escalation);
+
+        return $escalation;
     }
 }

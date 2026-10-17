@@ -89,6 +89,7 @@ return new class extends Migration
             $table->text('answer')->nullable();
             $table->string('answered_by')->nullable();
             $table->timestamp('answered_at')->nullable();
+            $table->timestamp('notified_at')->nullable();
             $table->timestamps();
             $table->unique(['work_task_id', 'request_key']);
         });
