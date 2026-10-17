@@ -294,6 +294,7 @@ class ApiClient:
                 decoded = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exception:
             if 300 <= exception.code < 400:
+                exception.close()
                 raise ApiError(exception.code) from None
             code = "request_failed"
             with contextlib.suppress(Exception):

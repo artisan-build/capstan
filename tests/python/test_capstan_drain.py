@@ -205,6 +205,26 @@ class AdmissionAndLockTests(DrainTestCase):
 
 
 class ApiTransportTests(DrainTestCase):
+    def test_redirect_response_is_closed_without_reading_body(self) -> None:
+        response = mock.Mock()
+        redirect = drain.urllib.error.HTTPError(
+            "https://capstan.test/api/v1/work/7/claim",
+            302,
+            "Found",
+            {"Location": "https://redirect.test/secret"},
+            response,
+        )
+        client = drain.ApiClient(self.config, "secret-bearer")
+        client.opener = mock.Mock()
+        client.opener.open.side_effect = redirect
+
+        with self.assertRaises(drain.ApiError) as failure:
+            client.claim(0, ["builder"], ["php"])
+
+        response.close.assert_called_once_with()
+        response.read.assert_not_called()
+        self.assertEqual((failure.exception.status, failure.exception.code), (302, "request_failed"))
+
     def test_redirect_is_refused_without_forwarding_bound_credentials(self) -> None:
         source_credentials: list[tuple[str | None, str | None]] = []
         target_requests: list[dict[str, str]] = []
