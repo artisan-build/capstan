@@ -8,11 +8,15 @@ use App\Models\Spoke;
 use App\Models\WorkItem;
 use App\Support\BoundCredentialSpokeResolver;
 use Carbon\CarbonImmutable;
+use Closure;
 use DomainException;
 use Illuminate\Support\Facades\DB;
+use Throwable;
 
 final readonly class WorkDrainService
 {
+    private const int SQLITE_LOCK_ATTEMPTS = 50;
+
     public function __construct(
         private BoundCredentialSpokeResolver $spokes,
         private WorkClaimService $claims,
@@ -64,24 +68,34 @@ final readonly class WorkDrainService
         int $fence,
         string $target,
         CarbonImmutable $now,
+        ?Closure $afterIdentified = null,
     ): WorkItem {
-        return DB::transaction(function () use ($teamId, $actorId, $credentialId, $itemId, $fence, $target, $now): WorkItem {
-            $spoke = $this->spokes->resolve($actorId, $credentialId, $now);
-            $item = $this->scopedItem($teamId, $itemId);
-            $this->assertOwnedLiveClaim($item, $actorId, $spoke->id, $fence, $now);
+        return $this->retrySqliteBusy(
+            function () use ($teamId, $actorId, $credentialId, $itemId, $fence, $target, $now, $afterIdentified): WorkItem {
+                return DB::transaction(function () use ($teamId, $actorId, $credentialId, $itemId, $fence, $target, $now, $afterIdentified): WorkItem {
+                    $spoke = $this->spokes->resolve($actorId, $credentialId, $now);
+                    $item = $this->scopedItem($teamId, $itemId);
+                    $this->assertOwnedLiveClaim($item, $actorId, $spoke->id, $fence, $now);
+                    $afterIdentified?->__invoke($item);
 
-            try {
-                $transitioned = $target === 'released'
-                    ? $this->states->release($item, 'spoke', $actorId, $now)
-                    : $this->states->transition($item, WorkItemState::from($target), 'spoke', $actorId, $now);
-            } catch (DomainException $exception) {
-                throw new ApiErrorException(422, 'illegal_transition', $exception->getMessage());
-            }
+                    try {
+                        $transitioned = $target === 'released'
+                            ? $this->states->releaseClaim($item, $teamId, $spoke->id, $actorId, $fence, $now)
+                            : $this->states->transitionClaim($item, WorkItemState::from($target), $teamId, $spoke->id, $actorId, $fence, $now);
+                    } catch (DomainException $exception) {
+                        throw new ApiErrorException(422, 'illegal_transition', $exception->getMessage());
+                    }
 
-            $this->spokes->heartbeat($spoke, $now);
+                    if ($transitioned === null) {
+                        throw $this->claimLost();
+                    }
 
-            return $transitioned;
-        });
+                    $this->spokes->heartbeat($spoke, $now);
+
+                    return $transitioned;
+                });
+            },
+        );
     }
 
     /**
@@ -94,29 +108,44 @@ final readonly class WorkDrainService
         string $credentialId,
         array $requests,
         CarbonImmutable $now,
+        ?Closure $afterIdentified = null,
     ): array {
-        return DB::transaction(function () use ($teamId, $actorId, $credentialId, $requests, $now): array {
-            $spoke = $this->spokes->resolve($actorId, $credentialId, $now);
-            $results = [];
+        return $this->retrySqliteBusy(
+            function () use ($teamId, $actorId, $credentialId, $requests, $now, $afterIdentified): array {
+                return DB::transaction(function () use ($teamId, $actorId, $credentialId, $requests, $now, $afterIdentified): array {
+                    $spoke = $this->spokes->resolve($actorId, $credentialId, $now);
+                    $results = [];
 
-            foreach ($requests as $request) {
-                $item = $this->scopedItem($teamId, $request['item_id']);
+                    foreach ($requests as $request) {
+                        $item = $this->scopedItem($teamId, $request['item_id']);
 
-                if (! $this->ownsLiveClaim($item, $actorId, $spoke->id, $request['fence'], $now)) {
-                    $results[] = ['item_id' => $request['item_id'], 'status' => 'lost'];
+                        if (! $this->ownsLiveClaim($item, $actorId, $spoke->id, $request['fence'], $now)) {
+                            $results[] = ['item_id' => $request['item_id'], 'status' => 'lost'];
 
-                    continue;
-                }
+                            continue;
+                        }
 
-                $item->lease_until = $now->addSeconds($this->leaseSeconds());
-                $item->save();
-                $results[] = ['item_id' => $request['item_id'], 'status' => 'renewed', 'item' => $item];
-            }
+                        $afterIdentified?->__invoke($item);
+                        $renewed = $this->states->renewClaim(
+                            $item,
+                            $teamId,
+                            $spoke->id,
+                            $actorId,
+                            $request['fence'],
+                            $now,
+                            $now->addSeconds($this->leaseSeconds()),
+                        );
+                        $results[] = $renewed === null
+                            ? ['item_id' => $request['item_id'], 'status' => 'lost']
+                            : ['item_id' => $request['item_id'], 'status' => 'renewed', 'item' => $renewed];
+                    }
 
-            $this->spokes->heartbeat($spoke, $now);
+                    $this->spokes->heartbeat($spoke, $now);
 
-            return $results;
-        });
+                    return $results;
+                });
+            },
+        );
     }
 
     private function scopedItem(int $teamId, string $itemId): ?WorkItem
@@ -125,7 +154,6 @@ final readonly class WorkDrainService
             ->whereKey($itemId)
             ->whereHas('workTask', fn ($query) => $query->where('team_id', $teamId))
             ->with('workTask')
-            ->lockForUpdate()
             ->first();
     }
 
@@ -137,7 +165,7 @@ final readonly class WorkDrainService
         CarbonImmutable $now,
     ): void {
         if (! $this->ownsLiveClaim($item, $actorId, $spokeId, $fence, $now)) {
-            throw new ApiErrorException(409, 'claim_lost', 'The work item claim is no longer held.');
+            throw $this->claimLost();
         }
     }
 
@@ -161,5 +189,41 @@ final readonly class WorkDrainService
     private function leaseSeconds(): int
     {
         return max(1, (int) config('capstan.work.lease_seconds', 300));
+    }
+
+    private function claimLost(): ApiErrorException
+    {
+        return new ApiErrorException(409, 'claim_lost', 'The work item claim is no longer held.');
+    }
+
+    /**
+     * @template T
+     *
+     * @param  Closure(): T  $operation
+     * @return T
+     */
+    private function retrySqliteBusy(Closure $operation): mixed
+    {
+        $attempt = 0;
+
+        beginning:
+        try {
+            return $operation();
+        } catch (Throwable $exception) {
+            $attempt++;
+
+            if ($attempt < self::SQLITE_LOCK_ATTEMPTS && $this->isSqliteLock($exception)) {
+                usleep(random_int(1_000, 20_000));
+                goto beginning;
+            }
+
+            throw $exception;
+        }
+    }
+
+    private function isSqliteLock(Throwable $exception): bool
+    {
+        return DB::getDriverName() === 'sqlite'
+            && str_contains(strtolower($exception->getMessage()), 'database is locked');
     }
 }

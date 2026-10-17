@@ -10,6 +10,16 @@ final class BoundCredentialSpokeResolver
 {
     public function resolve(string $actorId, string $credentialId, CarbonImmutable $now): Spoke
     {
+        $existing = Spoke::query()
+            ->where('credential_id', $credentialId)
+            ->where('actor_id', $actorId)
+            ->lockForUpdate()
+            ->first();
+
+        if ($existing !== null) {
+            return $existing;
+        }
+
         DB::table('spokes')->insertOrIgnore([
             'actor_id' => $actorId,
             'credential_id' => $credentialId,

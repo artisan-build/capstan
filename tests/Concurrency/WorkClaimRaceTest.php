@@ -1,6 +1,11 @@
 <?php
 
 use App\Enums\WorkItemState;
+use App\Models\WorkItem;
+use App\Work\WorkClaimService;
+use App\Work\WorkDrainService;
+use App\Work\WorkItemStateService;
+use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -163,17 +168,9 @@ function seedWorkRaceQueue(int $count, ?int $teamId = null): array
     return ['team_id' => $teamId, 'workers' => $workers];
 }
 
-/**
- * @param  list<array{actor: string, spoke: int}>  $workers
- * @param  list<int>  $capacities
- * @param  array<string, mixed>  $connection
- * @return list<list<string>>
- */
-function runWorkClaimProcesses(string $mode, int $teamId, array $workers, array $capacities, array $connection): array
+/** @param array<string, mixed> $connection */
+function workRaceProcessEnvironment(array $connection): array
 {
-    $barrier = storage_path('framework/testing/work-race-barrier-'.Str::lower(Str::random(16)));
-    mkdir($barrier, 0777, true);
-    $processes = [];
     $env = [
         'APP_ENV' => 'testing',
         'DB_CONNECTION' => (string) $connection['driver'],
@@ -186,6 +183,22 @@ function runWorkClaimProcesses(string $mode, int $teamId, array $workers, array 
             $env[$name] = (string) $connection[$key];
         }
     }
+
+    return $env;
+}
+
+/**
+ * @param  list<array{actor: string, spoke: int}>  $workers
+ * @param  list<int>  $capacities
+ * @param  array<string, mixed>  $connection
+ * @return list<list<string>>
+ */
+function runWorkClaimProcesses(string $mode, int $teamId, array $workers, array $capacities, array $connection): array
+{
+    $barrier = storage_path('framework/testing/work-race-barrier-'.Str::lower(Str::random(16)));
+    mkdir($barrier, 0777, true);
+    $processes = [];
+    $env = workRaceProcessEnvironment($connection);
 
     try {
         foreach ($workers as $index => $worker) {
@@ -252,6 +265,150 @@ function runWorkClaimProcesses(string $mode, int $teamId, array $workers, array 
     }
 }
 
+/**
+ * @return array{team_id: int, item_id: string, first: array{actor: string, spoke: int, credential: string}, second: array{actor: string, spoke: int, credential: string}}
+ */
+function seedWorkFenceScenario(): array
+{
+    $now = CarbonImmutable::parse('2026-10-17 16:00:00 UTC');
+    $teamId = DB::table('teams')->insertGetId([
+        'name' => 'Work fence race team',
+        'slug' => 'work-fence-race-'.Str::lower(Str::random(8)),
+        'is_default' => false,
+        'pool_work' => false,
+        'default_failover' => true,
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+    $taskId = (string) Str::uuid7();
+    $itemId = (string) Str::uuid7();
+    DB::table('work_tasks')->insert([
+        'id' => $taskId,
+        'team_id' => $teamId,
+        'title' => 'Test-created fence race task',
+        'failover' => true,
+        'required_capabilities' => '[]',
+        'timebox_minutes' => 30,
+        'creator_actor' => 'race-test',
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+    DB::table('work_items')->insert([
+        'id' => $itemId,
+        'work_task_id' => $taskId,
+        'role' => 'builder',
+        'state' => WorkItemState::Queued->value,
+        'fence' => 0,
+        'attempts' => 0,
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+    $claimants = [];
+
+    foreach (['first', 'second'] as $name) {
+        $actor = "fence-$name-actor";
+        $credential = (string) Str::uuid7();
+        $spoke = DB::table('spokes')->insertGetId([
+            'actor_id' => $actor,
+            'credential_id' => $credential,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $claimants[$name] = compact('actor', 'spoke', 'credential');
+    }
+
+    $claimed = resolve(WorkClaimService::class)->claim(
+        $teamId,
+        $claimants['first']['actor'],
+        $claimants['first']['spoke'],
+        ['builder'],
+        [],
+        1,
+        $now,
+        60,
+    );
+    expect($claimed)->toHaveCount(1)
+        ->and($claimed[0]->id)->toBe($itemId)
+        ->and($claimed[0]->fence)->toBe(1);
+
+    return [
+        'team_id' => $teamId,
+        'item_id' => $itemId,
+        'first' => $claimants['first'],
+        'second' => $claimants['second'],
+    ];
+}
+
+/**
+ * @param  array<string, mixed>  $connection
+ * @param  array{team_id: int, item_id: string, first: array{actor: string, spoke: int, credential: string}, second: array{actor: string, spoke: int, credential: string}}  $scenario
+ * @param  Closure(): void  $whilePaused
+ * @return array<string, mixed>
+ */
+function runWorkFenceProcess(string $mode, array $connection, array $scenario, Closure $whilePaused): array
+{
+    $barrier = storage_path('framework/testing/work-fence-barrier-'.Str::lower(Str::random(16)));
+    mkdir($barrier, 0777, true);
+    $process = new Process([
+        PHP_BINARY,
+        base_path('tests/Support/work-fence-worker.php'),
+        $mode,
+        $barrier,
+        (string) $scenario['team_id'],
+        $scenario['item_id'],
+        $scenario['first']['actor'],
+        $scenario['first']['credential'],
+        '1',
+    ], base_path(), workRaceProcessEnvironment($connection), null, 90);
+    $process->start();
+
+    try {
+        $deadline = microtime(true) + 30;
+
+        while (! file_exists($barrier.'/ready')) {
+            if ($process->isTerminated()) {
+                throw new RuntimeException('Fence worker failed before the barrier: '.substr($process->getErrorOutput(), 0, 2000));
+            }
+
+            if (microtime(true) >= $deadline) {
+                throw new RuntimeException('Fence worker did not reach the barrier.');
+            }
+
+            usleep(10_000);
+        }
+
+        $whilePaused();
+        touch($barrier.'/release');
+        $exit = $process->wait();
+
+        if ($exit !== 0) {
+            throw new RuntimeException('Fence worker failed: '.substr($process->getErrorOutput(), 0, 2000));
+        }
+
+        $output = $process->getOutput();
+        $marker = 'WORK_FENCE_RESULT=';
+        $position = strrpos($output, $marker);
+
+        if ($position === false) {
+            throw new RuntimeException('Fence worker returned no result marker: '.substr($output, 0, 2000));
+        }
+
+        /** @var array<string, mixed> $result */
+        $result = json_decode(trim(substr($output, $position + strlen($marker))), true, flags: JSON_THROW_ON_ERROR);
+
+        return $result;
+    } finally {
+        if ($process->isRunning()) {
+            $process->stop(1);
+        }
+
+        foreach (glob($barrier.'/*') ?: [] as $file) {
+            unlink($file);
+        }
+        rmdir($barrier);
+    }
+}
+
 test('conditional claim guard survives a real multiprocess race and the unsafe control duplicates', function (): void {
     $database = provisionWorkRaceDatabase();
     $capacities = [20, 21, 22, 23, 24, 25, 25, 25, 25, 25];
@@ -289,6 +446,83 @@ test('conditional claim guard survives a real multiprocess race and the unsafe c
         $unsafeIds = array_merge(...$unsafeResults);
 
         expect(count($unsafeIds))->toBeGreaterThan(count(array_unique($unsafeIds)));
+    } finally {
+        cleanupWorkRaceDatabase($database);
+    }
+});
+
+test('transition and renew lose atomically when another process reclaims the fence', function (): void {
+    $database = provisionWorkRaceDatabase();
+
+    try {
+        foreach (['transition', 'renew'] as $mode) {
+            $scenario = seedWorkFenceScenario();
+            $newClaim = null;
+            $result = runWorkFenceProcess(
+                $mode,
+                $database['connection'],
+                $scenario,
+                function () use ($scenario, &$newClaim): void {
+                    $expiredAt = CarbonImmutable::parse('2026-10-17 16:01:01 UTC');
+                    resolve(WorkItemStateService::class)->expireLease(
+                        WorkItem::query()->findOrFail($scenario['item_id']),
+                        'system',
+                        'fence-race-expiry',
+                        $expiredAt,
+                    );
+                    $claimed = resolve(WorkClaimService::class)->claim(
+                        $scenario['team_id'],
+                        $scenario['second']['actor'],
+                        $scenario['second']['spoke'],
+                        ['builder'],
+                        [],
+                        1,
+                        $expiredAt,
+                        300,
+                    );
+                    expect($claimed)->toHaveCount(1);
+                    $newClaim = $claimed[0];
+                },
+            );
+            $reclaimed = WorkItem::query()->findOrFail($scenario['item_id']);
+            $newLease = $reclaimed->lease_until;
+
+            expect($newClaim)->not->toBeNull()
+                ->and($reclaimed->fence)->toBe(2)
+                ->and($reclaimed->claimant_actor)->toBe($scenario['second']['actor'])
+                ->and($reclaimed->transitions()->count())->toBe(3);
+
+            if ($mode === 'transition') {
+                expect($result)->toBe([
+                    'status' => 'rejected',
+                    'http_status' => 409,
+                    'code' => 'claim_lost',
+                ]);
+                $succeeded = resolve(WorkDrainService::class)->transition(
+                    $scenario['team_id'],
+                    $scenario['second']['actor'],
+                    $scenario['second']['credential'],
+                    $scenario['item_id'],
+                    2,
+                    'delivered',
+                    CarbonImmutable::parse('2026-10-17 16:01:02 UTC'),
+                );
+                expect($succeeded->state)->toBe(WorkItemState::Delivered)
+                    ->and($succeeded->transitions()->count())->toBe(4);
+            } else {
+                expect($result)->toBe(['status' => 'lost'])
+                    ->and($reclaimed->lease_until?->equalTo($newLease))->toBeTrue();
+                $succeeded = resolve(WorkDrainService::class)->renew(
+                    $scenario['team_id'],
+                    $scenario['second']['actor'],
+                    $scenario['second']['credential'],
+                    [['item_id' => $scenario['item_id'], 'fence' => 2]],
+                    CarbonImmutable::parse('2026-10-17 16:01:31 UTC'),
+                );
+                expect($succeeded[0]['status'])->toBe('renewed')
+                    ->and($succeeded[0]['item']->lease_until?->isAfter($newLease))->toBeTrue();
+            }
+        }
     } finally {
         cleanupWorkRaceDatabase($database);
     }

@@ -367,6 +367,64 @@ test('another credential cannot act with a guessed current fence', function (): 
         ->and($item->transitions()->count())->toBe(1);
 });
 
+test('a claimed item cancellation makes transition and renew lose without further mutation', function (): void {
+    Date::setTestNow('2026-10-17 13:30:00');
+    $team = workDrainTeam();
+    $item = workDrainItem(workDrainTask($team));
+    $issued = workDrainCredential(capstanUser());
+    $claim = $this->withHeaders($issued['headers'])
+        ->postJson(route('api.work.claim', $team), workDrainClaimPayload())
+        ->assertOk();
+    resolve(WorkItemStateService::class)->transition(
+        $item,
+        WorkItemState::Cancelled,
+        'user',
+        'test-canceller',
+        CarbonImmutable::now()->addSecond(),
+    );
+    $cancelled = $item->fresh();
+    $before = $cancelled?->getAttributes();
+    $events = $cancelled?->transitions()->count();
+
+    $this->withHeaders($issued['headers'])->postJson(route('api.work.transition', $team), [
+        'item_id' => $item->id,
+        'fence' => $claim->json('items.0.fence'),
+        'state' => 'delivered',
+    ])->assertConflict()->assertJsonPath('error.code', 'claim_lost');
+    $this->withHeaders($issued['headers'])->postJson(route('api.work.renew', $team), [
+        'items' => [['item_id' => $item->id, 'fence' => $claim->json('items.0.fence')]],
+    ])->assertOk()->assertJsonPath('results.0.status', 'lost');
+
+    expect($item->fresh()?->getAttributes())->toBe($before)
+        ->and($item->transitions()->count())->toBe($events);
+});
+
+test('a claimed task cancellation makes transition and renew lose without item mutation', function (): void {
+    Date::setTestNow('2026-10-17 13:40:00');
+    $team = workDrainTeam();
+    $task = workDrainTask($team);
+    $item = workDrainItem($task);
+    $issued = workDrainCredential(capstanUser());
+    $claim = $this->withHeaders($issued['headers'])
+        ->postJson(route('api.work.claim', $team), workDrainClaimPayload())
+        ->assertOk();
+    $task->forceFill(['cancelled_at' => CarbonImmutable::now()->addSecond()])->save();
+    $before = $item->fresh()?->getAttributes();
+    $events = $item->transitions()->count();
+
+    $this->withHeaders($issued['headers'])->postJson(route('api.work.transition', $team), [
+        'item_id' => $item->id,
+        'fence' => $claim->json('items.0.fence'),
+        'state' => 'delivered',
+    ])->assertConflict()->assertJsonPath('error.code', 'claim_lost');
+    $this->withHeaders($issued['headers'])->postJson(route('api.work.renew', $team), [
+        'items' => [['item_id' => $item->id, 'fence' => $claim->json('items.0.fence')]],
+    ])->assertOk()->assertJsonPath('results.0.status', 'lost');
+
+    expect($item->fresh()?->getAttributes())->toBe($before)
+        ->and($item->transitions()->count())->toBe($events);
+});
+
 test('mixed renew results preserve input order and commit every valid renewal', function (): void {
     config(['capstan.work.lease_seconds' => 60]);
     Date::setTestNow('2026-10-17 14:00:00');
