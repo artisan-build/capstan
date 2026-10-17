@@ -17,6 +17,8 @@ use App\Work\WorkClaimService;
 use App\Work\WorkItemStateService;
 use App\Work\WorkNotifier;
 use App\Work\WorkOrchestrationAuthor;
+use App\Work\WorkOrchestrationCapability;
+use App\Work\WorkOrchestrationContext;
 use App\Work\WorkOrchestrationService;
 use App\Work\WorkSeatService;
 use App\Work\WorkSweepService;
@@ -643,3 +645,128 @@ test('failed conditional orchestration claim rolls back seat acquisition and tak
         ->and($seat->session_ref)->toBe($held ? 'opaque/exact ? CASE' : null);
     expect(orchestrationClaims($parent, $b))->toHaveCount(1);
 })->with(['acquisition' => false, 'takeover' => true]);
+
+test('a current orchestrator turn exercises the complete bounded subtree capability', function (): void {
+    $parent = orchestrationTask();
+    $existing = orchestrationTask($parent);
+    $event = orchestrationEvent($parent, 'capability-current');
+    $host = orchestrationHost();
+    $turn = orchestrationClaims($parent, $host)[0];
+    $context = new WorkOrchestrationContext(
+        $parent->id, $host->actor_id, $host->id, $turn->seat_fence, null, $turn->id, $turn->fence,
+    );
+    $capability = resolve(WorkOrchestrationCapability::class);
+
+    $created = $capability->createChild($context, $parent->id, [
+        'title' => 'Capability child', 'required_capabilities' => [], 'timebox_minutes' => 5,
+    ], 'Capability brief', CarbonImmutable::now());
+    $revision = $capability->reviseBrief($context, $existing->id, 'Revised by orchestrator', CarbonImmutable::now());
+    $item = $capability->queue($context, $existing->id, 'builder', CarbonImmutable::now());
+    $steer = $capability->steer($context, $existing->id, $item->id, 'Proceed safely', CarbonImmutable::now());
+    $cancelled = $capability->cancelItem($context, $item->id, CarbonImmutable::now());
+    $decision = $capability->decide($context, $event->id, 'Proceed', 'Evidence checked', ['proof' => true], CarbonImmutable::now());
+    $wake = $capability->requestWake($context, 'later', CarbonImmutable::now()->addMinute(), 'Recheck', CarbonImmutable::now());
+    $escalation = $capability->escalate($context, 'question', 'supervisor', 'Continue?', ['Yes', 'No'], 'Yes', CarbonImmutable::now());
+    $finished = $capability->finish($context, WorkItemState::Acted, 'Current turn complete', CarbonImmutable::now());
+
+    expect($created->parent_task_id)->toBe($parent->id)
+        ->and($created->briefRevisions()->sole()->content)->toBe('Capability brief')
+        ->and($revision->work_task_id)->toBe($existing->id)
+        ->and($steer->work_item_id)->toBe($item->id)
+        ->and($cancelled->state)->toBe(WorkItemState::Cancelled)
+        ->and($decision->work_task_id)->toBe($parent->id)
+        ->and($wake->work_task_id)->toBe($parent->id)
+        ->and($escalation->work_task_id)->toBe($parent->id)
+        ->and($finished->state)->toBe(WorkItemState::Acted);
+});
+
+test('an interactive holder exercises subtree capability and loses it on expiry release replacement or spoofing', function (): void {
+    $parent = orchestrationTask();
+    $child = orchestrationTask($parent);
+    orchestrationEvent($parent, 'capability-interactive');
+    $a = orchestrationHost('interactive-a');
+    $b = orchestrationHost('interactive-b');
+    $seat = resolve(WorkSeatService::class)->take($parent, $a->actor_id, $a->id, 0, 'opaque-session', true, CarbonImmutable::now(), 10);
+    $context = new WorkOrchestrationContext($parent->id, $a->actor_id, $a->id, $seat->fence, 'opaque-session');
+    $capability = resolve(WorkOrchestrationCapability::class);
+    $created = $capability->createChild($context, $parent->id, [
+        'title' => 'Interactive child', 'required_capabilities' => [], 'timebox_minutes' => 5,
+    ], 'Interactive brief', CarbonImmutable::now());
+    $revision = $capability->reviseBrief($context, $child->id, 'Interactive revision', CarbonImmutable::now());
+    $item = $capability->queue($context, $child->id, 'builder', CarbonImmutable::now());
+    $steer = $capability->steer($context, $child->id, $item->id, 'Interactive steer', CarbonImmutable::now());
+    $cancelled = $capability->cancelItem($context, $item->id, CarbonImmutable::now());
+    $decision = $capability->decide($context, WorkOrchestrationEvent::query()->where('source_key', 'capability-interactive')->sole()->id, 'Continue', 'Interactive proof', [], CarbonImmutable::now());
+    $wake = $capability->requestWake($context, 'interactive-wake', CarbonImmutable::now()->addMinute(), 'Check', CarbonImmutable::now());
+    $escalation = $capability->escalate($context, 'interactive-question', 'supervisor', 'Continue?', ['Yes'], 'Yes', CarbonImmutable::now());
+    $finished = $capability->finish($context, WorkItemState::Acted, 'Interactive complete', CarbonImmutable::now());
+    expect($created->parent_task_id)->toBe($parent->id)
+        ->and($revision->work_task_id)->toBe($child->id)
+        ->and($steer->work_item_id)->toBe($item->id)
+        ->and($cancelled->state)->toBe(WorkItemState::Cancelled)
+        ->and($decision->work_task_id)->toBe($parent->id)
+        ->and($wake->work_task_id)->toBe($parent->id)
+        ->and($escalation->work_task_id)->toBe($parent->id)
+        ->and($finished->state)->toBe(WorkItemState::Acted);
+
+    foreach ([
+        new WorkOrchestrationContext($parent->id, 'spoofed', $a->id, $seat->fence, 'opaque-session'),
+        new WorkOrchestrationContext($parent->id, $a->actor_id, $b->id, $seat->fence, 'opaque-session'),
+        new WorkOrchestrationContext($parent->id, $a->actor_id, $a->id, $seat->fence + 1, 'opaque-session'),
+        new WorkOrchestrationContext($parent->id, $a->actor_id, $a->id, $seat->fence, 'wrong-session'),
+    ] as $spoofed) {
+        expect(fn () => $capability->queue($spoofed, $child->id, 'reviewer', CarbonImmutable::now()))
+            ->toThrow(ApiErrorException::class);
+    }
+    expect($child->items()->count())->toBe(1);
+
+    Date::setTestNow(now()->addSeconds(11));
+    expect(fn () => $capability->queue($context, $child->id, 'expired', CarbonImmutable::now()))
+        ->toThrow(ApiErrorException::class);
+    $replacement = resolve(WorkSeatService::class)->take($parent, $b->actor_id, $b->id, $seat->fence, 'replacement', true, CarbonImmutable::now());
+    expect(fn () => $capability->queue($context, $child->id, 'replaced', CarbonImmutable::now()))
+        ->toThrow(ApiErrorException::class);
+    $replacementContext = new WorkOrchestrationContext($parent->id, $b->actor_id, $b->id, $replacement->fence, 'replacement');
+    resolve(WorkSeatService::class)->release($parent, $b->actor_id, $b->id, $replacement->fence, CarbonImmutable::now());
+    expect(fn () => $capability->queue($replacementContext, $child->id, 'released', CarbonImmutable::now()))
+        ->toThrow(ApiErrorException::class);
+    expect($child->items()->count())->toBe(1);
+});
+
+test('subtree capability refuses ancestors siblings unrelated roots cross team reserved roles and stale turn fences without writes', function (): void {
+    $root = orchestrationTask();
+    $parent = orchestrationTask($root);
+    $child = orchestrationTask($parent);
+    $sibling = orchestrationTask($root);
+    $siblingChild = orchestrationTask($sibling);
+    $other = WorkTask::query()->create([
+        'team_id' => Team::query()->create(['name' => 'Other capability team', 'slug' => Str::random(16)])->id,
+        'title' => 'Other root', 'required_capabilities' => [], 'timebox_minutes' => 10, 'creator_actor' => 'supervisor',
+    ]);
+    orchestrationEvent($parent, 'capability-scope');
+    $host = orchestrationHost('scope-host');
+    $turn = orchestrationClaims($parent, $host)[0];
+    $context = new WorkOrchestrationContext($parent->id, $host->actor_id, $host->id, $turn->seat_fence, null, $turn->id, $turn->fence);
+    $capability = resolve(WorkOrchestrationCapability::class);
+    $before = WorkItem::query()->count();
+
+    foreach ([$root, $parent, $sibling, $siblingChild, $other] as $outside) {
+        try {
+            $capability->queue($context, $outside->id, 'builder', CarbonImmutable::now());
+            $this->fail('Expected subtree refusal.');
+        } catch (ApiErrorException $exception) {
+            expect($exception->status)->toBe(403);
+        }
+    }
+    expect(fn () => $capability->queue($context, $child->id, WorkItem::ROLE_HUMAN, CarbonImmutable::now()))
+        ->toThrow(ApiErrorException::class);
+    $stale = new WorkOrchestrationContext($parent->id, $host->actor_id, $host->id, $turn->seat_fence, null, $turn->id, $turn->fence + 1);
+    expect(fn () => $capability->queue($stale, $child->id, 'builder', CarbonImmutable::now()))
+        ->toThrow(ApiErrorException::class);
+    expect(fn () => $capability->queue($context, (string) Str::uuid7(), 'builder', CarbonImmutable::now()))
+        ->toThrow(ApiErrorException::class);
+    $parent->forceFill(['cancelled_at' => now()])->save();
+    expect(fn () => $capability->queue($context, $child->id, 'builder', CarbonImmutable::now()))
+        ->toThrow(ApiErrorException::class);
+    expect(WorkItem::query()->count())->toBe($before);
+});

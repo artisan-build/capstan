@@ -5,6 +5,7 @@ namespace App\Models;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * @property string $id
@@ -32,5 +33,17 @@ class WorkEscalation extends Model
     protected function casts(): array
     {
         return ['metadata' => 'array', 'answered_at' => 'datetime', 'notified_at' => 'datetime'];
+    }
+
+    /** @return BelongsTo<WorkTask, $this> */
+    public function workTask(): BelongsTo
+    {
+        return $this->belongsTo(WorkTask::class);
+    }
+
+    /** @return BelongsTo<WorkItem, $this> */
+    public function workItem(): BelongsTo
+    {
+        return $this->belongsTo(WorkItem::class);
     }
 }
