@@ -41,12 +41,13 @@ function workNavigationTags(string $html): array
 
 test('active members see separate items latest milestones claimant and liveness with escaped stored data', function (): void {
     $hostile = '<script>alert("work")</script><img src=x onerror=alert(1)>';
+    $hostileRole = '<b data-x=1>role</b>';
     $task = workPageTask(['title' => 'Title '.$hostile]);
     $task->briefRevisions()->create(['sequence' => 1, 'content' => 'Brief '.$hostile, 'author_actor' => 'creator']);
     $task->steers()->create(['text' => 'Steer '.$hostile, 'author_actor' => 'author '.$hostile]);
     foreach (['code_review', 'security_review'] as $role) {
         $item = $task->items()->create([
-            'role' => $role.$hostile, 'state' => 'routed', 'claimant_actor' => 'actor '.$hostile,
+            'role' => $role.$hostileRole, 'state' => 'routed', 'claimant_actor' => 'actor '.$hostile,
             'stalled_at' => now(), 'waiting_on_host_at' => now(),
         ]);
         $item->milestones()->create(['fence' => 0, 'kind' => 'note', 'payload' => ['summary' => 'Old '.$role]]);
@@ -57,9 +58,10 @@ test('active members see separate items latest milestones claimant and liveness 
         ->assertSee('data-task-id="'.$task->id.'"', false)
         ->assertSee('Title '.$hostile)
         ->assertSee('Brief '.$hostile)->assertSee('Steer '.$hostile)
-        ->assertSee('code_review')->assertSee('security_review')
+        ->assertSee('code_review'.$hostileRole)->assertSee('security_review'.$hostileRole)
         ->assertSee('actor '.$hostile)->assertSee('routed')
         ->assertDontSee($hostile, false)
+        ->assertDontSee($hostileRole, false)
         ->assertDontSee('Old code_review')->assertDontSee('Old security_review')
         ->assertDontSee('href="javascript:', false);
     $dom = new DOMDocument;
