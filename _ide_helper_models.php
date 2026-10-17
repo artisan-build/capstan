@@ -447,9 +447,24 @@ namespace App\Models{
  * @property string|null $answered_by
  * @property CarbonImmutable|null $answered_at
  * @property CarbonImmutable|null $notified_at
+ * @property \Carbon\CarbonImmutable|null $created_at
+ * @property \Carbon\CarbonImmutable|null $updated_at
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereAddressedActor($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereAnswer($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereAnsweredAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereAnsweredBy($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereMetadata($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereNotifiedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereQuestion($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereRequestKey($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereUpdatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereWorkItemId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereWorkTaskId($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -489,6 +504,7 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereAddressedActor($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereAttempts($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereClaimantActor($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereClaimantSpokeId($value)
@@ -500,8 +516,11 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereLastProgress($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereLeaseUntil($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereRole($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereSeatFence($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereStalledAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereState($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereTurnCursor($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereTurnUpperBound($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereUpdatedAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereWaitingOnHostAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereWaitingOnHostNotifiedAt($value)
@@ -576,9 +595,19 @@ namespace App\Models{
  * @property string $decision
  * @property string $rationale
  * @property array<string, mixed> $evidence
+ * @property \Carbon\CarbonImmutable|null $created_at
+ * @property \Carbon\CarbonImmutable|null $updated_at
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision whereDecision($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision whereEvidence($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision whereRationale($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision whereTriggeringEventId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision whereUpdatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision whereWorkTaskId($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -595,9 +624,21 @@ namespace App\Models{
  * @property array<string, mixed> $evidence
  * @property string|null $author_task_id
  * @property bool $wakes
+ * @property \Carbon\CarbonImmutable|null $created_at
+ * @property \Carbon\CarbonImmutable|null $updated_at
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent whereAuthorTaskId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent whereEvidence($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent whereKind($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent whereSequence($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent whereSourceKey($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent whereUpdatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent whereWakes($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent whereWorkTaskId($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -624,9 +665,31 @@ namespace App\Models{
  * @property int $turns_started
  * @property int $children_created
  * @property CarbonImmutable|null $stopped_at
+ * @property \Carbon\CarbonImmutable|null $created_at
+ * @property \Carbon\CarbonImmutable|null $updated_at
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereActiveItemId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereChildrenCreated($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereCompletedCursor($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereEventSequence($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereFailover($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereFence($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereHolderActor($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereHolderSpokeId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereInteractive($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereLeaseUntil($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereNotifiedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereSessionRef($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereStoppedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereTurnsCompleted($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereTurnsStarted($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereUpdatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereWaitingAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereWorkTaskId($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -641,9 +704,19 @@ namespace App\Models{
  * @property int $sequence
  * @property int $through_cursor
  * @property string $content
+ * @property \Carbon\CarbonImmutable|null $created_at
+ * @property \Carbon\CarbonImmutable|null $updated_at
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision whereContent($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision whereSequence($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision whereThroughCursor($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision whereUpdatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision whereWorkItemId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision whereWorkTaskId($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -740,9 +813,19 @@ namespace App\Models{
  * @property CarbonImmutable $due_at
  * @property CarbonImmutable|null $fired_at
  * @property string $reason
+ * @property \Carbon\CarbonImmutable|null $created_at
+ * @property \Carbon\CarbonImmutable|null $updated_at
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake whereDueAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake whereFiredAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake whereReason($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake whereRequestKey($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake whereUpdatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake whereWorkTaskId($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
