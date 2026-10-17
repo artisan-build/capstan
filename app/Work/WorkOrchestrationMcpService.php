@@ -20,6 +20,7 @@ final readonly class WorkOrchestrationMcpService
         private WorkSeatService $seats,
         private WorkOrchestrationService $orchestration,
         private BoundCredentialSpokeResolver $spokes,
+        private WorkOrchestrationSurface $surface,
     ) {}
 
     /** @return array<string, mixed> */
@@ -48,8 +49,26 @@ final readonly class WorkOrchestrationMcpService
                 throw $this->refused('seat_unavailable');
             }
 
-            return $this->context($parent, $seat, $spoke, $after);
+            return $this->context($parent, $seat, $spoke, $after, $now);
         }, 5);
+    }
+
+    /** @param array<string, mixed> $input
+     * @return array<string, mixed>
+     */
+    public function orchestrate(int $teamId, string $taskId, string $actor, string $credentialId, ?int $spokeId, int $seatFence, string $sessionRef, string $action, array $input, CarbonImmutable $now): array
+    {
+        $parent = $this->task($teamId, $taskId);
+        $spoke = $this->spoke($actor, $credentialId, $spokeId, $now);
+        $context = $this->surface->interactive($parent->id, $actor, $spoke->id, $seatFence, $sessionRef);
+
+        return $this->surface->act($context, $action, $input, $now);
+    }
+
+    /** @param array<string, mixed> $input */
+    public function validateAction(string $action, array $input): void
+    {
+        $this->surface->validate($action, $input);
     }
 
     /** @return array{released: true, task_id: string, seat_fence: int} */
@@ -138,8 +157,11 @@ final readonly class WorkOrchestrationMcpService
     }
 
     /** @return array<string, mixed> */
-    private function context(WorkTask $parent, WorkOrchestratorSeat $seat, Spoke $spoke, int $after): array
+    private function context(WorkTask $parent, WorkOrchestratorSeat $seat, Spoke $spoke, int $after, CarbonImmutable $now): array
     {
+        if ($after > $seat->event_sequence) {
+            throw $this->refused('invalid_cursor');
+        }
         $lower = max($seat->completed_cursor, $after);
         $events = WorkOrchestrationEvent::query()->where('work_task_id', $parent->id)
             ->where('sequence', '>', $lower)->orderBy('sequence')->limit(26)->get();
@@ -161,6 +183,11 @@ final readonly class WorkOrchestrationMcpService
                 'evidence' => $this->boundedJson($event->evidence),
             ])->values()->all(),
             'has_more' => $events->count() > 25,
+            'context' => $this->surface->read(
+                $this->surface->interactive($parent->id, $spoke->actor_id, $spoke->id, $seat->fence, (string) $seat->session_ref),
+                $after,
+                $now,
+            ),
         ];
     }
 

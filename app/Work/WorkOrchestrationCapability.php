@@ -55,14 +55,51 @@ final readonly class WorkOrchestrationCapability
         ));
     }
 
-    public function queue(WorkOrchestrationContext $context, string $taskId, string $role, CarbonImmutable $now): WorkItem
+    public function queue(WorkOrchestrationContext $context, string $taskId, string $role, CarbonImmutable $now): ?WorkItem
     {
-        return $this->authorised($context, $now, function (WorkTask $parent) use ($taskId, $role): WorkItem {
+        return $this->authorised($context, $now, function (WorkTask $parent, WorkOrchestratorSeat $seat) use ($taskId, $role): ?WorkItem {
             if (in_array($role, [WorkItem::ROLE_HUMAN, WorkItem::ROLE_ORCHESTRATOR], true)) {
                 throw $this->forbidden('Reserved roles are outside ordinary orchestration queue authority.');
             }
 
-            return $this->target($parent, $taskId)->items()->create(['role' => $role]);
+            return $this->orchestration->queueOrdinaryChild($parent, $seat, $this->target($parent, $taskId), $role);
+        });
+    }
+
+    /** @return array<string, mixed> */
+    public function context(WorkOrchestrationContext $context, int $after, CarbonImmutable $now): array
+    {
+        return $this->authorised($context, $now, function (WorkTask $parent, WorkOrchestratorSeat $seat, ?WorkItem $turn) use ($after): array {
+            $brief = $parent->latestBriefRevision()->first();
+            $state = WorkStateRevision::query()->where('work_task_id', $parent->id)->orderByDesc('sequence')->first();
+            $lower = $turn instanceof WorkItem ? (int) ($turn->turn_cursor ?? $seat->completed_cursor) : max($seat->completed_cursor, $after);
+            $upper = $turn instanceof WorkItem ? (int) ($turn->turn_upper_bound ?? $seat->event_sequence) : $seat->event_sequence;
+            $events = WorkOrchestrationEvent::query()->where('work_task_id', $parent->id)
+                ->where('sequence', '>', $lower)->where('sequence', '<=', $upper)->orderBy('sequence')->limit(26)->get();
+            $decisions = WorkOrchestrationDecision::query()->where('work_task_id', $parent->id)
+                ->orderByDesc('created_at')->orderByDesc('id')->limit(25)->get()->reverse()->values();
+
+            return array_filter([
+                'task' => array_filter([
+                    'id' => $parent->id, 'team_id' => $parent->team_id, 'title' => $parent->title,
+                    'workflow_ref' => $parent->workflow_ref,
+                ], fn (mixed $value): bool => $value !== null),
+                'brief' => $brief === null ? null : ['id' => $brief->id, 'sequence' => $brief->sequence, 'content' => $brief->content],
+                'state' => $state === null ? null : [
+                    'id' => $state->id, 'sequence' => $state->sequence,
+                    'through' => $state->through_cursor, 'content' => $state->content,
+                ],
+                'decisions' => $decisions->map(fn (WorkOrchestrationDecision $decision): array => [
+                    'id' => $decision->id, 'event_id' => $decision->triggering_event_id,
+                    'decision' => $decision->decision, 'rationale' => $decision->rationale,
+                    'evidence' => $this->boundedJson($decision->evidence),
+                ])->all(),
+                'events' => $events->take(25)->map(fn (WorkOrchestrationEvent $event): array => [
+                    'id' => $event->id, 'sequence' => $event->sequence, 'kind' => $event->kind,
+                    'evidence' => $this->boundedJson($event->evidence),
+                ])->values()->all(),
+                'cursor' => $lower, 'through' => $upper, 'has_more' => $events->count() > 25,
+            ], fn (mixed $value): bool => $value !== null);
         });
     }
 
@@ -260,5 +297,13 @@ final readonly class WorkOrchestrationCapability
     private function forbidden(string $message = 'Target is outside the current orchestrator subtree.'): ApiErrorException
     {
         return new ApiErrorException(403, 'orchestration_forbidden', $message);
+    }
+
+    /** @param array<string, mixed> $value */
+    private function boundedJson(array $value): string
+    {
+        $json = json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+        return is_string($json) && strlen($json) <= 8000 ? $json : '{"truncated":true}';
     }
 }

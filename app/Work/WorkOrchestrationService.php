@@ -240,16 +240,26 @@ final readonly class WorkOrchestrationService
                 || in_array($role, [WorkItem::ROLE_HUMAN, WorkItem::ROLE_ORCHESTRATOR], true)) {
                 throw new DomainException('Expected an ordinary child item in the orchestrator subtree.');
             }
-            if ($seat->children_created >= max(1, (int) config('capstan.work.orchestration.child_budget', 100))) {
-                $this->stop($locked->workTask, $seat, 'child_budget');
 
-                return null;
-            }
-            $seat->children_created++;
-            $seat->save();
-
-            return $child->items()->create(['role' => $role]);
+            return $this->queueOrdinaryChild($locked->workTask, $seat, $child, $role);
         }, 5);
+    }
+
+    /** Caller holds the parent/root locks and has proved that child is a descendant. */
+    public function queueOrdinaryChild(WorkTask $parent, WorkOrchestratorSeat $seat, WorkTask $child, string $role): ?WorkItem
+    {
+        if (in_array($role, [WorkItem::ROLE_HUMAN, WorkItem::ROLE_ORCHESTRATOR], true)) {
+            throw new DomainException('Expected an ordinary child item in the orchestrator subtree.');
+        }
+        if ($seat->children_created >= max(1, (int) config('capstan.work.orchestration.child_budget', 100))) {
+            $this->stop($parent, $seat, 'child_budget');
+
+            return null;
+        }
+        $seat->children_created++;
+        $seat->save();
+
+        return $child->items()->create(['role' => $role]);
     }
 
     public function requestWake(WorkTask $parent, string $key, CarbonImmutable $dueAt, string $reason): ?WorkWake

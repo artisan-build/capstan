@@ -14,6 +14,7 @@ use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\JsonSchemaTypeFactory;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Laravel\Mcp\Exceptions\JsonRpcException;
 use Laravel\Mcp\Request;
@@ -51,6 +52,25 @@ abstract class WorkOrchestrationTool extends CapstanTool
                 'answer' => $schema->string()->min(1)->max(10000)->required(),
                 'idempotency_key' => $schema->string()->min(1)->max(255)->required(),
             ],
+            'orchestrate' => [
+                'team_id' => $schema->integer()->min(1)->required(),
+                'task_id' => $schema->string()->required(),
+                'spoke_id' => $schema->integer()->min(1),
+                'seat_fence' => $schema->integer()->min(1)->required(),
+                'session_ref' => $schema->string()->min(1)->max(2048)->required(),
+                'action' => $schema->string()->enum(['create_child', 'revise_brief', 'queue_item', 'cancel_item', 'steer', 'decide', 'request_wake', 'escalate', 'finish'])->required(),
+                'input' => $schema->object([
+                    'under_task_id' => $schema->string(), 'task_id' => $schema->string(), 'item_id' => $schema->string(), 'event_id' => $schema->string(),
+                    'title' => $schema->string(), 'brief' => $schema->string(), 'role' => $schema->string(), 'content' => $schema->string(),
+                    'decision' => $schema->string(), 'rationale' => $schema->string(), 'evidence' => $schema->object(),
+                    'key' => $schema->string(), 'due_at' => $schema->string(), 'reason' => $schema->string(),
+                    'addressed_actor' => $schema->string(), 'question' => $schema->string(), 'options' => $schema->array()->items($schema->string()), 'recommendation' => $schema->string(),
+                    'state' => $schema->string(), 'user_actor_address' => $schema->string(), 'device_spoke_id' => $schema->integer(),
+                    'failover' => $schema->boolean(), 'required_capabilities' => $schema->array()->items($schema->string()),
+                    'timebox_minutes' => $schema->integer(), 'workflow_ref' => $schema->string(),
+                ])->withoutAdditionalProperties()->required(),
+                'idempotency_key' => $schema->string()->min(1)->max(255)->required(),
+            ],
             default => throw new \LogicException('Unknown Work orchestration tool.'),
         };
     }
@@ -74,6 +94,21 @@ abstract class WorkOrchestrationTool extends CapstanTool
             'answered_at' => $schema->string(),
             'created_at' => $schema->string()->required(),
         ])->withoutAdditionalProperties();
+        $task = $schema->object([
+            'id' => $schema->string()->required(), 'team_id' => $schema->integer()->required(),
+            'title' => $schema->string()->required(), 'workflow_ref' => $schema->string(),
+        ])->withoutAdditionalProperties();
+        $brief = $schema->object(['id' => $schema->string()->required(), 'sequence' => $schema->integer()->required(), 'content' => $schema->string()->required()])->withoutAdditionalProperties();
+        $state = $schema->object(['id' => $schema->string()->required(), 'sequence' => $schema->integer()->required(), 'through' => $schema->integer()->required(), 'content' => $schema->string()->required()])->withoutAdditionalProperties();
+        $decision = $schema->object([
+            'id' => $schema->string()->required(), 'event_id' => $schema->string()->required(), 'decision' => $schema->string()->required(),
+            'rationale' => $schema->string()->required(), 'evidence' => $schema->string()->required(),
+        ])->withoutAdditionalProperties();
+        $context = $schema->object([
+            'task' => $task->required(), 'brief' => $brief, 'state' => $state,
+            'decisions' => $schema->array()->items($decision)->required(), 'events' => $schema->array()->items($event)->required(),
+            'cursor' => $schema->integer()->required(), 'through' => $schema->integer()->required(), 'has_more' => $schema->boolean()->required(),
+        ])->withoutAdditionalProperties();
 
         $properties = match ($this->name()) {
             'take_seat' => [
@@ -88,6 +123,7 @@ abstract class WorkOrchestrationTool extends CapstanTool
                 ])->withoutAdditionalProperties(),
                 'events' => $schema->array()->items($event),
                 'has_more' => $schema->boolean(),
+                'context' => $context,
             ],
             'release_seat' => [
                 'released' => $schema->boolean(),
@@ -100,6 +136,10 @@ abstract class WorkOrchestrationTool extends CapstanTool
                 'has_more' => $schema->boolean()->required(),
             ],
             'answer_escalation' => ['escalation' => $escalation],
+            'orchestrate' => [
+                'action' => $schema->string(), 'status' => $schema->string(), 'id' => $schema->string(),
+                'task_id' => $schema->string(), 'item_id' => $schema->string(),
+            ],
             default => throw new \LogicException('Unknown Work orchestration tool.'),
         };
         if ($this->isWrite()) {
@@ -122,7 +162,10 @@ abstract class WorkOrchestrationTool extends CapstanTool
             $raw = $this->rawArgument($field);
             if (array_key_exists($field, $request->all())) {
                 $type = $property->toArray()['type'];
-                $valid = $type === 'integer' ? is_int($raw) : is_string($raw);
+                $valid = match ($type) {
+                    'integer' => is_int($raw), 'object' => $raw instanceof \stdClass,
+                    default => is_string($raw),
+                };
                 if (! $valid) {
                     throw ValidationException::withMessages([$field => ['Invalid argument type.']]);
                 }
@@ -136,6 +179,8 @@ abstract class WorkOrchestrationTool extends CapstanTool
                 'seat_fence' => ['required', 'integer', 'min:1'],
                 'limit' => ['sometimes', 'required', 'integer', 'min:1', 'max:25'],
                 'answer' => ['required', 'string', 'min:1', 'max:10000'],
+                'action' => ['required', 'string', Rule::in(['create_child', 'revise_brief', 'queue_item', 'cancel_item', 'steer', 'decide', 'request_wake', 'escalate', 'finish'])],
+                'input' => ['required', 'array'],
                 'idempotency_key' => ['required', 'string', 'min:1', 'max:255'],
                 default => throw new \LogicException('Unknown Work orchestration input.'),
             };
@@ -153,6 +198,9 @@ abstract class WorkOrchestrationTool extends CapstanTool
         if ($owner->credentialId === null) {
             throw new JsonRpcException('This MCP principal is not supported.', -32001);
         }
+        if ($this->name() === 'orchestrate') {
+            $work->validateAction($input['action'], $input['input']);
+        }
 
         if ($this->isWrite()) {
             $result = $writes->run(
@@ -165,6 +213,7 @@ abstract class WorkOrchestrationTool extends CapstanTool
                     'take_seat' => $work->take($input['team_id'], $input['task_id'], $owner->actorId, $owner->credentialId, $input['spoke_id'] ?? null, $input['session_ref'], $input['after'] ?? 0, CarbonImmutable::now()),
                     'release_seat' => $work->release($input['team_id'], $input['task_id'], $owner->actorId, $owner->credentialId, $input['spoke_id'] ?? null, $input['seat_fence'], CarbonImmutable::now()),
                     'answer_escalation' => $work->answer($input['team_id'], $input['escalation_id'], $owner->actorId, $input['answer'], CarbonImmutable::now()),
+                    'orchestrate' => $work->orchestrate($input['team_id'], $input['task_id'], $owner->actorId, $owner->credentialId, $input['spoke_id'] ?? null, $input['seat_fence'], $input['session_ref'], $input['action'], $input['input'], CarbonImmutable::now()),
                     default => throw new \LogicException('Unknown Work orchestration write.'),
                 },
             );

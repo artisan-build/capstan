@@ -44,6 +44,7 @@ final class CapstanServer extends Server
         Tools\ReleaseSeatTool::class,
         Tools\ListEscalationsTool::class,
         Tools\AnswerEscalationTool::class,
+        Tools\OrchestrateTool::class,
         PostmasterSpokesTool::class,
         PostmasterMessagesTool::class,
         SendPostmasterMessageTool::class,

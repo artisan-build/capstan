@@ -11,6 +11,7 @@ use App\Models\WorkEscalation;
 use App\Models\WorkItem;
 use App\Models\WorkOrchestrationEvent;
 use App\Models\WorkOrchestratorSeat;
+use App\Models\WorkStateRevision;
 use App\Models\WorkSteer;
 use App\Models\WorkTask;
 use App\Work\WorkOrchestrationService;
@@ -22,6 +23,7 @@ use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\McpDelegatedTools;
 use ArtisanBuild\BuiltForCloud\User;
+use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
@@ -332,7 +334,7 @@ test('every Work tool rejects non-admitted or non-manager callers without effect
         $user->forceFill($condition === 'member' ? ['role' => 'member'] : ['status' => 'inactive'])->save();
     }
     $writes = DB::table('mcp_write_claims')->count();
-    foreach (['create_task', 'revise_brief', 'queue_item', 'cancel_item', 'list_work', 'get_task', 'steer', 'cancel_task', 'take_seat', 'release_seat', 'list_escalations', 'answer_escalation'] as $tool) {
+    foreach (['create_task', 'revise_brief', 'queue_item', 'cancel_item', 'list_work', 'get_task', 'steer', 'cancel_task', 'take_seat', 'release_seat', 'list_escalations', 'answer_escalation', 'orchestrate'] as $tool) {
         $args = ['team_id' => $team->id, 'task_id' => $task['id'], 'idempotency_key' => 'denied-'.$tool];
         $args = match ($tool) {
             'create_task' => ['team_id' => $team->id, 'title' => 'Denied', 'brief' => 'Denied', 'idempotency_key' => 'denied'],
@@ -341,6 +343,7 @@ test('every Work tool rejects non-admitted or non-manager callers without effect
             'release_seat' => ['team_id' => $team->id, 'task_id' => $task['id'], 'seat_fence' => 1, 'idempotency_key' => 'denied'],
             'list_escalations' => ['team_id' => $team->id],
             'answer_escalation' => ['team_id' => $team->id, 'escalation_id' => (string) Str::uuid7(), 'answer' => 'Denied', 'idempotency_key' => 'denied'],
+            'orchestrate' => ['team_id' => $team->id, 'task_id' => $task['id'], 'seat_fence' => 1, 'session_ref' => 'denied', 'action' => 'finish', 'input' => ['state' => 'acted'], 'idempotency_key' => 'denied'],
             'revise_brief' => $args + ['brief' => 'Denied'], 'queue_item' => $args + ['role' => 'builder'],
             'steer' => $args + ['content' => 'Denied'],
             'get_task', 'list_work' => ['team_id' => $team->id, 'task_id' => $task['id']], default => $args,
@@ -358,7 +361,7 @@ test('Work OFF errors every new tool without a write and leaves existing tool de
     config(['capstan.features.work' => false]);
     Feature::flushCache();
     expect(workMcpList($token))->toBe($on);
-    foreach (['create_task', 'revise_brief', 'queue_item', 'cancel_item', 'list_work', 'get_task', 'steer', 'cancel_task', 'take_seat', 'release_seat', 'list_escalations', 'answer_escalation'] as $tool) {
+    foreach (['create_task', 'revise_brief', 'queue_item', 'cancel_item', 'list_work', 'get_task', 'steer', 'cancel_task', 'take_seat', 'release_seat', 'list_escalations', 'answer_escalation', 'orchestrate'] as $tool) {
         workMcpCall($tool, (object) [], $token)->assertOk()
             ->assertJsonPath('result.isError', true)->assertJsonPath('result.content.0.text', 'Work is unavailable.');
     }
@@ -389,6 +392,10 @@ test('interactive MCP seats renew for one credential exclude drains expose bound
     ], $token);
     expect($renewed['seat']['seat_fence'])->toBe($fence)->and($renewed['seat']['session_ref'])->toBe('opaque renewed')
         ->and($renewed['events'])->toHaveCount(2)->and($renewed['has_more'])->toBeFalse();
+    expect(workMcpResult('take_seat', [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'session_ref' => 'opaque renewed',
+        'after' => 999, 'idempotency_key' => 'invalid-cursor',
+    ], $token))->toBe(['outcome' => 'refused', 'reason' => 'invalid_cursor']);
 
     $drain = capstanBoundBearer($user, CapstanCredentialDeclaration::WORK_DRAIN);
     $headers = ['Authorization' => 'Bearer '.$drain['token'], CapstanCredentialDeclaration::ACTOR_HEADER => (string) $user->id];
@@ -413,9 +420,69 @@ test('interactive MCP seats renew for one credential exclude drains expose bound
         'idempotency_key' => 'release',
     ], $token);
     expect($released['released'])->toBeTrue()->and($released['seat_fence'])->toBeGreaterThan($fence);
+    expect(workMcpResult('orchestrate', [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'seat_fence' => $fence,
+        'session_ref' => 'opaque renewed', 'action' => 'finish', 'input' => ['state' => 'acted'],
+        'idempotency_key' => 'released-action',
+    ], $token))->toBe(['outcome' => 'refused', 'reason' => 'orchestration_forbidden']);
     $this->withHeaders($headers)->postJson(route('api.work.claim', $team), [
         'capacity' => 1, 'roles' => ['orchestrator'], 'capabilities' => [],
     ])->assertOk()->assertJsonCount(1, 'items');
+});
+
+test('interactive MCP context and exact action envelope exercise the full subtree capability with replay fencing', function (): void {
+    $user = capstanUser(['role' => 'owner']);
+    $token = workMcpToken($user);
+    $team = workMcpTeam(['pool_work' => true]);
+    $parent = WorkTask::query()->findOrFail(workMcpCreate($team, $token)['task']['id']);
+    $child = WorkTask::query()->create([
+        'team_id' => $team->id, 'parent_task_id' => $parent->id, 'title' => 'Existing child',
+        'required_capabilities' => [], 'timebox_minutes' => 10, 'creator_actor' => (string) $user->id,
+    ]);
+    $event = resolve(WorkOrchestrationService::class)->event($parent, 'interactive-actions', 'test_event', ['safe' => true]);
+    $taken = workMcpResult('take_seat', [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'session_ref' => 'interactive-actions',
+        'idempotency_key' => 'interactive-actions-take',
+    ], $token);
+    expect($taken['context']['task']['id'])->toBe($parent->id)
+        ->and($taken['context']['brief']['content'])->toBe('MCP-created brief')
+        ->and($taken['context']['events'][0]['id'])->toBe($event->id);
+    $base = [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'spoke_id' => $taken['seat']['spoke_id'],
+        'seat_fence' => $taken['seat']['seat_fence'], 'session_ref' => 'interactive-actions',
+    ];
+    $call = function (string $action, array $input, string $key) use ($base, $token): array {
+        return workMcpResult('orchestrate', $base + [
+            'action' => $action, 'input' => $input, 'idempotency_key' => $key,
+        ], $token);
+    };
+    $created = $call('create_child', ['under_task_id' => $parent->id, 'title' => 'Created child', 'brief' => 'Created brief'], 'interactive-create');
+    $call('revise_brief', ['task_id' => $child->id, 'brief' => 'Revised child'], 'interactive-revise');
+    $queued = $call('queue_item', ['task_id' => $child->id, 'role' => 'builder'], 'interactive-queue');
+    expect($call('queue_item', ['task_id' => $child->id, 'role' => 'builder'], 'interactive-queue')['outcome'])->toBe('already_accepted');
+    $call('steer', ['task_id' => $child->id, 'item_id' => $queued['item_id'], 'content' => 'Keep scope'], 'interactive-steer');
+    $call('cancel_item', ['item_id' => $queued['item_id']], 'interactive-cancel');
+    $call('decide', ['event_id' => $event->id, 'decision' => 'Proceed', 'rationale' => 'Bounded evidence', 'evidence' => ['source' => 'test']], 'interactive-decide');
+    $call('request_wake', ['key' => 'interactive-wake', 'due_at' => now()->addMinute()->toJSON(), 'reason' => 'Follow up'], 'interactive-wake');
+    $call('escalate', ['key' => 'interactive-escalate', 'addressed_actor' => (string) $user->id, 'question' => 'Continue?', 'options' => ['Yes'], 'recommendation' => 'Yes'], 'interactive-escalate');
+    $finished = $call('finish', ['state' => 'acted', 'content' => 'Interactive state'], 'interactive-finish');
+    resolve(WorkOrchestrationService::class)->event($parent, 'interactive-failed', 'test_event', ['safe' => true]);
+    $failed = $call('finish', ['state' => 'failed'], 'interactive-failed');
+
+    expect($created['task_id'])->not->toBe($parent->id)
+        ->and($finished['status'])->toBe('completed')
+        ->and($failed['status'])->toBe('completed')
+        ->and(WorkOrchestratorSeat::query()->where('work_task_id', $parent->id)->sole()->children_created)->toBe(1)
+        ->and(WorkStateRevision::query()->where('work_task_id', $parent->id)->count())->toBe(1);
+
+    $before = WorkItem::query()->count();
+    $stale = $base;
+    $stale['session_ref'] = 'spoofed';
+    $refused = workMcpResult('orchestrate', $stale + [
+        'action' => 'queue_item', 'input' => ['task_id' => $child->id, 'role' => 'reviewer'], 'idempotency_key' => 'interactive-spoofed',
+    ], $token);
+    expect($refused)->toBe(['outcome' => 'refused', 'reason' => 'orchestration_forbidden'])
+        ->and(WorkItem::query()->count())->toBe($before);
 });
 
 test('interactive take respects a non failover device pin', function (): void {
@@ -441,6 +508,36 @@ test('interactive take respects a non failover device pin', function (): void {
         'team_id' => $team->id, 'task_id' => $task['id'], 'spoke_id' => $foreign->id,
         'seat_fence' => $taken['seat']['seat_fence'], 'idempotency_key' => 'spoofed-spoke',
     ], $token))->toBe(['outcome' => 'refused', 'reason' => 'spoke_unavailable']);
+});
+
+test('replacement interactive holder fences old MCP action and context authority', function (): void {
+    config(['capstan.work.lease_seconds' => 10]);
+    $first = capstanUser(['role' => 'owner']);
+    $second = capstanUser(['role' => 'admin']);
+    $firstToken = workMcpToken($first);
+    $secondToken = workMcpToken($second);
+    $team = workMcpTeam(['pool_work' => true]);
+    $parent = WorkTask::query()->findOrFail(workMcpCreate($team, $firstToken)['task']['id']);
+    $child = WorkTask::query()->create([
+        'team_id' => $team->id, 'parent_task_id' => $parent->id, 'title' => 'Replacement child',
+        'required_capabilities' => [], 'timebox_minutes' => 10, 'creator_actor' => (string) $first->id,
+    ]);
+    resolve(WorkOrchestrationService::class)->event($parent, 'replacement', 'test_event');
+    $old = workMcpResult('take_seat', [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'session_ref' => 'old-session', 'idempotency_key' => 'old-take',
+    ], $firstToken);
+    Date::setTestNow(now()->addSeconds(301));
+    $replacement = workMcpResult('take_seat', [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'session_ref' => 'new-session', 'idempotency_key' => 'new-take',
+    ], $secondToken);
+    expect($replacement['seat']['seat_fence'])->toBeGreaterThan($old['seat']['seat_fence']);
+    $oldAction = workMcpResult('orchestrate', [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'seat_fence' => $old['seat']['seat_fence'],
+        'session_ref' => 'old-session', 'action' => 'queue_item', 'input' => ['task_id' => $child->id, 'role' => 'builder'],
+        'idempotency_key' => 'old-action',
+    ], $firstToken);
+    expect($oldAction)->toBe(['outcome' => 'refused', 'reason' => 'orchestration_forbidden'])
+        ->and($child->items()->count())->toBe(0);
 });
 
 test('MCP escalation listing is addressed and bounded and answers act and wake exactly once', function (): void {
@@ -488,6 +585,7 @@ test('new orchestration MCP tools reject unknown and wrongly typed arguments bef
     ['take_seat', ['unknown' => true]],
     ['release_seat', ['session_ref' => null, 'seat_fence' => '1']],
     ['answer_escalation', ['task_id' => null, 'session_ref' => null, 'escalation_id' => 123, 'answer' => 'No']],
+    ['orchestrate', ['action' => 'queue_item', 'input' => ['unknown' => true]]],
 ]);
 
 test('runtime input checking refuses unknown and wrong shape values with no partial effects', function (string $tool, array $extra): void {
