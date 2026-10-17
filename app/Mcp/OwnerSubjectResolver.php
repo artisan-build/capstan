@@ -10,6 +10,7 @@ use ArtisanBuild\BuiltForCloud\ManagedAccountAccess;
 use ArtisanBuild\BuiltForCloud\ManagedAuthConnection;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\RolePolicy;
+use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Http\Request;
@@ -84,6 +85,7 @@ final readonly class OwnerSubjectResolver
 
         if ($user->status !== 'active'
             || ! RolePolicy::canUseProduct($user->role)
+            || OffboardedSubject::subjectIsOffboarded(new Subject(SubjectType::UserPrincipal, 'capstan-user:'.$actorId))
             || OffboardedSubject::userIsOffboarded($actorId)
             || ! $this->managedAccess->allows($user)) {
             return null;
