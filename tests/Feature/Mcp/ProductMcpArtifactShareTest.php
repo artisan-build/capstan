@@ -235,6 +235,7 @@ test('rejects disabled features and unsupported principals before any durable or
     config(['capstan.features.artifacts' => true]);
     Feature::flushCache();
     $unsupported = artifactMcpToken($user, 'capstan-user:'.$user->id, SubjectType::ExternalConsumer);
+    config(['app.debug' => false]);
     artifactMcpCall(artifactMcpArguments('unsupported'), $unsupported)
         ->assertOk()
         ->assertJsonPath('result.isError', true)

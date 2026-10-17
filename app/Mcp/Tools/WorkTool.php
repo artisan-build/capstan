@@ -15,11 +15,11 @@ use App\Work\WorkToolService;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\RolePolicy;
 use ArtisanBuild\BuiltForCloud\User;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\JsonSchemaTypeFactory;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
-use Laravel\Mcp\Exceptions\JsonRpcException;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
@@ -130,7 +130,7 @@ abstract class WorkTool extends CapstanTool
         if (! $user instanceof User || $user->status !== 'active'
             || ! RolePolicy::canManageMembers($user->role)
             || OffboardedSubject::userIsOffboarded($owner->actorId)) {
-            throw new JsonRpcException('Only an admitted Owner or Admin may manage Work.', -32001);
+            throw new AuthorizationException('Only an admitted Owner or Admin may manage Work.');
         }
         $team = Team::query()->find($input['team_id']);
         if (! $team instanceof Team) {

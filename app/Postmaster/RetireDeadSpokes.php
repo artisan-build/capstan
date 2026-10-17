@@ -20,6 +20,7 @@ final readonly class RetireDeadSpokes
 
         return DB::transaction(function (): int {
             $ids = Spoke::query()
+                ->where('credential_backed', true)
                 ->where(function (Builder $query): void {
                     $query->whereNotExists(function ($credentials): void {
                         $credentials->selectRaw('1')

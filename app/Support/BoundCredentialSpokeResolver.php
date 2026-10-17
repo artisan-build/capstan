@@ -8,11 +8,16 @@ use Illuminate\Support\Facades\DB;
 
 final class BoundCredentialSpokeResolver
 {
-    public function resolve(string $actorId, string $credentialId, CarbonImmutable $now): Spoke
-    {
+    public function resolve(
+        string $actorId,
+        string $credentialId,
+        CarbonImmutable $now,
+        bool $credentialBacked = true,
+    ): Spoke {
         $existing = Spoke::query()
             ->where('credential_id', $credentialId)
             ->where('actor_id', $actorId)
+            ->where('credential_backed', $credentialBacked)
             ->lockForUpdate()
             ->first();
 
@@ -23,6 +28,7 @@ final class BoundCredentialSpokeResolver
         DB::table('spokes')->insertOrIgnore([
             'actor_id' => $actorId,
             'credential_id' => $credentialId,
+            'credential_backed' => $credentialBacked,
             'created_at' => $now,
             'updated_at' => $now,
         ]);
@@ -30,6 +36,7 @@ final class BoundCredentialSpokeResolver
         return Spoke::query()
             ->where('credential_id', $credentialId)
             ->where('actor_id', $actorId)
+            ->where('credential_backed', $credentialBacked)
             ->lockForUpdate()
             ->firstOrFail();
     }

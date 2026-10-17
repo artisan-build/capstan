@@ -3,12 +3,16 @@
 use App\Mcp\CapstanServer;
 use App\Mcp\Tools\CreateTaskTool;
 use App\Mcp\Tools\GetTaskTool;
+use App\Mcp\Tools\ListPagesTool;
+use App\Mcp\Tools\ListWorkTool;
+use App\Mcp\Tools\OrchestrateTool;
 use App\Mcp\Tools\QueueItemTool;
 use App\Mcp\Tools\TakeSeatTool;
 use App\Models\Envelope;
 use App\Models\Inbox;
 use App\Models\Spoke;
 use App\Models\Team;
+use App\Models\WorkOrchestratorSeat;
 use App\Models\WorkTask;
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Console\Assertion;
@@ -20,11 +24,14 @@ use ArtisanBuild\BuiltForCloud\Hmac\SigningRootLifecycle;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\Mcp\Effect;
 use ArtisanBuild\BuiltForCloud\Mcp\RequestEffectCeiling;
+use ArtisanBuild\BuiltForCloud\OffboardedSubject;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\McpDelegatedTools;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -155,7 +162,23 @@ test('the Scalpels delegated principal reads and writes Work as its managed Caps
 
     $spoke = Spoke::query()->sole();
     expect($spoke->actor_id)->toBe((string) $user->getKey())
-        ->and(Str::isUuid($spoke->credential_id))->toBeTrue();
+        ->and(Str::isUuid($spoke->credential_id))->toBeTrue()
+        ->and($spoke->credential_backed)->toBeFalse();
+
+    $this->artisan('postmaster:retire-dead-spokes', ['--local' => true])->assertSuccessful();
+    expect($spoke->fresh())->not->toBeNull();
+
+    $orchestrate = [
+        'team_id' => $team->id,
+        'task_id' => $task->id,
+        'seat_fence' => WorkOrchestratorSeat::query()->sole()->fence,
+        'session_ref' => 'delegated-session',
+        'action' => 'finish',
+        'input' => ['state' => 'acted', 'content' => 'Finished after the spoke sweep.'],
+        'idempotency_key' => 'delegated-orchestrate',
+    ];
+    publishDelegatedPrincipal('scalpels-user-101', $orchestrate);
+    CapstanServer::tool(OrchestrateTool::class, $orchestrate)->assertOk();
 });
 
 test('a different relayed user cannot use a colliding Scalpels subject to cross a Work team boundary', function (): void {
@@ -217,6 +240,43 @@ test('an unbound delegated principal returns a readable MCP tool error with debu
     publishDelegatedPrincipal('unbound-scalpels-user', $arguments);
     CapstanServer::tool(GetTaskTool::class, $arguments)
         ->assertHasErrors(['This MCP principal is not supported.']);
+});
+
+test('a delegated principal respects the local managed user lifecycle gate', function (string $gate): void {
+    $user = delegatedPrincipalUser('lifecycle-scalpels-user');
+
+    if ($gate === 'inactive user') {
+        $user->forceFill(['status' => 'inactive'])->save();
+    } elseif ($gate === 'offboarded user') {
+        OffboardedSubject::query()->create([
+            'subject_type' => SubjectType::UserPrincipal,
+            'subject_ref' => 'capstan-user:'.$user->getKey(),
+            'user_id' => (string) $user->getKey(),
+            'offboarded_at' => now(),
+        ]);
+    } else {
+        $user->forceFill(['managed_membership_status' => 'disabled'])->save();
+        $freshnessKey = hash('sha256', implode("\0", [
+            'https://scalpels.test',
+            'delegated-principal-connection',
+            'lifecycle-scalpels-user',
+        ]));
+        Cache::put('bfc:managed-refresh-attempt:'.$freshnessKey, now()->getTimestamp() + 60, 300);
+    }
+
+    publishDelegatedPrincipal('lifecycle-scalpels-user');
+    CapstanServer::tool(ListPagesTool::class)
+        ->assertHasErrors(['This MCP principal is not supported.']);
+})->with(['inactive user', 'offboarded user', 'disabled managed membership']);
+
+test('a delegated member receives a readable Work authorization error with debug disabled', function (): void {
+    delegatedPrincipalUser('member-scalpels-user', UserRole::Member);
+    $team = Team::query()->create(['name' => 'Member team', 'slug' => 'member-team']);
+    $arguments = ['team_id' => $team->id];
+
+    publishDelegatedPrincipal('member-scalpels-user', $arguments);
+    CapstanServer::tool(ListWorkTool::class, $arguments)
+        ->assertHasErrors(['Only an admitted Owner or Admin may manage Work.']);
 });
 
 test('every registered read and write tool resolves a fully published delegated RequestAssertion', function (): void {

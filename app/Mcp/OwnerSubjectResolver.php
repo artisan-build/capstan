@@ -6,7 +6,10 @@ use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Console\RequestAssertion;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
+use ArtisanBuild\BuiltForCloud\ManagedAccountAccess;
 use ArtisanBuild\BuiltForCloud\ManagedAuthConnection;
+use ArtisanBuild\BuiltForCloud\OffboardedSubject;
+use ArtisanBuild\BuiltForCloud\RolePolicy;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Http\Request;
@@ -14,7 +17,10 @@ use Ramsey\Uuid\Uuid;
 
 final readonly class OwnerSubjectResolver
 {
-    public function __construct(private Request $request) {}
+    public function __construct(
+        private Request $request,
+        private ManagedAccountAccess $managedAccess,
+    ) {}
 
     public function resolve(): OwnerSubject
     {
@@ -76,6 +82,13 @@ final readonly class OwnerSubjectResolver
 
         $actorId = (string) $user->getAuthIdentifier();
 
+        if ($user->status !== 'active'
+            || ! RolePolicy::canUseProduct($user->role)
+            || OffboardedSubject::userIsOffboarded($actorId)
+            || ! $this->managedAccess->allows($user)) {
+            return null;
+        }
+
         return new OwnerSubject(
             type: SubjectType::UserPrincipal->value,
             ref: 'capstan-user:'.$actorId,
@@ -84,6 +97,7 @@ final readonly class OwnerSubjectResolver
                 Uuid::NAMESPACE_URL,
                 DelegatedActor::class."\0".$principal->identity_hash,
             ),
+            credentialBacked: false,
         );
     }
 }

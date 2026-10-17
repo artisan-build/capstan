@@ -18,6 +18,10 @@ function accountNavigationTargets(string $html): array
         $targets[$testId] = $nodes->item(0)?->getAttribute('href');
     }
 
+    $logout = $xpath->query('//*[@data-testid="mobile-logout-form"]');
+    expect($logout->length)->toBe(1);
+    $targets['mobile-logout-form'] = $logout->item(0)?->getAttribute('action');
+
     return $targets;
 }
 
@@ -56,8 +60,14 @@ test('account navigation reaches the shared settings page in standalone and mana
     $user = capstanUser($attributes);
     $dashboard = $this->actingAsVersioned($user)->get(route('bfc.dashboard'))->assertOk();
 
-    expect(accountNavigationTargets($dashboard->content()))->each->toBe(route('bfc.ui.home'));
+    expect(accountNavigationTargets($dashboard->content()))->toBe([
+        'account-navigation' => route('bfc.ui.home'),
+        'mobile-settings-navigation' => route('bfc.ui.home'),
+        'desktop-settings-navigation' => route('bfc.ui.home'),
+        'mobile-logout-form' => route('bfc.ui.logout'),
+    ]);
     $this->get(route('bfc.ui.home'))->assertOk();
+    $this->post(route('bfc.ui.logout'))->assertRedirect('/');
 })->with([
     AuthorityMode::Standalone->value,
     AuthorityMode::Managed->value,

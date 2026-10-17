@@ -99,7 +99,7 @@
 
                     <flux:menu.separator />
 
-                    <form method="POST" action="/bfc/ui/logout" class="w-full">
+                <form data-testid="mobile-logout-form" method="POST" action="{{ route('bfc.ui.logout') }}" class="w-full">
                         @csrf
                         <flux:menu.item
                             as="button"
