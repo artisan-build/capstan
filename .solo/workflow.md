@@ -27,7 +27,8 @@ and `brain/ideas/ecosystem/deterministic-server.md` (the slice-1 build spec).
 ## Dependency install (fresh worktree)
 - command: `composer install --no-interaction`
 - post-install: copy `.env.example` → `.env`; `php artisan key:generate`; touch
-  `database/database.sqlite` (SQLite for tests). Confirm during scaffolding.
+  `database/database.sqlite`; then run `php artisan migrate --force` against that local SQLite database
+  before any conformance or IDE-helper command.
 - **PHP 8.5 shim (REQUIRED):** the default `php` on PATH is 8.4, but capstan requires `^8.5`. Herd ships
   8.5.7 at `~/Library/Application Support/Herd/bin/php85` (a.k.a. `Herd/bin/php85`). Create a shim dir with
   a `php` → `php85` symlink and **prepend it to PATH** in every agent's environment, or `composer install`

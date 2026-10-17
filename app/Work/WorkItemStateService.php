@@ -12,7 +12,6 @@ class WorkItemStateService
 {
     /** @var array<string, list<WorkItemState>> */
     private const array NORMAL_TRANSITIONS = [
-        WorkItemState::Queued->value => [WorkItemState::Claimed],
         WorkItemState::Claimed->value => [WorkItemState::Delivered],
         WorkItemState::Delivered->value => [WorkItemState::Routed],
         WorkItemState::Routed->value => [WorkItemState::Acted, WorkItemState::Failed],

@@ -10,6 +10,7 @@ use App\Models\WorkSteer;
 use App\Models\WorkTask;
 use App\Work\BriefRevisionService;
 use App\Work\WorkItemStateService;
+use Carbon\CarbonImmutable;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -40,10 +41,20 @@ test('all work records use uuid version 7 primary keys', function (): void {
     $task = workDomainTask();
     $brief = resolve(BriefRevisionService::class)->append($task, 'Test-created brief', 'author@test');
     $item = $task->items()->create(['role' => WorkItem::ROLE_ORCHESTRATOR]);
-    resolve(WorkItemStateService::class)->transition($item, WorkItemState::Claimed, 'user', 'actor@test');
+    $spoke = workDomainSpoke();
+    $claimedAt = CarbonImmutable::now();
+    $item = resolve(WorkItemStateService::class)->claim(
+        $item,
+        $spoke->id,
+        'actor@test',
+        $claimedAt->addMinutes(10),
+        'spoke',
+        'actor@test',
+        $claimedAt,
+    );
     $transition = $item->transitions()->sole();
     $milestone = $item->milestones()->create([
-        'fence' => 1,
+        'fence' => $item->fence,
         'kind' => WorkMilestoneKind::Started,
         'payload' => ['source' => 'test'],
     ]);

@@ -99,6 +99,19 @@ test('routed work may fail and every nonterminal state may be cancelled', functi
     }
 });
 
+test('generic transitions cannot claim queued work or append an event', function (): void {
+    $service = resolve(WorkItemStateService::class);
+    $item = workStateItem(['last_progress' => 'Queued progress']);
+    $item->refresh();
+    $before = $item->getAttributes();
+
+    expect(fn () => $service->transition($item, WorkItemState::Claimed, 'spoke', 'worker@test'))
+        ->toThrow(DomainException::class, 'queued to claimed');
+
+    expect($item->fresh()?->getAttributes())->toBe($before)
+        ->and($item->transitions()->count())->toBe(0);
+});
+
 test('illegal and terminal transitions change neither item nor event log', function (): void {
     $service = resolve(WorkItemStateService::class);
     $queued = workStateItem(['last_progress' => 'Test progress']);
