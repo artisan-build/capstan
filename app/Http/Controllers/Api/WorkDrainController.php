@@ -137,7 +137,7 @@ final class WorkDrainController extends Controller
                 ];
 
                 if (isset($result['item'])) {
-                    $wire['item'] = [...$this->currentItem($result['item']), 'links' => app(WorkWorkerLinks::class)->forItem($result['item'])];
+                    $wire['item'] = [...$this->currentItem($result['item']), 'links' => resolve(WorkWorkerLinks::class)->forItem($result['item'])];
                 }
 
                 return $wire;
@@ -154,7 +154,7 @@ final class WorkDrainController extends Controller
             'role' => $item->role,
             'fence' => $item->fence,
             'lease_until' => $item->lease_until->toISOString(),
-            'links' => app(WorkWorkerLinks::class)->forItem($item),
+            'links' => resolve(WorkWorkerLinks::class)->forItem($item),
         ];
     }
 

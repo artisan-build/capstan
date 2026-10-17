@@ -118,8 +118,7 @@ final class WorkWorkerService
             $now = CarbonImmutable::now();
             $steers = WorkSteer::query()->where('work_task_id', $item->work_task_id)
                 ->where(fn ($query) => $query->whereNull('work_item_id')->orWhere('work_item_id', $item->id))
-                ->where(fn ($query) => $query->whereNull('read_at')->orWhere('created_at', '>=', $now->subSeconds(max(0, (int) config('capstan.work.steer_recent_seconds', 86400)))))
-                ->orderBy('created_at')->orderBy('id')->get();
+                ->where(fn ($query) => $query->whereNull('read_at')->orWhere('created_at', '>=', $now->subSeconds(max(0, (int) config('capstan.work.steer_recent_seconds', 86400)))))->oldest()->orderBy('id')->get();
             WorkSteer::query()->whereKey($steers->modelKeys())->whereNull('read_at')->update(['read_at' => $now]);
 
             return array_values($steers->map(fn (WorkSteer $steer): array => array_filter([

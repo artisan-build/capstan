@@ -45,7 +45,7 @@ function sweepItem(array $attributes = []): WorkItem
 
 test('lease expiry is an atomic one time release retaining progress', function (): void {
     $item = sweepItem(['lease_until' => now()->subSecond(), 'claimed_at' => now()->subMinutes(2), 'last_progress' => 'retained']);
-    $sweep = app(WorkSweepService::class);
+    $sweep = resolve(WorkSweepService::class);
     $sweep->liveness(CarbonImmutable::now());
     $sweep->liveness(CarbonImmutable::now());
     expect($item->fresh()->state)->toBe(WorkItemState::Queued)->and($item->fresh()->attempts)->toBe(1)
@@ -57,7 +57,7 @@ test('lease expiry is an atomic one time release retaining progress', function (
 
 test('losing expiry sweep does not requeue a renewed or reclaimed item', function (string $race): void {
     $item = sweepItem(['lease_until' => now()->subSecond(), 'claimed_at' => now()->subMinutes(2)]);
-    app(WorkSweepService::class)->liveness(CarbonImmutable::now(), function (WorkItem $candidate) use ($race): void {
+    resolve(WorkSweepService::class)->liveness(CarbonImmutable::now(), function (WorkItem $candidate) use ($race): void {
         WorkItem::query()->whereKey($candidate->id)->update($race === 'renew'
             ? ['lease_until' => now()->addMinutes(5)]
             : ['fence' => 2, 'claimed_at' => now(), 'lease_until' => now()->addMinutes(5)]);
@@ -81,7 +81,7 @@ test('a competing sweep wins once even when the loser already read its candidate
         $notifier->shouldNotReceive('stalled', 'missedHeartbeat', 'waitingOnHost');
     }
     app()->instance(WorkNotifier::class, $notifier);
-    $sweep = app(WorkSweepService::class);
+    $sweep = resolve(WorkSweepService::class);
     $method = $mode === 'failover' ? 'failover' : 'liveness';
     $sweep->$method(CarbonImmutable::now(), fn () => $sweep->$method(CarbonImmutable::now()));
     if ($mode === 'stall') {
@@ -104,7 +104,7 @@ test('stalls and heartbeat outages mark and notify exactly once with negative co
     $notifier->shouldReceive('stalled')->once()->withArgs(fn (WorkItem $arg): bool => $arg->id === $item->id);
     $notifier->shouldReceive('missedHeartbeat')->twice()->withArgs(fn (Spoke $arg): bool => in_array($arg->id, [$item->claimant_spoke_id, $progress->claimant_spoke_id]));
     app()->instance(WorkNotifier::class, $notifier);
-    $sweep = app(WorkSweepService::class);
+    $sweep = resolve(WorkSweepService::class);
     $sweep->liveness(CarbonImmutable::now());
     $sweep->liveness(CarbonImmutable::now());
     expect($item->fresh()->stalled_at)->not->toBeNull()->and($progress->fresh()->stalled_at)->toBeNull()
@@ -122,7 +122,7 @@ test('a late milestone does not suppress the missed deadline and an old fence do
     $notifier->shouldReceive('stalled')->twice();
     $notifier->shouldReceive('missedHeartbeat')->twice();
     app()->instance(WorkNotifier::class, $notifier);
-    app(WorkSweepService::class)->liveness(CarbonImmutable::now());
+    resolve(WorkSweepService::class)->liveness(CarbonImmutable::now());
     expect($item->fresh()->stalled_at)->not->toBeNull()->and($second->fresh()->stalled_at)->not->toBeNull();
 });
 
@@ -132,7 +132,7 @@ test('a stale stall candidate cannot stamp the replacement fence', function (): 
     $notifier->shouldNotReceive('stalled');
     $notifier->shouldReceive('missedHeartbeat')->once();
     app()->instance(WorkNotifier::class, $notifier);
-    app(WorkSweepService::class)->liveness(CarbonImmutable::now(), fn (WorkItem $candidate) => WorkItem::query()->whereKey($candidate->id)->update(['fence' => 2]));
+    resolve(WorkSweepService::class)->liveness(CarbonImmutable::now(), fn (WorkItem $candidate) => WorkItem::query()->whereKey($candidate->id)->update(['fence' => 2]));
     expect($item->fresh()->stalled_at)->toBeNull();
 });
 
@@ -144,12 +144,12 @@ test('heartbeat recovery clears only work notification marker and permits a late
     $notifier->shouldReceive('missedHeartbeat')->twice();
     $notifier->shouldNotReceive('stalled');
     app()->instance(WorkNotifier::class, $notifier);
-    $sweep = app(WorkSweepService::class);
+    $sweep = resolve(WorkSweepService::class);
     $sweep->liveness(CarbonImmutable::now());
     expect($spoke->fresh()->work_heartbeat_notified_at)->not->toBeNull();
     // Keep the stale, pre-notification model: a dirty-attribute-only save
     // would fail to clear a marker written since this instance was loaded.
-    app(BoundCredentialSpokeResolver::class)->heartbeat($spoke, CarbonImmutable::now());
+    resolve(BoundCredentialSpokeResolver::class)->heartbeat($spoke, CarbonImmutable::now());
     expect($spoke->fresh()->work_heartbeat_notified_at)->toBeNull()->and($spoke->fresh()->probe_status)->toBe(SpokeLiveness::Red)
         ->and($spoke->fresh()->probe_failed_at->equalTo(now()->subHour()))->toBeTrue();
     Date::setTestNow(now()->addMinutes(4));
@@ -164,18 +164,18 @@ test('failover drops the task pin once and keeps user and capability constraints
     $item->forceFill(['updated_at' => now()->subMinutes(6), 'waiting_on_host_at' => now()->subMinute(), 'waiting_on_host_notified_at' => now()->subMinute()])->save();
     $sibling = $item->workTask->items()->create(['role' => 'reviewer', 'waiting_on_host_at' => now(), 'waiting_on_host_notified_at' => now()]);
     $other = Spoke::query()->create(['actor_id' => 'worker', 'credential_id' => (string) Str::uuid7()]);
-    $sweep = app(WorkSweepService::class);
+    $sweep = resolve(WorkSweepService::class);
     $sweep->failover(CarbonImmutable::now());
     $sweep->failover(CarbonImmutable::now());
     expect($item->workTask->fresh()->device_spoke_id)->toBeNull()->and($item->transitions()->count())->toBe(1)
         ->and($item->transitions()->sole()->actor_id)->toBe('device-failover')
         ->and($item->fresh()->waiting_on_host_at)->toBeNull()->and($sibling->fresh()->waiting_on_host_notified_at)->toBeNull();
-    $claims = app(WorkClaimService::class);
+    $claims = resolve(WorkClaimService::class);
     expect($claims->claim($item->workTask->team_id, 'wrong-user', $other->id, ['builder'], ['php'], 1, CarbonImmutable::now(), 300))->toBe([])
         ->and($claims->claim($item->workTask->team_id, 'worker', $other->id, ['builder'], [], 1, CarbonImmutable::now(), 300))->toBe([]);
     $claimed = $claims->claim($item->workTask->team_id, 'worker', $other->id, ['builder'], ['php'], 1, CarbonImmutable::now(), 300);
     expect($claimed)->toHaveCount(1)->and($claimed[0]->claimant_spoke_id)->toBe($other->id);
-    app(BoundCredentialSpokeResolver::class)->heartbeat($original, CarbonImmutable::now());
+    resolve(BoundCredentialSpokeResolver::class)->heartbeat($original, CarbonImmutable::now());
     $sweep->failover(CarbonImmutable::now());
     expect($item->workTask->fresh()->device_spoke_id)->toBeNull();
 });
@@ -188,13 +188,13 @@ test('non failover pin waits once is invisible to other hosts and clears markers
     $notifier = Mockery::mock(WorkNotifier::class);
     $notifier->shouldReceive('waitingOnHost')->once()->withArgs(fn (WorkItem $arg): bool => $arg->id === $item->id);
     app()->instance(WorkNotifier::class, $notifier);
-    $sweep = app(WorkSweepService::class);
+    $sweep = resolve(WorkSweepService::class);
     $sweep->failover(CarbonImmutable::now());
     $first = $item->fresh()->waiting_on_host_notified_at;
     $sweep->failover(CarbonImmutable::now());
     expect($first)->not->toBeNull()->and($item->fresh()->waiting_on_host_notified_at->equalTo($first))->toBeTrue();
     $other = Spoke::query()->create(['actor_id' => 'worker', 'credential_id' => (string) Str::uuid7()]);
-    $claims = app(WorkClaimService::class);
+    $claims = resolve(WorkClaimService::class);
     expect($claims->claim($item->workTask->team_id, 'worker', $other->id, ['builder'], ['php'], 1, CarbonImmutable::now(), 300))->toBe([])
         ->and($claims->claim($item->workTask->team_id, 'worker', $originalId, ['builder'], [], 1, CarbonImmutable::now(), 300))->toBe([])
         ->and($item->fresh()->waiting_on_host_at)->not->toBeNull();
@@ -208,7 +208,7 @@ test('failover respects own queued age cancellation reserved roles and a racing 
         $item = sweepItem(['state' => 'queued', 'role' => in_array($control, ['orchestrator', 'human']) ? $control : 'builder']);
         $item->workTask->update(['device_spoke_id' => $item->claimant_spoke_id, 'failover' => true, 'cancelled_at' => $control === 'cancelled' ? now() : null]);
         $item->forceFill(['updated_at' => $control === 'young' ? now() : now()->subMinutes(6)])->save();
-        app(WorkSweepService::class)->failover(CarbonImmutable::now(), fn (WorkItem $candidate) => WorkItem::query()->whereKey($candidate->id)->update(['state' => 'claimed', 'fence' => 2]));
+        resolve(WorkSweepService::class)->failover(CarbonImmutable::now(), fn (WorkItem $candidate) => WorkItem::query()->whereKey($candidate->id)->update(['state' => 'claimed', 'fence' => 2]));
         expect($item->workTask->fresh()->device_spoke_id)->not->toBeNull()->and($item->transitions()->count())->toBe(0);
     }
 });
@@ -223,7 +223,7 @@ test('work off commands no op and work schedules run every minute without overla
     $this->artisan('work:liveness-sweep')->assertSuccessful();
     $this->artisan('work:failover-sweep')->assertSuccessful();
     expect($item->fresh()->state)->toBe(WorkItemState::Routed)->and($item->fresh()->attempts)->toBe(0);
-    $events = collect(app(Schedule::class)->events())->filter(fn ($event): bool => str_contains($event->command ?? '', 'work:'));
+    $events = collect(resolve(Schedule::class)->events())->filter(fn ($event): bool => str_contains($event->command ?? '', 'work:'));
     expect($events)->toHaveCount(2);
     foreach ($events as $event) {
         expect($event->expression)->toBe('* * * * *')->and($event->withoutOverlapping)->toBeTrue();

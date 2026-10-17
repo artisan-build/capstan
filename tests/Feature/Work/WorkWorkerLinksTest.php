@@ -38,15 +38,15 @@ function workerLinkItem(array $attributes = []): WorkItem
 
 test('worker links cap expiry by lease and timebox with grace', function (): void {
     $item = workerLinkItem();
-    foreach (app(WorkWorkerLinks::class)->forItem($item) as $url) {
+    foreach (resolve(WorkWorkerLinks::class)->forItem($item) as $url) {
         parse_str(parse_url($url, PHP_URL_QUERY), $query);
         expect((int) $query['expires'])->toBe(now()->addMinutes(6)->timestamp)
             ->and((int) $query['fence'])->toBe(1);
     }
     $item->update(['lease_until' => now()->addHour()]);
-    $firstLinks = app(WorkWorkerLinks::class)->forItem($item->refresh());
-    expect(app(WorkWorkerLinks::class)->forItem($item))->not->toBe($firstLinks);
-    foreach (app(WorkWorkerLinks::class)->forItem($item->refresh()) as $url) {
+    $firstLinks = resolve(WorkWorkerLinks::class)->forItem($item->refresh());
+    expect(resolve(WorkWorkerLinks::class)->forItem($item))->not->toBe($firstLinks);
+    foreach (resolve(WorkWorkerLinks::class)->forItem($item->refresh()) as $url) {
         parse_str(parse_url($url, PHP_URL_QUERY), $query);
         expect((int) $query['expires'])->toBe(now()->addMinutes(11)->timestamp);
     }
@@ -55,7 +55,7 @@ test('worker links cap expiry by lease and timebox with grace', function (): voi
 test('brief returns latest UUID revision and records it in JSON and markdown during grace', function (): void {
     $item = workerLinkItem();
     $item->workTask->briefRevisions()->create(['sequence' => 1, 'content' => 'Old brief', 'author_actor' => 'creator']);
-    $url = app(WorkWorkerLinks::class)->forItem($item)['brief'];
+    $url = resolve(WorkWorkerLinks::class)->forItem($item)['brief'];
     $revision = $item->workTask->briefRevisions()->create(['sequence' => 2, 'content' => 'New '.Str::random(), 'author_actor' => 'creator']);
     Date::setTestNow(now()->addMinutes(5)->addSeconds(30));
     $this->getJson($url)->assertOk()->assertJsonPath('revision.id', $revision->id)
@@ -68,7 +68,7 @@ test('brief returns latest UUID revision and records it in JSON and markdown dur
 test('signature binds id fence expiry and endpoint', function (string $change): void {
     $item = workerLinkItem();
     $other = workerLinkItem();
-    $url = app(WorkWorkerLinks::class)->forItem($item)['brief'];
+    $url = resolve(WorkWorkerLinks::class)->forItem($item)['brief'];
     $url = match ($change) {
         'id' => str_replace($item->id, $other->id, $url),
         'fence' => str_replace('fence=1', 'fence=2', $url),
@@ -80,14 +80,14 @@ test('signature binds id fence expiry and endpoint', function (string $change): 
 })->with(['id', 'fence', 'expiry', 'endpoint']);
 
 test('expired signatures are refused before claim checks', function (): void {
-    $url = app(WorkWorkerLinks::class)->forItem(workerLinkItem())['brief'];
+    $url = resolve(WorkWorkerLinks::class)->forItem(workerLinkItem())['brief'];
     Date::setTestNow(now()->addMinutes(7));
     $this->getJson($url)->assertForbidden();
 });
 
 test('worker claim rejection applies to all endpoints', function (string $change, int $status): void {
     $item = workerLinkItem();
-    $links = app(WorkWorkerLinks::class)->forItem($item);
+    $links = resolve(WorkWorkerLinks::class)->forItem($item);
     match ($change) {
         'fence' => $item->update(['fence' => 2]),
         'state' => $item->update(['state' => 'acted']),
@@ -108,7 +108,7 @@ test('worker claim rejection applies to all endpoints', function (string $change
 
 test('milestone rejects invalid strict objects without writes', function (array $payload): void {
     $item = workerLinkItem();
-    $this->postJson(app(WorkWorkerLinks::class)->forItem($item)['milestone'], $payload)->assertUnprocessable();
+    $this->postJson(resolve(WorkWorkerLinks::class)->forItem($item)['milestone'], $payload)->assertUnprocessable();
     expect($item->milestones()->count())->toBe(0)->and($item->fresh()->last_progress)->toBeNull();
 })->with([
     [['kind' => 'note', 'payload' => (object) [], 'extra' => true]],
@@ -125,7 +125,7 @@ test('milestone rejects invalid strict objects without writes', function (array 
 test('each milestone appends UUIDv7 and applies legal transitions and progress', function (string $kind, string $state): void {
     $item = workerLinkItem();
     $summary = '<script>untrusted</script> '.Str::random();
-    $this->postJson(app(WorkWorkerLinks::class)->forItem($item)['milestone'], [
+    $this->postJson(resolve(WorkWorkerLinks::class)->forItem($item)['milestone'], [
         'kind' => $kind, 'payload' => ['summary' => $summary, 'url' => 'https://example.test/pr/1'],
     ])->assertCreated();
     $milestone = $item->milestones()->sole();
@@ -141,26 +141,26 @@ test('each milestone appends UUIDv7 and applies legal transitions and progress',
 
 test('terminal milestones cannot skip the legal state machine', function (): void {
     $item = workerLinkItem(['state' => 'claimed']);
-    $this->postJson(app(WorkWorkerLinks::class)->forItem($item)['milestone'], ['kind' => 'done', 'payload' => (object) []])->assertUnprocessable();
+    $this->postJson(resolve(WorkWorkerLinks::class)->forItem($item)['milestone'], ['kind' => 'done', 'payload' => (object) []])->assertUnprocessable();
     expect($item->milestones()->count())->toBe(0)->and($item->fresh()->state)->toBe(WorkItemState::Claimed);
 });
 
 test('release without a nonempty summary retains earlier bounded progress', function (array $payload): void {
     $item = workerLinkItem(['last_progress' => str_repeat('x', 2000)]);
-    $this->postJson(app(WorkWorkerLinks::class)->forItem($item)['milestone'], ['kind' => 'released', 'payload' => (object) $payload])->assertCreated();
+    $this->postJson(resolve(WorkWorkerLinks::class)->forItem($item)['milestone'], ['kind' => 'released', 'payload' => (object) $payload])->assertCreated();
     expect($item->fresh()->last_progress)->toBe(str_repeat('x', 2000))->and($item->fresh()->attempts)->toBe(1);
 })->with([[[]], [['summary' => '']], [['summary' => '   ']]]);
 
 test('milestone quota is rolling and item scoped', function (): void {
     $item = workerLinkItem(['lease_until' => now()->addHour()]);
     $item->workTask->update(['timebox_minutes' => 60]);
-    $url = app(WorkWorkerLinks::class)->forItem($item)['milestone'];
+    $url = resolve(WorkWorkerLinks::class)->forItem($item)['milestone'];
     for ($i = 0; $i < 30; $i++) {
         $this->postJson($url, ['kind' => 'note', 'payload' => (object) []])->assertCreated();
     }
     $this->postJson($url, ['kind' => 'note', 'payload' => (object) []])->assertStatus(429);
     $other = workerLinkItem();
-    $this->postJson(app(WorkWorkerLinks::class)->forItem($other)['milestone'], ['kind' => 'note', 'payload' => (object) []])->assertCreated();
+    $this->postJson(resolve(WorkWorkerLinks::class)->forItem($other)['milestone'], ['kind' => 'note', 'payload' => (object) []])->assertCreated();
     Date::setTestNow(now()->addMinutes(10));
     $this->postJson($url, ['kind' => 'note', 'payload' => (object) []])->assertCreated();
     expect($item->milestones()->count())->toBe(31);
@@ -171,7 +171,7 @@ test('stale callback cannot stamp a brief or append partial milestone effects', 
     $item->workTask->briefRevisions()->create(['sequence' => 1, 'content' => 'new', 'author_actor' => 'creator']);
     $race = fn () => WorkItem::query()->whereKey($item->id)->update(['fence' => 2]);
     try {
-        $service = app(WorkWorkerService::class);
+        $service = resolve(WorkWorkerService::class);
         $operation === 'brief'
             ? $service->brief($item->id, 1, $race)
             : $service->milestone($item->id, 1, WorkMilestoneKind::Released, ['summary' => 'must not persist'], $race);
@@ -198,7 +198,7 @@ test('steers scope unread recent order and first read time', function (): void {
     $recent = $make(['read_at' => now()->subHour()]);
     $make(['work_item_id' => $other->id]);
     $make(['created_at' => now()->subDays(2), 'read_at' => now()->subDay()]);
-    $url = app(WorkWorkerLinks::class)->forItem($item)['steers'];
+    $url = resolve(WorkWorkerLinks::class)->forItem($item)['steers'];
     $response = $this->getJson($url)->assertOk()->assertJsonCount(3, 'steers');
     expect($response->json('steers.*.id'))->toBe([$oldUnread->id, $itemUnread->id, $recent->id])
         ->and($response->json('steers.0'))->not->toHaveKey('item_id');
@@ -210,7 +210,7 @@ test('steers scope unread recent order and first read time', function (): void {
 });
 
 test('all signed endpoints hide when work is off', function (): void {
-    $links = app(WorkWorkerLinks::class)->forItem(workerLinkItem());
+    $links = resolve(WorkWorkerLinks::class)->forItem(workerLinkItem());
     config(['capstan.features.work' => false]);
     Feature::flushCache();
     $this->getJson($links['brief'])->assertNotFound();

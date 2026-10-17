@@ -315,6 +315,7 @@ namespace App\Models{
  * @property string $credential_id
  * @property string|null $name
  * @property CarbonImmutable|null $last_polled_at
+ * @property CarbonImmutable|null $work_heartbeat_notified_at
  * @property string|null $last_cursor
  * @property SpokeLiveness $probe_status
  * @property CarbonImmutable|null $probe_failed_at
@@ -337,6 +338,7 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereProbeFailedAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereProbeStatus($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereUpdatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereWorkHeartbeatNotifiedAt($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
