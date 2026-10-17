@@ -123,7 +123,8 @@ final readonly class WorkClaimService
                 })
                 ->where(function ($query) use ($spokeId): void {
                     $query->whereNull('work_tasks.device_spoke_id')
-                        ->orWhere('work_tasks.device_spoke_id', $spokeId);
+                        ->orWhere('work_tasks.device_spoke_id', $spokeId)
+                        ->orWhere('work_items.role', WorkItem::ROLE_ORCHESTRATOR);
                 })
                 ->select([
                     'work_items.id',
@@ -133,6 +134,7 @@ final readonly class WorkClaimService
                     'work_items.created_at',
                     'work_tasks.updated_at as task_updated_at',
                     'work_tasks.required_capabilities',
+                    'work_tasks.device_spoke_id',
                 ])
                 ->oldest('work_items.created_at')
                 ->orderBy('work_items.id')
@@ -153,7 +155,7 @@ final readonly class WorkClaimService
             foreach ($page as $candidate) {
                 if ($candidate->role === WorkItem::ROLE_ORCHESTRATOR) {
                     $seat = WorkOrchestratorSeat::query()->where('work_task_id', $candidate->work_task_id)->first();
-                    if (! $this->seats->eligible($seat, $actorId, $spokeId, $now)) {
+                    if (! $this->seats->eligible($seat, $actorId, $spokeId, $now, $candidate->device_spoke_id === null ? null : (int) $candidate->device_spoke_id)) {
                         continue;
                     }
                     if (WorkItem::query()->where('work_task_id', $candidate->work_task_id)->where('role', WorkItem::ROLE_ORCHESTRATOR)
@@ -229,16 +231,16 @@ final readonly class WorkClaimService
                     ->where('role', $candidate->role)
                     ->where('state', WorkItemState::Queued->value)
                     ->where('fence', $candidate->fence)
-                    ->whereHas('workTask', function ($query) use ($candidate, $teamId, $actorId, $spokeId): void {
+                    ->whereHas('workTask', function ($query) use ($candidate, $teamId, $actorId, $spokeId, $seat): void {
                         $query->where('team_id', $teamId)
                             ->whereNull('cancelled_at')
                             ->where('updated_at', $candidate->task_updated_at)
                             ->where(function ($query) use ($actorId): void {
                                 $query->whereNull('user_actor_address')->orWhere('user_actor_address', $actorId);
                             })
-                            ->where(function ($query) use ($spokeId): void {
+                            ->when($seat === null, fn ($query) => $query->where(function ($query) use ($spokeId): void {
                                 $query->whereNull('device_spoke_id')->orWhere('device_spoke_id', $spokeId);
-                            });
+                            }));
                     })
                     ->update([
                         'state' => WorkItemState::Claimed->value,
@@ -253,7 +255,7 @@ final readonly class WorkClaimService
                     ]);
 
                 if ($updated !== 1) {
-                    return null;
+                    throw new WorkClaimLost;
                 }
 
                 WorkItemTransition::query()->create([
@@ -281,6 +283,8 @@ final readonly class WorkClaimService
 
                 return $claimed;
             });
+        } catch (WorkClaimLost) {
+            return null;
         } catch (QueryException $exception) {
             $attempt++;
 

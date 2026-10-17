@@ -164,20 +164,32 @@ test('routing does not complete a turn and both fences guard atomic turn_done', 
     expect(WorkStateRevision::query()->count())->toBe(1);
 });
 
-test('failover transfers and fences a held turn without losing memory or failing back', function (): void {
+test('pinned parent failover transfers and fences a held turn without losing memory or failing back', function (bool $sweep): void {
     $engine = resolve(WorkOrchestrationService::class);
     $parent = orchestrationTask();
-    $event = orchestrationEvent($parent);
     $a = orchestrationHost();
     $b = orchestrationHost('host-b');
+    $parent->update(['device_spoke_id' => $a->id, 'failover' => true]);
+    $child = orchestrationTask($parent);
+    $child->update(['device_spoke_id' => $a->id, 'failover' => false]);
+    $leaf = $child->items()->create(['role' => 'builder']);
+    $event = orchestrationEvent($parent);
+    expect(orchestrationClaims($parent, $b, ['orchestrator', 'builder']))->toBe([]);
     $turn = orchestrationClaims($parent, $a)[0];
     $decision = $engine->decide($turn, 1, $turn->seat_fence, $event->id, 'Retry', 'Evidence supports retry', ['proof' => Str::random()], CarbonImmutable::now());
     $engine->turnDone($turn, 1, $turn->seat_fence, 'First revision', CarbonImmutable::now());
     orchestrationEvent($parent, 'second');
     $held = orchestrationClaims($parent, $a)[0];
     Date::setTestNow(now()->addSeconds(301));
-    $this->artisan('work:orchestration-sweep')->assertSuccessful();
-    $replacement = orchestrationClaims($parent, $b)[0];
+    if ($sweep) {
+        $this->artisan('work:orchestration-sweep')->assertSuccessful();
+    } else {
+        resolve(WorkItemStateService::class)->expireLease($held, 'system', 'expiry', CarbonImmutable::now());
+    }
+    $replacement = orchestrationClaims($parent, $b, ['orchestrator', 'builder'])[0];
+    expect($parent->fresh()->device_spoke_id)->toBe($a->id)
+        ->and($child->fresh()->device_spoke_id)->toBe($a->id)
+        ->and($leaf->fresh()->state)->toBe(WorkItemState::Queued);
     expect($replacement->id)->toBe($held->id)->and($replacement->fence)->toBeGreaterThan($held->fence)
         ->and($replacement->seat_fence)->toBeGreaterThan($held->seat_fence)
         ->and($replacement->session_ref)->toBeNull()
@@ -190,7 +202,7 @@ test('failover transfers and fences a held turn without losing memory or failing
     $engine->turnDone($replacement, $replacement->fence, $replacement->seat_fence, 'Replacement state', CarbonImmutable::now());
     orchestrationEvent($parent, 'third');
     expect(orchestrationClaims($parent, $a))->toBe([])->and(orchestrationClaims($parent, $b))->toHaveCount(1);
-});
+})->with(['seat sweep' => true, 'claim takeover' => false]);
 
 test('non failover seat waits and notifies once then resumes only its holder', function (): void {
     $parent = orchestrationTask();
@@ -526,3 +538,73 @@ test('seat session renewal and explicit fencing preserve memory and reject the p
     expect($replacement->seat_fence)->toBe($fenced->fence)->and($replacement->session_ref)->toBe($opaque)
         ->and(orchestrationSeat($parent)->turns_started)->toBe(1);
 });
+
+test('pinned non failover parents wait once per outage including a never held seat', function (bool $held): void {
+    config(['capstan.work.failover_after_seconds' => 300]);
+    $parent = orchestrationTask();
+    $a = orchestrationHost();
+    $b = orchestrationHost('host-b');
+    $parent->update(['device_spoke_id' => $a->id, 'failover' => false]);
+    $seats = resolve(WorkSeatService::class);
+    $ref = "opaque://Exact ? CASE=Yes\n".Str::random();
+    if ($held) {
+        $seats->take($parent, $a->actor_id, $a->id, 0, $ref, false, CarbonImmutable::now(), 1);
+    }
+    orchestrationEvent($parent);
+    $item = $parent->items()->sole();
+    Log::shouldReceive('warning')->twice()->with('Work orchestrator waiting on pinned host.', [
+        'task_id' => $parent->id, 'seat_id' => orchestrationSeat($parent)->id,
+    ]);
+    Date::setTestNow(now()->addSeconds(299));
+    $seats->sweep(CarbonImmutable::now());
+    expect(orchestrationSeat($parent)->waiting_at)->toBeNull()->and($item->fresh()->waiting_on_host_at)->toBeNull();
+    Date::setTestNow(now()->addSecond());
+    foreach (range(1, 2) as $outage) {
+        $seats->sweep(CarbonImmutable::now());
+        $seats->sweep(CarbonImmutable::now());
+        expect(orchestrationSeat($parent)->waiting_at)->not->toBeNull()
+            ->and(orchestrationSeat($parent)->notified_at)->not->toBeNull()
+            ->and($item->fresh()->waiting_on_host_at)->not->toBeNull()
+            ->and($item->fresh()->waiting_on_host_notified_at)->not->toBeNull()
+            ->and(orchestrationClaims($parent, $b))->toBe([]);
+        $turn = orchestrationClaims($parent, $a)[0];
+        expect($turn->session_ref)->toBe($held || $outage === 2 ? $ref : null)
+            ->and($turn->waiting_on_host_at)->toBeNull()->and($turn->waiting_on_host_notified_at)->toBeNull()
+            ->and(orchestrationSeat($parent)->waiting_at)->toBeNull()->and(orchestrationSeat($parent)->notified_at)->toBeNull()
+            ->and($parent->fresh()->device_spoke_id)->toBe($a->id);
+        $seats->renew($parent, $a->actor_id, $a->id, $turn->seat_fence, $ref, CarbonImmutable::now(), 1);
+        resolve(WorkOrchestrationService::class)->turnDone($turn, $turn->fence, $turn->seat_fence, 'Resumed', CarbonImmutable::now());
+        if ($outage === 1) {
+            orchestrationEvent($parent, 'second-outage');
+            $item = $parent->items()->where('state', 'queued')->sole();
+            Date::setTestNow(now()->addSeconds(300));
+        }
+    }
+})->with(['previous holder' => true, 'never held' => false]);
+
+test('failed conditional orchestration claim rolls back seat acquisition and takeover', function (bool $held): void {
+    $parent = orchestrationTask();
+    $a = orchestrationHost();
+    $b = orchestrationHost('host-b');
+    if ($held) {
+        resolve(WorkSeatService::class)->take($parent, $a->actor_id, $a->id, 0, 'opaque/exact ? CASE', false, CarbonImmutable::now(), 1);
+    }
+    orchestrationEvent($parent);
+    Date::setTestNow(now()->addSeconds(2));
+    $claims = resolve(WorkClaimService::class);
+    $candidates = new ReflectionMethod($claims, 'candidates');
+    $candidate = $candidates->invoke($claims, $parent->team_id, $b->actor_id, $b->id, ['orchestrator'], [], 1, CarbonImmutable::now())[0];
+    $parent->update(['title' => 'Changed after candidate selection']);
+    $tables = ['work_orchestrator_seats', 'work_items', 'work_item_transitions'];
+    $snapshot = fn () => array_map(fn ($table) => DB::table($table)->orderBy('id')->get()->toJson(), $tables);
+    $before = $snapshot();
+    $claim = new ReflectionMethod($claims, 'claimCandidate');
+    expect($claim->invoke($claims, $candidate, $parent->team_id, $b->actor_id, $b->id, CarbonImmutable::now(), 300))->toBeNull();
+    expect($snapshot())->toBe($before);
+    $seat = orchestrationSeat($parent);
+    expect($seat->holder_actor)->toBe($held ? $a->actor_id : null)
+        ->and($seat->holder_spoke_id)->toBe($held ? $a->id : null)
+        ->and($seat->fence)->toBe($held ? 1 : 0)
+        ->and($seat->session_ref)->toBe($held ? 'opaque/exact ? CASE' : null);
+    expect(orchestrationClaims($parent, $b))->toHaveCount(1);
+})->with(['acquisition' => false, 'takeover' => true]);

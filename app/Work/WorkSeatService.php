@@ -97,9 +97,15 @@ final readonly class WorkSeatService
     }
 
     /** Read-only candidate hint. The locked claim rechecks it. */
-    public function eligible(?WorkOrchestratorSeat $seat, string $actor, int $spoke, CarbonImmutable $now): bool
+    public function eligible(?WorkOrchestratorSeat $seat, string $actor, int $spoke, CarbonImmutable $now, ?int $deviceSpokeId = null): bool
     {
         if (! Feature::active(Work::class)) {
+            return false;
+        }
+        // A device pin governs initial placement. Only an established failover
+        // seat may move off it; ordinary items keep their own device predicate.
+        if ($deviceSpokeId !== null && $deviceSpokeId !== $spoke
+            && ! ($seat !== null && $seat->failover && $seat->fence > 0)) {
             return false;
         }
         if ($seat === null || $seat->holder_actor === null) {
@@ -124,7 +130,7 @@ final readonly class WorkSeatService
             return null;
         }
         $seat = $this->locks->seat($parent);
-        if (! $this->eligible($seat, $actor, $spoke, $now)) {
+        if (! $this->eligible($seat, $actor, $spoke, $now, $parent->device_spoke_id)) {
             return null;
         }
         if ($seat->active_item_id !== null && $seat->active_item_id !== $item->id) {
@@ -156,11 +162,25 @@ final readonly class WorkSeatService
         if (! Feature::active(Work::class)) {
             return;
         }
-        foreach (WorkOrchestratorSeat::query()->whereNotNull('holder_actor')->where('lease_until', '<=', $now)->get() as $candidate) {
-            DB::transaction(function () use ($candidate, $now): void {
+        $cutoff = $now->subSeconds(max(1, (int) config('capstan.work.failover_after_seconds', 300)));
+        foreach (WorkOrchestratorSeat::query()->where(fn ($query) => $query
+            ->where('lease_until', '<=', $now)
+            ->orWhere(fn ($query) => $query->where('failover', false)->whereNull('holder_actor')->whereNotNull('active_item_id')))->get() as $candidate) {
+            DB::transaction(function () use ($candidate, $now, $cutoff): void {
                 $this->locks->tasks($candidate->work_task_id);
                 $seat = $candidate->fresh();
-                if ($seat->holder_actor === null || $seat->lease_until === null || $seat->lease_until->isAfter($now)) {
+                $parent = WorkTask::query()->findOrFail($seat->work_task_id);
+                if ($parent->cancelled_at !== null || $seat->stopped_at !== null
+                    || ($seat->lease_until?->isAfter($now) ?? false)) {
+                    return;
+                }
+                $queued = WorkItem::query()->whereKey($seat->active_item_id)->where('role', WorkItem::ROLE_ORCHESTRATOR)
+                    ->where('state', WorkItemState::Queued)->first();
+                if ($parent->device_spoke_id !== null && ! $seat->failover && $queued !== null && $queued->updated_at->isAfter($cutoff)) {
+                    return;
+                }
+                $lapsed = $seat->holder_actor !== null && $seat->lease_until !== null;
+                if (! $lapsed && ($seat->failover || $parent->device_spoke_id === null || $queued === null)) {
                     return;
                 }
                 if ($seat->failover) {
@@ -168,6 +188,9 @@ final readonly class WorkSeatService
                     $seat->fence++;
                     $seat->fill(['holder_actor' => null, 'holder_spoke_id' => null, 'session_ref' => null, 'interactive' => false, 'lease_until' => null])->save();
                 } elseif ($seat->notified_at === null) {
+                    if ($queued !== null) {
+                        $queued->fill(['waiting_on_host_at' => $now, 'waiting_on_host_notified_at' => $now])->save();
+                    }
                     $seat->fill(['waiting_at' => $now, 'notified_at' => $now])->save();
                     $this->notifier->seatWaiting($seat);
                 }
