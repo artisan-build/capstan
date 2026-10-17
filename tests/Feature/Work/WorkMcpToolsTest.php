@@ -423,7 +423,7 @@ test('interactive MCP seats renew for one credential exclude drains expose bound
     expect($released['released'])->toBeTrue()->and($released['seat_fence'])->toBeGreaterThan($fence);
     expect(workMcpResult('orchestrate', [
         'team_id' => $team->id, 'task_id' => $parent->id, 'seat_fence' => $fence,
-        'session_ref' => 'opaque renewed', 'action' => 'finish', 'input' => ['state' => 'acted'],
+        'session_ref' => 'opaque renewed', 'action' => 'finish', 'input' => ['state' => 'acted', 'content' => 'Stale state'],
         'idempotency_key' => 'released-action',
     ], $token))->toBe(['outcome' => 'refused', 'reason' => 'orchestration_forbidden']);
     $this->withHeaders($headers)->postJson(route('api.work.claim', $team), [
