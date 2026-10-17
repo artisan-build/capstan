@@ -5,9 +5,11 @@ use App\Http\Controllers\BrandingSettingsController;
 use App\Http\Controllers\PageController;
 use App\Http\Controllers\PageExportController;
 use App\Http\Controllers\PageShareController;
+use App\Livewire\Work\Index;
 use Illuminate\Support\Facades\Route;
 
 Route::middleware('bfc.auth')->group(function (): void {
+    Route::livewire('work', Index::class)->name('work.index');
     Route::livewire('postmaster', 'postmaster.spoke-map')->name('postmaster.map');
     Route::get('branding', [BrandingSettingsController::class, 'show'])->name('branding.show');
     Route::patch('branding/draft', [BrandingSettingsController::class, 'update'])->name('branding.draft.update');

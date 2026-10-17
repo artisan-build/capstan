@@ -28,8 +28,18 @@ use Laravel\Mcp\Server\Tool;
 #[Instructions('Read and operate the authenticated actor own Capstan data. When the user asks for a UI, report, dashboard, or brief, read get_brand_kit, build it as a Capstan page with the documented tokens and components, and include a refresh recipe that explains how to rebuild it. To match a website, fetch the site with your own tools because Capstan never fetches arbitrary URLs. Extract its palette, typography, logo, and header/footer feel. Upload only images the team owns, choose the nearest allowed system font stack, update the draft, and show preview_brand_draft. Call apply_brand_draft with the returned draft fingerprint only after the user explicitly approves the preview. Font uploads are not supported.')]
 final class CapstanServer extends Server
 {
+    public int $defaultPaginationLength = 50;
+
     /** @var array<int, class-string<Tool>> */
     protected array $tools = [
+        Tools\CreateTaskTool::class,
+        Tools\ReviseBriefTool::class,
+        Tools\QueueItemTool::class,
+        Tools\CancelItemTool::class,
+        Tools\ListWorkTool::class,
+        Tools\GetTaskTool::class,
+        Tools\SteerTool::class,
+        Tools\CancelTaskTool::class,
         PostmasterSpokesTool::class,
         PostmasterMessagesTool::class,
         SendPostmasterMessageTool::class,
