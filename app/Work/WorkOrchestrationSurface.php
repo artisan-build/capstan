@@ -119,7 +119,7 @@ final readonly class WorkOrchestrationSurface
             'decide' => ['event_id' => ['required', 'uuid'], 'decision' => ['required', 'string', 'min:1', 'max:10000'], 'rationale' => ['required', 'string', 'min:1', 'max:10000'], 'evidence' => ['required', 'array', 'max:25']],
             'request_wake' => ['key' => ['required', 'string', 'min:1', 'max:255'], 'due_at' => ['required', 'date'], 'reason' => ['required', 'string', 'min:1', 'max:2000']],
             'escalate' => ['key' => ['required', 'string', 'min:1', 'max:255'], 'addressed_actor' => ['required', 'string', 'regex:/\A[1-9][0-9]{0,18}\z/D'], 'question' => ['required', 'string', 'min:1', 'max:10000'], 'options' => ['required', 'array', 'list', 'min:1', 'max:10'], 'options.*' => ['required', 'string', 'min:1', 'max:2000'], 'recommendation' => ['required', 'string', 'min:1', 'max:2000']],
-            'finish' => ['state' => ['required', Rule::in([WorkItemState::Acted->value, WorkItemState::Failed->value])], 'content' => ['sometimes', 'string', 'max:100000']],
+            'finish' => ['state' => ['required', Rule::in([WorkItemState::Acted->value, WorkItemState::Failed->value])], 'content' => ['required_if:state,acted', 'string', 'min:1', 'max:100000']],
         };
         $validator = Validator::make($input, $rules);
         if ($validator->fails()) {

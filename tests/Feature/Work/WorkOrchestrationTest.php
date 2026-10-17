@@ -650,6 +650,42 @@ test('signed queue replay preserves the final child slot and overrun raises one 
         ->and(WorkEscalation::query()->where('request_key', 'circuit-breaker')->count())->toBe(1);
 });
 
+test('signed acted finish refuses blank state before effects and permits a corrected retry', function (array $invalidInput): void {
+    $parent = orchestrationTask();
+    orchestrationEvent($parent, 'signed-finish-state');
+    $turn = orchestrationClaims($parent, orchestrationHost('signed-finish-state-host'))[0];
+    $link = resolve(WorkWorkerLinks::class)->forItem($turn)['orchestrate'];
+    $key = 'signed-finish-state';
+    $snapshot = fn (): array => [
+        WorkStateRevision::query()->where('work_task_id', $parent->id)->count(),
+        orchestrationSeat($parent)->completed_cursor,
+        $turn->fresh()->state,
+        $turn->transitions()->count(),
+        DB::table('mcp_write_claims')->count(),
+    ];
+    $before = $snapshot();
+
+    $this->postJson($link, ['action' => 'finish', 'input' => $invalidInput, 'idempotency_key' => $key])
+        ->assertUnprocessable()->assertJsonPath('error.code', 'invalid_orchestration_action');
+    expect($snapshot())->toBe($before);
+
+    $this->postJson($link, [
+        'action' => 'finish',
+        'input' => ['state' => 'acted', 'content' => 'Corrected signed state'],
+        'idempotency_key' => $key,
+    ])->assertOk()->assertJsonPath('outcome', 'accepted')->assertJsonPath('status', 'completed');
+
+    $revision = WorkStateRevision::query()->where('work_task_id', $parent->id)->sole();
+    expect($turn->fresh()->state)->toBe(WorkItemState::Acted)
+        ->and($revision->content)->toBe('Corrected signed state')
+        ->and($revision->through_cursor)->toBe(1)
+        ->and(orchestrationSeat($parent)->completed_cursor)->toBe(1)
+        ->and(DB::table('mcp_write_claims')->count())->toBe($before[4] + 1);
+})->with([
+    'omitted content' => [['state' => 'acted']],
+    'empty content' => [['state' => 'acted', 'content' => '']],
+]);
+
 test('signed claimed-turn failure completes only a routed live turn once', function (): void {
     $parent = orchestrationTask();
     orchestrationEvent($parent, 'signed-failed');
@@ -662,7 +698,9 @@ test('signed claimed-turn failure completes only a routed live turn once', funct
     $this->postJson($link, $body)->assertOk()->assertJsonPath('outcome', 'accepted')->assertJsonPath('status', 'completed');
     $this->postJson($link, $body)->assertForbidden();
     expect($turn->fresh()->state)->toBe(WorkItemState::Failed)
-        ->and($turn->transitions()->where('to_state', WorkItemState::Failed)->count())->toBe(1);
+        ->and($turn->transitions()->where('to_state', WorkItemState::Failed)->count())->toBe(1)
+        ->and(WorkStateRevision::query()->where('work_task_id', $parent->id)->count())->toBe(0)
+        ->and(orchestrationSeat($parent)->completed_cursor)->toBe(0);
 });
 
 test('ordinary worker links retain only ordinary authority', function (): void {

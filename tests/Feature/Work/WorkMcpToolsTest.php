@@ -423,7 +423,7 @@ test('interactive MCP seats renew for one credential exclude drains expose bound
     expect($released['released'])->toBeTrue()->and($released['seat_fence'])->toBeGreaterThan($fence);
     expect(workMcpResult('orchestrate', [
         'team_id' => $team->id, 'task_id' => $parent->id, 'seat_fence' => $fence,
-        'session_ref' => 'opaque renewed', 'action' => 'finish', 'input' => ['state' => 'acted'],
+        'session_ref' => 'opaque renewed', 'action' => 'finish', 'input' => ['state' => 'acted', 'content' => 'Stale state'],
         'idempotency_key' => 'released-action',
     ], $token))->toBe(['outcome' => 'refused', 'reason' => 'orchestration_forbidden']);
     $this->withHeaders($headers)->postJson(route('api.work.claim', $team), [
@@ -550,6 +550,61 @@ test('interactive MCP context and exact action envelope exercise the full subtre
     expect($refused)->toBe(['outcome' => 'refused', 'reason' => 'orchestration_forbidden'])
         ->and(WorkItem::query()->count())->toBe($before);
 });
+
+test('interactive MCP acted finish refuses blank state before effects and permits a corrected retry', function (array $invalidInput): void {
+    $user = capstanUser(['role' => 'owner']);
+    $token = workMcpToken($user);
+    $team = workMcpTeam(['pool_work' => true]);
+    $parent = WorkTask::query()->findOrFail(workMcpCreate($team, $token)['task']['id']);
+    resolve(WorkOrchestrationService::class)->event($parent, 'mcp-finish-state', 'test_event');
+    $taken = workMcpResult('take_seat', [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'session_ref' => 'mcp-finish-state',
+        'idempotency_key' => 'mcp-finish-state-take',
+    ], $token);
+    $base = [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'spoke_id' => $taken['seat']['spoke_id'],
+        'seat_fence' => $taken['seat']['seat_fence'], 'session_ref' => 'mcp-finish-state',
+        'action' => 'finish', 'idempotency_key' => 'mcp-finish-state',
+    ];
+    $seat = fn (): WorkOrchestratorSeat => WorkOrchestratorSeat::query()->where('work_task_id', $parent->id)->sole();
+    $turn = WorkItem::query()->findOrFail($seat()->active_item_id);
+    $snapshot = fn (): array => [
+        WorkStateRevision::query()->where('work_task_id', $parent->id)->count(),
+        $seat()->completed_cursor,
+        $turn->fresh()->state,
+        $turn->transitions()->count(),
+        DB::table('mcp_write_claims')->count(),
+    ];
+    $before = $snapshot();
+
+    $response = workMcpCall('orchestrate', $base + ['input' => $invalidInput], $token);
+    expect($response->status() !== 200 || $response->json('result.isError') === true)->toBeTrue();
+    expect($snapshot())->toBe($before);
+
+    $finished = workMcpResult('orchestrate', $base + [
+        'input' => ['state' => 'acted', 'content' => 'Corrected interactive state'],
+    ], $token);
+    $revision = WorkStateRevision::query()->where('work_task_id', $parent->id)->sole();
+    expect($finished['outcome'])->toBe('accepted')
+        ->and($turn->fresh()->state)->toBe(WorkItemState::Acted)
+        ->and($revision->content)->toBe('Corrected interactive state')
+        ->and($revision->through_cursor)->toBe(1)
+        ->and($seat()->completed_cursor)->toBe(1)
+        ->and(DB::table('mcp_write_claims')->count())->toBe($before[4] + 1);
+
+    resolve(WorkOrchestrationService::class)->event($parent, 'mcp-failed-without-content', 'test_event');
+    $failedItem = WorkItem::query()->findOrFail($seat()->active_item_id);
+    $failed = workMcpResult('orchestrate', array_replace($base, [
+        'input' => ['state' => 'failed'], 'idempotency_key' => 'mcp-failed-without-content',
+    ]), $token);
+    expect($failed['outcome'])->toBe('accepted')
+        ->and($failedItem->fresh()->state)->toBe(WorkItemState::Failed)
+        ->and(WorkStateRevision::query()->where('work_task_id', $parent->id)->count())->toBe(1)
+        ->and($seat()->completed_cursor)->toBe(1);
+})->with([
+    'omitted content' => [['state' => 'acted']],
+    'empty content' => [['state' => 'acted', 'content' => '']],
+]);
 
 test('MCP child orchestration enforces canonical intent and team defaults before durable effects', function (): void {
     $user = capstanUser(['role' => 'owner']);
