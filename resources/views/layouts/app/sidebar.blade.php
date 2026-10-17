@@ -22,6 +22,12 @@
                         </flux:sidebar.item>
                     @endif
 
+                    @if (\Laravel\Pennant\Feature::active(\App\Features\Work::class))
+                        <flux:sidebar.item data-testid="work-navigation" icon="clipboard-document-list" :href="route('work.index')" :current="request()->routeIs('work.*')" wire:navigate>
+                            {{ __('Work') }}
+                        </flux:sidebar.item>
+                    @endif
+
                     @if (\Laravel\Pennant\Feature::active(\App\Features\Artifacts::class))
                         <flux:sidebar.item data-testid="pages-navigation" icon="document-text" :href="route('pages.index')" :current="request()->routeIs('pages.*')" wire:navigate>
                             {{ __('Pages') }}

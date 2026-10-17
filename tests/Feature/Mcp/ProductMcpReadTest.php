@@ -166,7 +166,7 @@ test('keeps the exact read-effect tools on the read door when the write door is 
         ->and($meta->json('endpoints'))->toBe(['mcp' => '/mcp', 'mcp_write' => '/mcp/write']);
 
     $tools = collect(capstanMcpReadList($token)->assertOk()->json('result.tools'))->keyBy('name');
-    expect($tools->keys()->sort()->values()->all())->toBe(['get_brand_kit', 'get_page', 'list_layouts', 'list_pages', 'postmaster_messages', 'postmaster_spokes', 'preview_brand_draft']);
+    expect($tools->keys()->sort()->values()->all())->toBe(['get_brand_kit', 'get_page', 'get_task', 'list_layouts', 'list_pages', 'list_work', 'postmaster_messages', 'postmaster_spokes', 'preview_brand_draft']);
 
     foreach ([
         'postmaster_spokes' => 'metadata',
@@ -190,16 +190,24 @@ test('keeps the exact read-effect tools on the read door when the write door is 
         ->toBe([
             'ack_postmaster_messages',
             'apply_brand_draft',
+            'cancel_item',
+            'cancel_task',
             'create_artifact_share',
+            'create_task',
             'get_brand_kit',
             'get_page',
+            'get_task',
             'list_layouts',
             'list_pages',
+            'list_work',
             'postmaster_messages',
             'postmaster_spokes',
             'preview_brand_draft',
             'publish_page',
+            'queue_item',
+            'revise_brief',
             'send_postmaster_message',
+            'steer',
             'update_brand_draft',
             'update_page',
             'upload_brand_asset',
@@ -613,7 +621,7 @@ test('feature gating and unsupported subject types fail closed without changing 
 
     config(['capstan.features.postmaster' => false]);
     Feature::flushCache();
-    expect(capstanMcpReadList($token)->json('result.tools.*.name'))->toHaveCount(7);
+    expect(capstanMcpReadList($token)->json('result.tools.*.name'))->toHaveCount(9);
     capstanMcpReadCall('postmaster_spokes', (object) [], $token)
         ->assertOk()
         ->assertJsonPath('result.isError', true)

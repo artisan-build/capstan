@@ -124,20 +124,28 @@ test('mounts the complete write family behind the write ceiling', function (): v
     $read = collect(capstanMcpWriteList($token, '/mcp')->assertOk()->json('result.tools'))->keyBy('name');
     $write = collect(capstanMcpWriteList($token)->assertOk()->json('result.tools'))->keyBy('name');
 
-    expect($read->keys()->sort()->values()->all())->toBe(['get_brand_kit', 'get_page', 'list_layouts', 'list_pages', 'postmaster_messages', 'postmaster_spokes', 'preview_brand_draft'])
+    expect($read->keys()->sort()->values()->all())->toBe(['get_brand_kit', 'get_page', 'get_task', 'list_layouts', 'list_pages', 'list_work', 'postmaster_messages', 'postmaster_spokes', 'preview_brand_draft'])
         ->and($write->keys()->sort()->values()->all())->toBe([
             'ack_postmaster_messages',
             'apply_brand_draft',
+            'cancel_item',
+            'cancel_task',
             'create_artifact_share',
+            'create_task',
             'get_brand_kit',
             'get_page',
+            'get_task',
             'list_layouts',
             'list_pages',
+            'list_work',
             'postmaster_messages',
             'postmaster_spokes',
             'preview_brand_draft',
             'publish_page',
+            'queue_item',
+            'revise_brief',
             'send_postmaster_message',
+            'steer',
             'update_brand_draft',
             'update_page',
             'upload_brand_asset',

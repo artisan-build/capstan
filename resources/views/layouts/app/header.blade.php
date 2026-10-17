@@ -13,6 +13,11 @@
                 <flux:navbar.item icon="layout-grid" :href="route('bfc.dashboard')" :current="request()->routeIs('bfc.dashboard')" wire:navigate>
                     {{ __('Dashboard') }}
                 </flux:navbar.item>
+                @if (\Laravel\Pennant\Feature::active(\App\Features\Work::class))
+                    <flux:navbar.item data-testid="work-navigation" icon="clipboard-document-list" :href="route('work.index')" :current="request()->routeIs('work.*')" wire:navigate>
+                        {{ __('Work') }}
+                    </flux:navbar.item>
+                @endif
                 @if (\Laravel\Pennant\Feature::active(\App\Features\Artifacts::class))
                     <flux:navbar.item data-testid="pages-navigation" icon="document-text" :href="route('pages.index')" :current="request()->routeIs('pages.*')" wire:navigate>
                         {{ __('Pages') }}
@@ -66,6 +71,11 @@
                     <flux:sidebar.item icon="layout-grid" :href="route('bfc.dashboard')" :current="request()->routeIs('bfc.dashboard')" wire:navigate>
                         {{ __('Dashboard')  }}
                     </flux:sidebar.item>
+                    @if (\Laravel\Pennant\Feature::active(\App\Features\Work::class))
+                        <flux:sidebar.item data-testid="work-navigation" icon="clipboard-document-list" :href="route('work.index')" :current="request()->routeIs('work.*')" wire:navigate>
+                            {{ __('Work') }}
+                        </flux:sidebar.item>
+                    @endif
                     @if (\Laravel\Pennant\Feature::active(\App\Features\Artifacts::class))
                         <flux:sidebar.item data-testid="pages-navigation" icon="document-text" :href="route('pages.index')" :current="request()->routeIs('pages.*')" wire:navigate>
                             {{ __('Pages') }}
