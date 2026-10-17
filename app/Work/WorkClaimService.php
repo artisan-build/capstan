@@ -215,6 +215,8 @@ final class WorkClaimService
                         'claimant_actor' => $actorId,
                         'lease_until' => $leaseUntil,
                         'claimed_at' => $now,
+                        'waiting_on_host_at' => null,
+                        'waiting_on_host_notified_at' => null,
                         'fence' => $nextFence,
                         'updated_at' => $now,
                     ]);

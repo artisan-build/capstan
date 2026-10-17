@@ -8,6 +8,7 @@ use App\Models\Team;
 use App\Models\WorkItem;
 use App\Models\WorkTask;
 use App\Work\WorkItemStateService;
+use App\Work\WorkSweepService;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
@@ -98,7 +99,7 @@ test('claim is deterministic capped thin and supports zero capacity', function (
 
     expect($response->json('items.*.id'))->toBe($items->take(25)->pluck('id')->all())
         ->and($response->json('items.0'))->toHaveKeys(['id', 'task_id', 'role', 'fence', 'lease_until'])
-        ->and(array_keys($response->json('items.0')))->toBe(['id', 'task_id', 'role', 'fence', 'lease_until'])
+        ->and(array_keys($response->json('items.0')))->toBe(['id', 'task_id', 'role', 'fence', 'lease_until', 'links'])
         ->and(json_encode($response->json(), JSON_THROW_ON_ERROR))->not->toContain('null')
         ->and(WorkItem::query()->where('state', WorkItemState::Claimed)->count())->toBe(25)
         ->and(WorkItem::query()->where('state', WorkItemState::Queued)->count())->toBe(2)
@@ -110,6 +111,96 @@ test('claim is deterministic capped thin and supports zero capacity', function (
         ->assertExactJson(['items' => []]);
 
     expect(WorkItem::query()->where('state', WorkItemState::Queued)->count())->toBe(2);
+});
+
+test('claim and renewed records carry fresh signed links with capped expiry', function (): void {
+    Date::setTestNow('2026-10-17 10:00:00');
+    config(['capstan.work.link_grace_seconds' => 60]);
+    $team = workDrainTeam();
+    $item = workDrainItem(workDrainTask($team, ['timebox_minutes' => 6]));
+    $issued = workDrainCredential(capstanUser());
+    $claim = $this->withHeaders($issued['headers'])->postJson(route('api.work.claim', $team), workDrainClaimPayload())->assertOk();
+    $links = $claim->json('items.0.links');
+    expect(array_keys($links))->toBe(['brief', 'milestone', 'steers']);
+    Date::setTestNow(now()->addMinutes(2));
+    $renew = $this->withHeaders($issued['headers'])->postJson(route('api.work.renew', $team), [
+        'items' => [['item_id' => $item->id, 'fence' => 1]],
+    ])->assertOk();
+    foreach ($renew->json('results.0.item.links') as $action => $url) {
+        expect($url)->not->toBe($links[$action]);
+        parse_str(parse_url($url, PHP_URL_QUERY), $query);
+        expect((int) $query['expires'])->toBe(CarbonImmutable::parse('2026-10-17 10:07:00')->timestamp);
+    }
+    $this->getJson($renew->json('results.0.item.links.brief'))->assertOk();
+});
+
+test('expired claim links lose their fence after sweep and reclaim while replacement links succeed', function (): void {
+    Date::setTestNow('2026-10-17 10:00:00');
+    config(['capstan.work.link_grace_seconds' => 60]);
+    $team = workDrainTeam();
+    $task = workDrainTask($team, ['timebox_minutes' => 60]);
+    $item = workDrainItem($task);
+    $task->briefRevisions()->create([
+        'sequence' => 1,
+        'content' => 'First brief',
+        'author_actor' => 'creator',
+    ]);
+    $firstHost = workDrainCredential(capstanUser());
+    $secondHost = workDrainCredential(capstanUser());
+    $firstClaim = $this->withHeaders($firstHost['headers'])
+        ->postJson(route('api.work.claim', $team), workDrainClaimPayload())
+        ->assertOk();
+    $firstLinks = $firstClaim->json('items.0.links');
+
+    $this->withHeaders($firstHost['headers'])->postJson(route('api.work.transition', $team), [
+        'item_id' => $item->id,
+        'fence' => 1,
+        'state' => 'delivered',
+    ])->assertOk();
+
+    Date::setTestNow(now()->addSeconds(330));
+    $this->getJson($firstLinks['brief'])->assertOk();
+    resolve(WorkSweepService::class)->liveness(CarbonImmutable::now());
+    expect($item->fresh()->state)->toBe(WorkItemState::Queued);
+
+    $secondClaim = $this->withHeaders($secondHost['headers'])
+        ->postJson(route('api.work.claim', $team), workDrainClaimPayload())
+        ->assertOk()
+        ->assertJsonPath('items.0.fence', 2);
+    $secondLinks = $secondClaim->json('items.0.links');
+    $latest = $task->briefRevisions()->create([
+        'sequence' => 2,
+        'content' => 'Replacement brief',
+        'author_actor' => 'creator',
+    ]);
+
+    $this->getJson($firstLinks['brief'])
+        ->assertConflict()
+        ->assertHeader('Content-Type', 'text/plain; charset=UTF-8')
+        ->assertSeeText('claim lost');
+    $this->getJson($firstLinks['steers'])
+        ->assertConflict()
+        ->assertHeader('Content-Type', 'text/plain; charset=UTF-8')
+        ->assertSeeText('claim lost');
+    $this->postJson($firstLinks['milestone'], [
+        'kind' => 'note',
+        'payload' => (object) ['summary' => 'stale'],
+    ])->assertConflict()
+        ->assertHeader('Content-Type', 'text/plain; charset=UTF-8')
+        ->assertSeeText('claim lost');
+
+    $this->getJson($secondLinks['brief'])
+        ->assertOk()
+        ->assertJsonPath('revision.id', $latest->id)
+        ->assertJsonPath('revision.content', 'Replacement brief');
+    $this->getJson($secondLinks['steers'])->assertOk();
+    $this->postJson($secondLinks['milestone'], [
+        'kind' => 'started',
+        'payload' => (object) [],
+    ])->assertCreated();
+
+    expect($item->fresh()->fetched_brief_revision_id)->toBe($latest->id)
+        ->and($item->milestones()->count())->toBe(1);
 });
 
 test('claim validates malformed duplicate and oversized declarations without effects', function (array $payload, string $error): void {
