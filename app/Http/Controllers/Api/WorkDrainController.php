@@ -11,6 +11,7 @@ use App\Http\Middleware\AuthenticateBoundCredential;
 use App\Models\Team;
 use App\Models\WorkItem;
 use App\Work\WorkDrainService;
+use App\Work\WorkWorkerLinks;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -136,7 +137,7 @@ final class WorkDrainController extends Controller
                 ];
 
                 if (isset($result['item'])) {
-                    $wire['item'] = $this->currentItem($result['item']);
+                    $wire['item'] = [...$this->currentItem($result['item']), 'links' => app(WorkWorkerLinks::class)->forItem($result['item'])];
                 }
 
                 return $wire;
@@ -144,7 +145,7 @@ final class WorkDrainController extends Controller
         ]);
     }
 
-    /** @return array{id: string, task_id: string, role: string, fence: int, lease_until: string} */
+    /** @return array<string, mixed> */
     private function claimItem(WorkItem $item): array
     {
         return [
@@ -153,6 +154,7 @@ final class WorkDrainController extends Controller
             'role' => $item->role,
             'fence' => $item->fence,
             'lease_until' => $item->lease_until->toISOString(),
+            'links' => app(WorkWorkerLinks::class)->forItem($item),
         ];
     }
 

@@ -98,7 +98,7 @@ test('claim is deterministic capped thin and supports zero capacity', function (
 
     expect($response->json('items.*.id'))->toBe($items->take(25)->pluck('id')->all())
         ->and($response->json('items.0'))->toHaveKeys(['id', 'task_id', 'role', 'fence', 'lease_until'])
-        ->and(array_keys($response->json('items.0')))->toBe(['id', 'task_id', 'role', 'fence', 'lease_until'])
+        ->and(array_keys($response->json('items.0')))->toBe(['id', 'task_id', 'role', 'fence', 'lease_until', 'links'])
         ->and(json_encode($response->json(), JSON_THROW_ON_ERROR))->not->toContain('null')
         ->and(WorkItem::query()->where('state', WorkItemState::Claimed)->count())->toBe(25)
         ->and(WorkItem::query()->where('state', WorkItemState::Queued)->count())->toBe(2)
@@ -110,6 +110,27 @@ test('claim is deterministic capped thin and supports zero capacity', function (
         ->assertExactJson(['items' => []]);
 
     expect(WorkItem::query()->where('state', WorkItemState::Queued)->count())->toBe(2);
+});
+
+test('claim and renewed records carry fresh signed links with capped expiry', function (): void {
+    Date::setTestNow('2026-10-17 10:00:00');
+    config(['capstan.work.link_grace_seconds' => 60]);
+    $team = workDrainTeam();
+    $item = workDrainItem(workDrainTask($team, ['timebox_minutes' => 6]));
+    $issued = workDrainCredential(capstanUser());
+    $claim = $this->withHeaders($issued['headers'])->postJson(route('api.work.claim', $team), workDrainClaimPayload())->assertOk();
+    $links = $claim->json('items.0.links');
+    expect(array_keys($links))->toBe(['brief', 'milestone', 'steers']);
+    Date::setTestNow(now()->addMinutes(2));
+    $renew = $this->withHeaders($issued['headers'])->postJson(route('api.work.renew', $team), [
+        'items' => [['item_id' => $item->id, 'fence' => 1]],
+    ])->assertOk();
+    foreach ($renew->json('results.0.item.links') as $action => $url) {
+        expect($url)->not->toBe($links[$action]);
+        parse_str(parse_url($url, PHP_URL_QUERY), $query);
+        expect((int) $query['expires'])->toBe(CarbonImmutable::parse('2026-10-17 10:07:00')->timestamp);
+    }
+    $this->getJson($renew->json('results.0.item.links.brief'))->assertOk();
 });
 
 test('claim validates malformed duplicate and oversized declarations without effects', function (array $payload, string $error): void {

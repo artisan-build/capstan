@@ -36,6 +36,10 @@ final class BoundCredentialSpokeResolver
 
     public function heartbeat(Spoke $spoke, CarbonImmutable $now): void
     {
-        $spoke->forceFill(['last_polled_at' => $now])->save();
+        Spoke::query()->whereKey($spoke->id)->update([
+            'last_polled_at' => $now,
+            'work_heartbeat_notified_at' => null,
+        ]);
+        $spoke->refresh();
     }
 }

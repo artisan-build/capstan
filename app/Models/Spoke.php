@@ -14,6 +14,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string $credential_id
  * @property string|null $name
  * @property CarbonImmutable|null $last_polled_at
+ * @property CarbonImmutable|null $work_heartbeat_notified_at
  * @property string|null $last_cursor
  * @property SpokeLiveness $probe_status
  * @property CarbonImmutable|null $probe_failed_at
@@ -31,6 +32,7 @@ class Spoke extends Model
         'credential_id',
         'name',
         'last_polled_at',
+        'work_heartbeat_notified_at',
         'last_cursor',
         'probe_status',
         'probe_failed_at',
@@ -41,6 +43,7 @@ class Spoke extends Model
     {
         return [
             'last_polled_at' => 'datetime',
+            'work_heartbeat_notified_at' => 'datetime',
             'probe_status' => SpokeLiveness::class,
             'probe_failed_at' => 'datetime',
         ];
