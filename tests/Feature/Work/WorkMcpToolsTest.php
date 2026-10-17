@@ -71,7 +71,7 @@ function workMcpResult(string $tool, array $arguments, string $token): array
 {
     $response = workMcpCall($tool, $arguments, $token)->assertOk();
     $result = $response->json('result.structuredContent');
-    expect($result, $response->content())->toBeArray();
+    expect($result)->toBeArray();
     $definition = resolve('App\\Mcp\\Tools\\'.Str::studly($tool).'Tool')->toArray();
     assertWorkSchema(json_decode($response->content())->result->structuredContent, $definition['outputSchema']);
 

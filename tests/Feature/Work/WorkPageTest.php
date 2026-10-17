@@ -102,7 +102,7 @@ test('Work page requires active product admission and guards both mount and late
     $this->get(route('work.index'))->assertRedirect();
     $user = capstanUser();
     $this->actingAsVersioned($user);
-    $component = Livewire::test(Index::class)->assertOk()->assertSee('data-testid="work-board"', false);
+    $component = Livewire::test(Index::class)->assertOk()->assertSeeHtml('data-testid="work-board"');
     config(['capstan.features.work' => false]);
     Feature::flushCache();
     $component->call('$refresh')->assertNotFound();
