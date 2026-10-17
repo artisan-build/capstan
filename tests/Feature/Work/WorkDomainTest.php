@@ -40,7 +40,7 @@ function workDomainSpoke(): Spoke
 test('all work records use uuid version 7 primary keys', function (): void {
     $task = workDomainTask();
     $brief = resolve(BriefRevisionService::class)->append($task, 'Test-created brief', 'author@test');
-    $item = $task->items()->create(['role' => WorkItem::ROLE_ORCHESTRATOR]);
+    $item = $task->items()->create(['role' => 'builder']);
     $spoke = workDomainSpoke();
     $claimedAt = CarbonImmutable::now();
     $item = resolve(WorkItemStateService::class)->claim(

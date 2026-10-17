@@ -224,7 +224,7 @@ test('work off commands no op and work schedules run every minute without overla
     $this->artisan('work:failover-sweep')->assertSuccessful();
     expect($item->fresh()->state)->toBe(WorkItemState::Routed)->and($item->fresh()->attempts)->toBe(0);
     $events = collect(resolve(Schedule::class)->events())->filter(fn ($event): bool => str_contains($event->command ?? '', 'work:'));
-    expect($events)->toHaveCount(2);
+    expect($events)->toHaveCount(3);
     foreach ($events as $event) {
         expect($event->expression)->toBe('* * * * *')->and($event->withoutOverlapping)->toBeTrue();
     }

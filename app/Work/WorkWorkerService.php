@@ -39,6 +39,7 @@ final class WorkWorkerService
             abort_if($item === null, 409, 'claim lost');
             abort_if($item->state === WorkItemState::Cancelled || $item->workTask->cancelled_at !== null, 410, 'cancelled');
             $afterIdentified?->__invoke($item);
+            resolve(WorkOrchestrationLock::class)->tasks($item->work_task_id);
             $updated = $this->activeQuery()->whereKey($id)->where('fence', $fence)
                 ->where('claimant_spoke_id', $item->claimant_spoke_id)
                 ->where('claimant_actor', $item->claimant_actor)
@@ -82,6 +83,7 @@ final class WorkWorkerService
                 default => null,
             };
             if (in_array($target, [WorkItemState::Acted, WorkItemState::Failed], true)) {
+                abort_if($item->role === WorkItem::ROLE_ORCHESTRATOR && $target === WorkItemState::Acted, 422, 'Orchestrator turns require turn_done.');
                 abort_unless($item->state === WorkItemState::Routed, 422, 'Illegal transition.');
             }
 
@@ -107,7 +109,11 @@ final class WorkWorkerService
             }
             $item->save();
 
-            return $item->milestones()->create(['fence' => $item->fence, 'kind' => $kind, 'payload' => $payload]);
+            $milestone = $item->milestones()->create(['fence' => $item->fence, 'kind' => $kind, 'payload' => $payload]);
+            resolve(WorkEventProjector::class)->terminal($item);
+            resolve(WorkEventProjector::class)->blocked($item, $milestone);
+
+            return $milestone;
         }, $afterIdentified);
     }
 

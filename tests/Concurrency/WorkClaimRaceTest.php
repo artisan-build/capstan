@@ -2,14 +2,18 @@
 
 use App\Enums\WorkItemState;
 use App\Models\WorkItem;
+use App\Models\WorkOrchestratorSeat;
+use App\Models\WorkTask;
 use App\Work\WorkClaimService;
 use App\Work\WorkDrainService;
 use App\Work\WorkItemStateService;
+use App\Work\WorkOrchestrationService;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Sleep;
 use Illuminate\Support\Str;
+use Laravel\Pennant\Feature;
 use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
@@ -522,6 +526,58 @@ test('transition and renew lose atomically when another process reclaims the fen
                     ->and($succeeded[0]['item']->lease_until?->isAfter($newLease))->toBeTrue();
             }
         }
+    } finally {
+        cleanupWorkRaceDatabase($database);
+    }
+});
+
+test('orchestration parent slot serializes competing drains and concurrent circuit breaker projections', function (): void {
+    $database = provisionWorkRaceDatabase();
+    config(['capstan.features.work' => true]);
+    Feature::flushCache();
+
+    try {
+        $seed = seedWorkRaceQueue(1);
+        // No initial items: ten source transactions compete to create and claim the turn.
+        DB::table('work_items')->delete();
+        $results = runWorkClaimProcesses('orchestration', $seed['team_id'], $seed['workers'], array_fill(0, 10, 25), $database['connection']);
+        $ids = array_merge(...$results);
+        expect($ids)->toHaveCount(1)->and(array_unique($ids))->toHaveCount(1)
+            ->and(DB::table('work_items')->whereIn('state', ['claimed', 'delivered', 'routed'])->count())->toBe(1)
+            ->and(DB::table('work_orchestration_events')->count())->toBe(10)
+            ->and(DB::table('work_orchestrator_seats')->count())->toBe(1)
+            ->and(DB::table('work_orchestrator_seats')->value('active_item_id'))->toBe($ids[0]);
+
+        // Isolate a second parent at its completed-turn limit. Concurrent facts must
+        // create exactly one addressed human item, and none of the drains may claim it.
+        $budget = seedWorkRaceQueue(1);
+        $parent = WorkTask::query()->where('team_id', $budget['team_id'])->sole();
+        $parent->items()->delete();
+        WorkOrchestratorSeat::query()->create(['work_task_id' => $parent->id, 'turns_completed' => 1]);
+        $budgetResults = runWorkClaimProcesses('orchestration-budget', $budget['team_id'], $budget['workers'], array_fill(0, 10, 25), $database['connection']);
+        expect(array_merge(...$budgetResults))->toBe([])
+            ->and($parent->items()->where('role', 'human')->count())->toBe(1)
+            ->and($parent->items()->where('role', 'human')->sole()->addressed_actor)->toBe('race-test')
+            ->and(DB::table('work_escalations')->where('work_task_id', $parent->id)->count())->toBe(1)
+            ->and(DB::table('work_orchestration_events')->where('work_task_id', $parent->id)->count())->toBe(10);
+
+        $childBudget = seedWorkRaceQueue(1);
+        $childParent = WorkTask::query()->where('team_id', $childBudget['team_id'])->sole();
+        $childParent->items()->delete();
+        $child = WorkTask::query()->create([
+            'team_id' => $childBudget['team_id'], 'parent_task_id' => $childParent->id,
+            'title' => 'Concurrent child accounting', 'required_capabilities' => ['php'],
+            'timebox_minutes' => 30, 'creator_actor' => 'race-test',
+        ]);
+        resolve(WorkOrchestrationService::class)->event($childParent, 'start', 'test_fact');
+        $owner = $childBudget['workers'][0];
+        $turn = resolve(WorkClaimService::class)->claim($childBudget['team_id'], $owner['actor'], $owner['spoke'], ['orchestrator'], ['php'], 1, CarbonImmutable::parse('2026-10-17 16:00:00 UTC'), 300)[0];
+        runWorkClaimProcesses('orchestration-child-budget', $childBudget['team_id'], $childBudget['workers'], array_fill(0, 10, 25), $database['connection']);
+        expect($child->items()->count())->toBe(1)
+            ->and($turn->fresh()->state)->toBe(WorkItemState::Cancelled)
+            ->and(DB::table('work_escalations')->where('work_task_id', $childParent->id)->count())->toBe(1)
+            ->and($childParent->items()->where('role', 'human')->count())->toBe(1)
+            ->and(DB::table('work_orchestrator_seats')->where('work_task_id', $childParent->id)->value('children_created'))->toBe(1);
     } finally {
         cleanupWorkRaceDatabase($database);
     }

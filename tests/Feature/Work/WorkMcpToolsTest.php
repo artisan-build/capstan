@@ -7,6 +7,7 @@ use App\Mcp\WriteFaultInjector;
 use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkBriefRevision;
+use App\Models\WorkEscalation;
 use App\Models\WorkItem;
 use App\Models\WorkSteer;
 use App\Models\WorkTask;
@@ -159,6 +160,17 @@ test('device pins require explicit failover and unpinned work follows team defau
         }
     }
 });
+
+test('MCP queue refuses reserved roles on repeated requests without item effects', function (string $role): void {
+    $token = workMcpToken(capstanUser(['role' => 'owner']));
+    $team = workMcpTeam();
+    $task = workMcpCreate($team, $token)['task'];
+    foreach (['first', 'second', 'first'] as $key) {
+        $result = workMcpResult('queue_item', ['team_id' => $team->id, 'task_id' => $task['id'], 'role' => $role, 'idempotency_key' => $key], $token);
+        expect($result)->toBe(['outcome' => 'refused', 'reason' => 'reserved_role']);
+        expect(WorkItem::query()->count())->toBe(0)->and(WorkEscalation::query()->count())->toBe(0);
+    }
+})->with(['orchestrator', 'human']);
 
 test('leaf writes replay once including after accepted settlement failure and publish exact success schemas', function (): void {
     $token = workMcpToken(capstanUser(['role' => 'owner']));

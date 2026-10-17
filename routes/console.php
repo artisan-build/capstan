@@ -1,5 +1,7 @@
 <?php
 
+use App\Work\WorkOrchestrationService;
+use App\Work\WorkSeatService;
 use App\Work\WorkSweepService;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Inspiring;
@@ -21,3 +23,10 @@ Artisan::command('work:failover-sweep', function (WorkSweepService $sweeps): voi
 });
 Schedule::command('work:liveness-sweep')->everyMinute()->withoutOverlapping(5);
 Schedule::command('work:failover-sweep')->everyMinute()->withoutOverlapping(5);
+
+Artisan::command('work:orchestration-sweep', function (WorkOrchestrationService $engine, WorkSeatService $seats): void {
+    $now = CarbonImmutable::now();
+    $engine->dueWakes($now);
+    $seats->sweep($now);
+});
+Schedule::command('work:orchestration-sweep')->everyMinute()->withoutOverlapping(5);
