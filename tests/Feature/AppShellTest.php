@@ -147,9 +147,9 @@ test('authenticated HTML routes keep the brand sidebar and current section', fun
     foreach ($routes as $label => [$url, $section]) {
         $response = $this->get($url);
 
-        expect($response->getStatusCode(), $label)->toBeLessThan(500);
+        expect($response->getStatusCode())->toBeLessThan(500);
         expectAuthenticatedShell($response->content(), $label === 'page viewer' || $label === 'page version' ? $proof : 'data-testid="app-shell-content"');
-        expect(currentShellSection($response->content()), $label)->toBe($section);
+        expect(currentShellSection($response->content()))->toBe($section);
     }
 });
 
