@@ -337,7 +337,7 @@ test('every Work tool rejects non-admitted or non-manager callers without effect
         $user->forceFill($condition === 'member' ? ['role' => 'member'] : ['status' => 'inactive'])->save();
     }
     $writes = DB::table('mcp_write_claims')->count();
-    foreach (['create_task', 'revise_brief', 'queue_item', 'cancel_item', 'list_work', 'get_task', 'steer', 'cancel_task', 'take_seat', 'release_seat', 'list_escalations', 'answer_escalation', 'orchestrate'] as $tool) {
+    foreach (['create_task', 'revise_brief', 'queue_item', 'cancel_item', 'list_work', 'get_task', 'steer', 'cancel_task', 'take_seat', 'release_seat', 'list_escalations', 'answer_escalation', 'orchestrate', 'get_team_work_policy', 'set_team_work_policy'] as $tool) {
         $args = ['team_id' => $team->id, 'task_id' => $task['id'], 'idempotency_key' => 'denied-'.$tool];
         $args = match ($tool) {
             'create_task' => ['team_id' => $team->id, 'title' => 'Denied', 'brief' => 'Denied', 'idempotency_key' => 'denied'],
@@ -345,6 +345,8 @@ test('every Work tool rejects non-admitted or non-manager callers without effect
             'take_seat' => ['team_id' => $team->id, 'task_id' => $task['id'], 'session_ref' => 'denied', 'idempotency_key' => 'denied'],
             'release_seat' => ['team_id' => $team->id, 'task_id' => $task['id'], 'seat_fence' => 1, 'idempotency_key' => 'denied'],
             'list_escalations' => ['team_id' => $team->id],
+            'get_team_work_policy' => ['team_id' => $team->id],
+            'set_team_work_policy' => ['team_id' => $team->id, 'pool_work' => true, 'idempotency_key' => 'denied'],
             'answer_escalation' => ['team_id' => $team->id, 'escalation_id' => (string) Str::uuid7(), 'answer' => 'Denied', 'idempotency_key' => 'denied'],
             'orchestrate' => ['team_id' => $team->id, 'task_id' => $task['id'], 'seat_fence' => 1, 'session_ref' => 'denied', 'action' => 'finish', 'input' => ['state' => 'acted'], 'idempotency_key' => 'denied'],
             'revise_brief' => $args + ['brief' => 'Denied'], 'queue_item' => $args + ['role' => 'builder'],
@@ -355,7 +357,8 @@ test('every Work tool rejects non-admitted or non-manager callers without effect
         expect($response->json('result.structuredContent'))->toBeNull();
         expect($response->status() !== 200 || $response->json('result.isError') === true)->toBeTrue();
     }
-    expect(DB::table('mcp_write_claims')->count())->toBe($writes)->and(WorkTask::query()->count())->toBe(1);
+    expect(DB::table('mcp_write_claims')->count())->toBe($writes)->and(WorkTask::query()->count())->toBe(1)
+        ->and($team->fresh()->pool_work)->toBeFalse();
 })->with(['member', 'inactive', 'offboarded', 'missing']);
 
 test('Work OFF errors every new tool without a write and leaves existing tool definitions unchanged', function (): void {
@@ -364,7 +367,7 @@ test('Work OFF errors every new tool without a write and leaves existing tool de
     config(['capstan.features.work' => false]);
     Feature::flushCache();
     expect(workMcpList($token))->toBe($on);
-    foreach (['create_task', 'revise_brief', 'queue_item', 'cancel_item', 'list_work', 'get_task', 'steer', 'cancel_task', 'take_seat', 'release_seat', 'list_escalations', 'answer_escalation', 'orchestrate'] as $tool) {
+    foreach (['create_task', 'revise_brief', 'queue_item', 'cancel_item', 'list_work', 'get_task', 'steer', 'cancel_task', 'take_seat', 'release_seat', 'list_escalations', 'answer_escalation', 'orchestrate', 'get_team_work_policy', 'set_team_work_policy'] as $tool) {
         workMcpCall($tool, (object) [], $token)->assertOk()
             ->assertJsonPath('result.isError', true)->assertJsonPath('result.content.0.text', 'Work is unavailable.');
     }

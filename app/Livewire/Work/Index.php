@@ -3,13 +3,17 @@
 namespace App\Livewire\Work;
 
 use App\Features\Work;
+use App\Models\Team;
 use App\Models\WorkEscalation;
 use App\Models\WorkItem;
 use App\Models\WorkTask;
+use App\Work\TeamWorkPolicy;
 use App\Work\WorkOrchestrationService;
 use ArtisanBuild\BuiltForCloud\Contracts\IdentityContext;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
+use ArtisanBuild\BuiltForCloud\RolePolicy;
 use ArtisanBuild\BuiltForCloud\User;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\View\View;
 use Illuminate\Support\Str;
 use Laravel\Pennant\Feature;
@@ -33,6 +37,8 @@ class Index extends Component
         $actor = (string) request()->user()->getKey();
 
         return view('livewire.work.index', [
+            'team' => Team::default(),
+            'canManagePoolWork' => RolePolicy::canManageMembers(request()->user()->role),
             'tasks' => WorkTask::query()->orderByDesc('id')->limit(25)
                 ->with([
                     'items' => fn ($query) => $query->orderBy('id')->limit(25),
@@ -67,6 +73,16 @@ class Index extends Component
             abort(404);
         }
         unset($this->answers[$escalationId]);
+    }
+
+    public function setPoolWork(bool $poolWork, TeamWorkPolicy $policy): void
+    {
+        $this->guardAccess();
+        try {
+            $policy->setPoolWork(Team::default(), request()->user(), $poolWork, TeamWorkPolicy::SURFACE_WEB);
+        } catch (AuthorizationException $exception) {
+            $this->addError('poolWork', $exception->getMessage());
+        }
     }
 
     private function guardAccess(): void

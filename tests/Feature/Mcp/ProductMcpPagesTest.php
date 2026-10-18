@@ -112,7 +112,7 @@ test('advertises the four exact page tools through their effect doors', function
     ], ['Authorization' => 'Bearer '.$token])->assertOk()->json('result.tools'))->keyBy('name');
 
     expect($read->keys()->sort()->values()->all())->toBe([
-        'get_brand_kit', 'get_page', 'get_task', 'list_escalations', 'list_layouts', 'list_pages', 'list_work', 'postmaster_messages', 'postmaster_spokes', 'preview_brand_draft',
+        'get_brand_kit', 'get_page', 'get_task', 'get_team_work_policy', 'list_escalations', 'list_layouts', 'list_pages', 'list_work', 'postmaster_messages', 'postmaster_spokes', 'preview_brand_draft',
     ])->and($write->keys()->sort()->values()->all())->toBe([
         'ack_postmaster_messages',
         'answer_escalation',
@@ -124,6 +124,7 @@ test('advertises the four exact page tools through their effect doors', function
         'get_brand_kit',
         'get_page',
         'get_task',
+        'get_team_work_policy',
         'list_escalations',
         'list_layouts',
         'list_pages',
@@ -137,6 +138,7 @@ test('advertises the four exact page tools through their effect doors', function
         'release_seat',
         'revise_brief',
         'send_postmaster_message',
+        'set_team_work_policy',
         'steer',
         'take_seat',
         'update_brand_draft',

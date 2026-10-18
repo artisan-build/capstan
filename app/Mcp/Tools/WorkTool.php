@@ -10,6 +10,7 @@ use App\Mcp\OwnerSubjectResolver;
 use App\Mcp\ToolResponse;
 use App\Models\Spoke;
 use App\Models\Team;
+use App\Work\TeamWorkPolicy;
 use App\Work\WorkRepresentation;
 use App\Work\WorkToolService;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
@@ -49,6 +50,8 @@ abstract class WorkTool extends CapstanTool
             'cancel_item' => ['item_id' => $schema->string()->required()],
             'steer' => ['task_id' => $schema->string()->required(), 'item_id' => $schema->string(), 'content' => $schema->string()->min(1)->max(8000)->required()],
             'list_work' => ['task_id' => $schema->string(), 'state' => $schema->string()->enum(WorkItemState::class), 'limit' => $schema->integer()->min(1)->max(25)->default(25)],
+            'get_team_work_policy' => [],
+            'set_team_work_policy' => ['pool_work' => $schema->boolean()->required()],
             default => ['task_id' => $schema->string()->required()],
         }];
     }
@@ -56,7 +59,14 @@ abstract class WorkTool extends CapstanTool
     public function outputSchema(JsonSchema $schema): array
     {
         $representation = new WorkRepresentation;
+        $policy = $schema->object([
+            'team_id' => $schema->integer()->required(),
+            'team_name' => $schema->string()->required(),
+            'pool_work' => $schema->boolean()->required(),
+        ])->withoutAdditionalProperties();
         $properties = match ($this->name()) {
+            'get_team_work_policy' => ['policy' => $policy->required()],
+            'set_team_work_policy' => ['policy' => $policy, 'changed' => $schema->boolean()],
             'create_task' => ['task' => $representation->schema($schema, 'task'), 'revision' => $representation->schema($schema, 'revision')],
             'revise_brief' => ['revision' => $representation->schema($schema, 'revision')],
             'queue_item', 'cancel_item' => ['item' => $representation->schema($schema, 'item')],
@@ -86,7 +96,7 @@ abstract class WorkTool extends CapstanTool
         return $properties;
     }
 
-    public function handle(Request $request, OwnerSubjectResolver $owners, DurableWriteCoordinator $writes, WorkToolService $work): Response|ResponseFactory
+    public function handle(Request $request, OwnerSubjectResolver $owners, DurableWriteCoordinator $writes, WorkToolService $work, TeamWorkPolicy $policy): Response|ResponseFactory
     {
         // Feature-off calls, even malformed ones, must not resolve principals or touch Work data.
         if (! Feature::active(Work::class)) {
@@ -115,6 +125,7 @@ abstract class WorkTool extends CapstanTool
                 'role' => ['required', 'string', 'min:1', 'max:64'],
                 'task_id', 'item_id' => [($field === 'item_id' && $this->name() === 'steer') || $this->name() === 'list_work' ? 'sometimes' : 'required', 'required', 'string', 'uuid'],
                 'failover' => ['sometimes', 'required', 'boolean'],
+                'pool_work' => ['required', 'boolean'],
                 'user_actor_address' => ['sometimes', 'required', 'string', 'regex:/\A[1-9][0-9]{0,18}\z/D'],
                 'timebox_minutes' => ['sometimes', 'required', 'integer', 'min:1', 'max:1440'],
                 'required_capabilities' => ['sometimes', 'array', 'list', 'max:25'],
@@ -155,7 +166,12 @@ abstract class WorkTool extends CapstanTool
             $result = $writes->run(
                 owner: $owner, tool: $this->name(), idempotencyKey: $input['idempotency_key'],
                 intent: $input, targetType: 'work',
-                operation: function () use ($work, $input, $team, $owner): array {
+                operation: function () use ($work, $policy, $input, $team, $owner, $user): array {
+                    if ($this->name() === 'set_team_work_policy') {
+                        $changed = $policy->setPoolWork($team, $user, $input['pool_work'], TeamWorkPolicy::SURFACE_MCP);
+
+                        return ['policy' => $policy->present($team), 'changed' => $changed];
+                    }
                     if ($this->name() === 'create_task') {
                         $input += ['failover' => (bool) $team->default_failover, 'required_capabilities' => [], 'timebox_minutes' => 30];
                         if (! $team->pool_work) {
@@ -166,6 +182,8 @@ abstract class WorkTool extends CapstanTool
                     return $work->write($this->name(), $input, $owner->actorId);
                 },
             );
+        } elseif ($this->name() === 'get_team_work_policy') {
+            $result = ['policy' => $policy->present($team)];
         } else {
             try {
                 $result = $work->read($this->name(), $input);
@@ -186,6 +204,6 @@ abstract class WorkTool extends CapstanTool
 
     private function isWrite(): bool
     {
-        return ! in_array($this->name(), ['list_work', 'get_task'], true);
+        return ! in_array($this->name(), ['list_work', 'get_task', 'get_team_work_policy'], true);
     }
 }
