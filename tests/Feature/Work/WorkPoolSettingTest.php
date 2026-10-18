@@ -146,7 +146,8 @@ test('managers get an operable toggle that names the team it changes', function 
     @$dom->loadHTML($html);
     $xpath = new DOMXPath($dom);
     $section = $xpath->query('//*[@data-testid="work-pool-setting-off"]')->item(0);
-    expect($section->textContent)->toContain($team->name);
+    expect($section)->toBeInstanceOf(DOMElement::class)
+        ->and($section->textContent)->toContain($team->name);
     $toggle = $xpath->query('.//*[@data-testid="work-pool-setting-toggle"]', $section)->item(0);
     expect($toggle->hasAttribute('disabled'))->toBeFalse()
         ->and($toggle->getAttribute('wire:click'))->toBe('setPoolWork(true)');
