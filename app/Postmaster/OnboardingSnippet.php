@@ -225,6 +225,13 @@ PHP;
             $variable.'="$(command -v '.$command.' 2>/dev/null || true)"',
             '[ -n "$'.$variable.'" ] || { printf \'%s\n\' '.
                 $this->quote(__(':command is required.', ['command' => $command])).' >&2; exit 1; }',
+            'case "$'.$variable.'" in',
+            '    /*) ;;',
+            '    */*) CAPSTAN_EXECUTABLE_DIRECTORY="$(CDPATH= cd "${'.$variable.'%/*}" 2>/dev/null && pwd -P)" || CAPSTAN_EXECUTABLE_DIRECTORY=\'\'; '.
+                'if [ -n "$CAPSTAN_EXECUTABLE_DIRECTORY" ]; then '.$variable.'="$CAPSTAN_EXECUTABLE_DIRECTORY/${'.$variable.'##*/}"; else '.$variable.'=\'\'; fi ;;',
+            '    *) '.$variable.'=\'\' ;;',
+            'esac',
+            'unset CAPSTAN_EXECUTABLE_DIRECTORY',
             '[ -f "$'.$variable.'" ] && [ -x "$'.$variable.'" ] || { printf \'%s\n\' '.
                 $this->quote(__(':command must resolve to an executable file.', ['command' => $command])).' >&2; exit 1; }',
             '"$'.$variable.'" '.$versionFlag.' >/dev/null 2>&1 || { printf \'%s\n\' '.

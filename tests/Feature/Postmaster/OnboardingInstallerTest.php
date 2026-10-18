@@ -123,19 +123,24 @@ test('device polling sleeps for the greatest current returned and Retry-After in
     'Retry-After wins' => [5, 7, 11, 11],
 ]);
 
-test('the generated installer completes approval, installs fake cron, and performs its first probe poll', function (): void {
+test('the generated installer pins relative executable paths before cron runs from another directory', function (): void {
     $snippet = installerSnippet($this);
     $user = User::query()->sole();
     $directory = sys_get_temp_dir().'/capstan-installer-'.bin2hex(random_bytes(6));
     $bin = $directory.'/bin';
-    $phpBin = $directory.'/php bin';
+    $installDirectory = $directory.'/install work';
+    $cronDirectory = $directory.'/cron work';
+    $relativeTools = 'relative tools';
+    $tools = $installDirectory.'/'.$relativeTools;
     $home = $directory.'/home';
     $crontab = $directory.'/crontab';
     $pollPayload = $directory.'/poll-payload.json';
     File::makeDirectory($bin, 0700, true);
-    File::makeDirectory($phpBin, 0700, true);
+    File::makeDirectory($tools, 0700, true);
+    $absoluteTools = (string) realpath($tools);
+    File::makeDirectory($cronDirectory, 0700, true);
     File::makeDirectory($home, 0700, true);
-    symlink(PHP_BINARY, $phpBin.'/php');
+    symlink(PHP_BINARY, $tools.'/php');
 
     File::put($bin.'/uname', "#!/bin/sh\nprintf '%s\\n' Darwin\n");
     File::put($bin.'/scutil', "#!/bin/sh\nprintf '%s\\n' \"Ed's Test Mac\"\n");
@@ -150,7 +155,7 @@ if [ "${1:-}" = "-l" ]; then
 fi
 cp "$1" "$CAPSTAN_TEST_CRONTAB"
 SH);
-    File::put($bin.'/curl', str_replace('__POLL_PAYLOAD__', escapeshellarg($pollPayload), <<<'SH'
+    File::put($tools.'/curl', str_replace('__POLL_PAYLOAD__', escapeshellarg($pollPayload), <<<'SH'
 #!/bin/sh
 set -eu
 if [ "${1:-}" = '--version' ]; then
@@ -172,14 +177,15 @@ else
     printf '%s' '{"probe_challenge":{"probe_id":"01ARZ3NDEKTSV4RRFFQ69G5FAA","nonce":"installer-nonce"}}'
 fi
 SH));
-    foreach (['uname', 'scutil', 'hostname', 'open', 'crontab', 'curl'] as $command) {
+    foreach (['uname', 'scutil', 'hostname', 'open', 'crontab'] as $command) {
         chmod($bin.'/'.$command, 0700);
     }
+    chmod($tools.'/curl', 0700);
 
-    $process = new Process(['/bin/sh', '-c', $snippet], null, [
+    $process = new Process(['/bin/sh', '-c', $snippet], $installDirectory, [
         'CAPSTAN_TEST_CRONTAB' => $crontab,
         'HOME' => $home,
-        'PATH' => $bin.':'.$phpBin.':/usr/bin:/bin',
+        'PATH' => $relativeTools.':'.$bin.':/usr/bin:/bin',
     ]);
 
     try {
@@ -193,7 +199,7 @@ SH));
             'PATH=/usr/bin:/bin',
             'sh',
             $install.'/poll.sh',
-        ]);
+        ], $cronDirectory);
         $cronProcess->run();
 
         expect($process->isSuccessful())->toBeTrue($process->getErrorOutput())
@@ -203,8 +209,8 @@ SH));
             ->and(fileperms($install.'/token') & 0777)->toBe(0600)
             ->and(fileperms($install.'/actor-id') & 0777)->toBe(0600)
             ->and(fileperms($install.'/poll.sh') & 0777)->toBe(0700)
-            ->and(File::get($install.'/poll.sh'))->toContain('CAPSTAN_PHP='.escapeshellarg($phpBin.'/php'))
-            ->and(File::get($install.'/poll.sh'))->toContain('CAPSTAN_CURL='.escapeshellarg($bin.'/curl'))
+            ->and(File::get($install.'/poll.sh'))->toContain('CAPSTAN_PHP='.escapeshellarg($absoluteTools.'/php'))
+            ->and(File::get($install.'/poll.sh'))->toContain('CAPSTAN_CURL='.escapeshellarg($absoluteTools.'/curl'))
             ->and(File::get($crontab))->toContain('# capstan-postmaster:'.INSTALLER_SERVER_ID)
             ->and($initialPayload['presence'])->toBe([
                 'ready_inboxes' => [],
@@ -224,12 +230,16 @@ SH));
     }
 });
 
-test('the generated installer refuses a php shell function', function (): void {
+test('the generated installer refuses a php shell function even beside a same-named executable', function (): void {
     $snippet = "php() { :; }\n".installerSnippet($this);
     $directory = sys_get_temp_dir().'/capstan-installer-function-'.bin2hex(random_bytes(6));
     $home = $directory.'/home';
+    $workingDirectory = $directory.'/work';
     File::makeDirectory($home, 0700, true);
-    $process = new Process(['/bin/sh', '-c', $snippet], null, [
+    File::makeDirectory($workingDirectory, 0700, true);
+    File::put($workingDirectory.'/php', "#!/bin/sh\nexit 0\n");
+    chmod($workingDirectory.'/php', 0700);
+    $process = new Process(['/bin/sh', '-c', $snippet], $workingDirectory, [
         'HOME' => $home,
         'PATH' => dirname(PHP_BINARY).':/usr/bin:/bin',
     ]);
