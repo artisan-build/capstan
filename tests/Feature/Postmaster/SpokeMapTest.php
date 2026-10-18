@@ -64,8 +64,15 @@ test('the authenticated map page renders registered spoke data', function (): vo
         ->assertOk()
         ->assertSee($spoke->name)
         ->assertSeeHtml('wire:poll.30s')
+        ->assertSeeHtml('data-testid="postmaster-onboarding-row"')
         ->assertSeeHtml('data-status="green"')
         ->assertSeeHtml('data-inbox-count="2"');
+
+    $document = new DOMDocument;
+    @$document->loadHTML($this->get(route('postmaster.map'))->content());
+    $row = (new DOMXPath($document))->query('//*[@data-testid="postmaster-onboarding-row"]')->item(0);
+    expect($row)->not->toBeNull()
+        ->and((new DOMXPath($document))->query('.//button', $row)->length)->toBe(1);
 });
 
 test('map status combines poll recency and probe state', function (): void {

@@ -146,10 +146,33 @@ test('content route refuses app host and viewer uses opaque-origin sandbox ifram
     $response = $this->get($shareUrl)
         ->assertOk()
         ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive')
+        ->assertSee('data-testid="artifact-viewer"', false)
         ->assertSee('sandbox="allow-scripts"', false)
+        ->assertSee('data-testid="app-shell"', false)
+        ->assertSee('data-testid="app-shell-brand"', false)
+        ->assertDontSee('data-testid="app-shell-sidebar"', false)
         ->assertDontSee('allow-same-origin', false);
 
-    expect($response->content())->toContain('https://artifacts.capstan.test/artifacts/'.$artifact->id.'/content');
+    expect(substr_count($response->content(), 'data-testid="app-shell"'))->toBe(1)
+        ->and(substr_count($response->content(), 'data-testid="app-shell-brand"'))->toBe(1)
+        ->and($response->content())->toContain('https://artifacts.capstan.test/artifacts/'.$artifact->id.'/content');
+
+    $authenticated = $this->actingAsVersioned(capstanUser())
+        ->get($shareUrl)
+        ->assertOk()
+        ->assertSee('data-testid="artifact-viewer"', false)
+        ->assertSee('data-testid="app-shell-sidebar"', false)
+        ->assertSee('sandbox="allow-scripts"', false)
+        ->assertDontSee('allow-same-origin', false);
+    expect(substr_count($authenticated->content(), 'data-testid="app-shell"'))->toBe(1)
+        ->and(substr_count($authenticated->content(), 'data-testid="app-shell-sidebar"'))->toBe(1)
+        ->and($authenticated->content())->toContain('https://artifacts.capstan.test/artifacts/'.$artifact->id.'/content');
+    $document = new DOMDocument;
+    @$document->loadHTML($authenticated->content());
+    $current = (new DOMXPath($document))->query('//a[@aria-current="page"]');
+    expect($current->length)->toBe(1)
+        ->and(trim($current->item(0)?->textContent ?? ''))->toBe('Pages')
+        ->and($current->item(0)?->getAttribute('data-testid'))->toBe('pages-navigation');
 });
 
 test('robots txt disallows artifact paths', function (): void {

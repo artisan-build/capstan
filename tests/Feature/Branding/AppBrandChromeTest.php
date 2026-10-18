@@ -134,7 +134,8 @@ function appBrandBuiltForCloudShell(object $test, User $owner): array
         ->assertSee($invitation->invitation->email)->getContent();
 
     foreach ($pages as $page) {
-        expect($page)->toContain('data-testid="bfc-layout"', 'data-testid="bfc-header-scalpels"', 'img/scalpels-wordmark.webp', 'bfc.css?v=');
+        expect($page)->toContain('data-testid="app-shell"', 'data-testid="app-shell-brand"', 'img/scalpels-wordmark.webp', 'bfc.css?v=')
+            ->not->toContain('data-testid="app-shell-sidebar"');
     }
 
     return $pages;
@@ -174,8 +175,8 @@ test('without an applied kit app chrome and mail fall back to the configured nam
     $chrome = appBrandChrome($this, $owner);
 
     foreach ([$chrome['dashboard'], $chrome['header'], ...$chrome['bfc']] as $html) {
-        expect($html)->toContain('viewBox="0 0 40 42"', e($name));
-        expectAbsent($html, 'data-testid="app-brand-icon"', 'data-testid="app-brand-accent"', 'data-testid="bfc-brand-accent"', '/brand-assets/', 'scalpels.app/img/products', $defaultAccent);
+        expect($html)->toContain('data-testid="capstan-app-icon"', e($name), 'scalpels.app/img/products/transparent/capstan.png');
+        expectAbsent($html, 'data-testid="app-brand-icon"', 'data-testid="app-brand-accent"', 'data-testid="app-shell-accent"', 'data-testid="bfc-brand-accent"', '/brand-assets/', $defaultAccent);
     }
     expect($chrome['dashboard'])->toContain('<title>'."\n    Dashboard - ".e($name));
     foreach ($chrome['bfc'] as $html) {
@@ -229,18 +230,20 @@ test('after apply the app chrome and Built for Cloud auth shell carry the applie
         expectAbsent($html, 'viewBox="0 0 40 42"', e((string) config('app.name')), $assets['logo_light'], $assets['logo_dark'], $draftMarkers['name'], 'https://app.chrome-brand.test/brand-assets/');
         expectNoBrandLeak($html, $markers);
         expectNoBrandLeak($html, $draftMarkers);
-        $shell = str_contains($html, 'data-testid="bfc-layout"');
-        $accent = Str::between($html, $shell ? '<style data-testid="bfc-brand-accent">' : '<style data-testid="app-brand-accent">', '</style>');
+        $accent = Str::between($html, '<style data-testid="app-brand-accent">', '</style>');
+        $shellAccent = Str::between($html, '<style data-testid="app-shell-accent">', '</style>');
         expect($accent)->toContain(
-            ($shell ? '.bfc-body' : ':root').' { --color-accent: '.$markers['light'].'; --color-accent-content: '.$markers['light'].';',
-            ($shell ? '.dark .bfc-body' : '.dark').' { --color-accent: '.$markers['dark'].'; --color-accent-content: '.$markers['dark'].';',
+            ':root { --color-accent: '.$markers['light'].'; --color-accent-content: '.$markers['light'].';',
+            '.dark { --color-accent: '.$markers['dark'].'; --color-accent-content: '.$markers['dark'].';',
+        )->and($shellAccent)->toContain(
+            '.bfc-body { --color-accent: '.$markers['light'].' !important;',
+            '.dark .bfc-body { --color-accent: '.$markers['dark'].' !important;',
         );
         expectAbsent($accent, $draftMarkers['light'], $draftMarkers['dark']);
-        if ($shell) {
-            expect($accent)
-                ->toMatch('/\.bfc-body\s+\.bfc-auth\s+button\[type="submit"\]\s*\{\s*background:\s*var\(--color-accent\);\s*border-color:\s*var\(--color-accent\);\s*color:\s*var\(--color-accent-foreground\);\s*\}/')
-                ->toMatch('/\.bfc-body\s+\.bfc-link\s*\{\s*color:\s*var\(--color-accent-content\);\s*\}/');
-        }
+        expectAbsent($shellAccent, $draftMarkers['light'], $draftMarkers['dark']);
+        expect($html)
+            ->toMatch('/\.bfc-body\s+\.bfc-auth\s+button\[type="submit"\]\s*\{\s*background:\s*var\(--color-accent\);\s*border-color:\s*var\(--color-accent\);\s*color:\s*var\(--color-accent-foreground\);\s*\}/')
+            ->toMatch('/\.bfc-body\s+\.bfc-link\s*\{\s*color:\s*var\(--color-accent-content\);\s*\}/');
     }
     expect($chrome['dashboard'])->toContain('Dashboard - '.e($markers['name']));
     foreach ($chrome['bfc'] as $html) {
@@ -337,10 +340,10 @@ test('feature-off or an unconfigured render origin falls back without exposing a
     $mails = appBrandMails($owner);
     foreach ([$chrome['dashboard'], $chrome['header'], ...$chrome['bfc'], $mails['share_html'], $mails['invite_html'], $mails['share_text'], $mails['invite_text']] as $html) {
         expect($html)->toContain(e((string) config('app.name')));
-        expectAbsent($html, $markers['name'], $markers['light'], '/brand-assets/', 'data-testid="app-brand-icon"', 'data-testid="app-brand-accent"', 'data-testid="bfc-brand-accent"', 'scalpels.app/img/products', ...array_values($assets));
+        expectAbsent($html, $markers['name'], $markers['light'], '/brand-assets/', 'data-testid="app-brand-icon"', 'data-testid="app-brand-accent"', 'data-testid="app-shell-accent"', 'data-testid="bfc-brand-accent"', ...array_values($assets));
     }
     foreach ([$chrome['dashboard'], $chrome['header'], ...$chrome['bfc']] as $html) {
-        expect($html)->toContain('viewBox="0 0 40 42"');
+        expect($html)->toContain('data-testid="capstan-app-icon"', 'scalpels.app/img/products/transparent/capstan.png');
     }
 })->with([
     'feature off' => [['capstan.features.artifacts' => false]],

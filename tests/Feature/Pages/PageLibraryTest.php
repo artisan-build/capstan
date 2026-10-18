@@ -261,13 +261,13 @@ test('pages navigation is feature gated and current in sidebar and header varian
         ->assertSee('href="'.route('pages.index').'"', false);
     $sidebarPagesTags = pagesNavigationTags($sidebar->content());
     expect($sidebarPagesTags)->toHaveCount(1)
-        ->and($sidebarPagesTags[0])->toContain('data-current="data-current"');
+        ->and($sidebarPagesTags[0])->toContain('aria-current="page"');
 
     $dashboardPagesTags = pagesNavigationTags(
         $this->actingAsVersioned($user)->get(route('bfc.dashboard'))->assertOk()->content(),
     );
     expect($dashboardPagesTags)->toHaveCount(1)
-        ->and($dashboardPagesTags[0])->not->toContain('data-current="data-current"');
+        ->and($dashboardPagesTags[0])->not->toContain('aria-current="page"');
 
     Route::get('/_tests/pages-header', fn () => view('layouts.app.header', [
         'slot' => new HtmlString('<main data-testid="header-test-body"></main>'),
@@ -276,9 +276,9 @@ test('pages navigation is feature gated and current in sidebar and header varian
         ->assertOk()
         ->assertSee('data-testid="header-test-body"', false);
     $headerPagesTags = pagesNavigationTags($header->content());
-    expect($headerPagesTags)->toHaveCount(2);
+    expect($headerPagesTags)->toHaveCount(1);
     foreach ($headerPagesTags as $tag) {
-        expect($tag)->toContain('data-current="data-current"');
+        expect($tag)->toContain('aria-current="page"');
     }
 
     config(['capstan.features.artifacts' => false]);
@@ -347,6 +347,31 @@ test('owner viewer shows bounded newest-first history and controls while recipie
     expect(substr_count($ownerViewer->content(), 'data-testid="page-version-record"'))->toBe(25)
         ->and(strpos($ownerViewer->content(), 'Version 27'))
         ->toBeLessThan(strpos($ownerViewer->content(), 'Version 26'));
+
+    $versionViewer = $this->actingAsVersioned($owner)
+        ->get(route('pages.versions.show', [
+            'page' => $page,
+            'version' => $page->versions()->oldest('version_number')->firstOrFail(),
+        ]))
+        ->assertOk()
+        ->assertSee($title)
+        ->assertSee('data-testid="page-viewer"', false)
+        ->assertSee('data-testid="page-owner-metadata"', false);
+    foreach ([$ownerViewer, $versionViewer] as $viewer) {
+        $document = new DOMDocument;
+        @$document->loadHTML($viewer->content());
+        $xpath = new DOMXPath($document);
+        $pageViewer = $xpath->query('//*[@data-testid="page-viewer"]')->item(0);
+        expect($pageViewer)->not->toBeNull()
+            ->and($pageViewer?->textContent)->toContain($title);
+        $classes = (array) preg_split('/\s+/', trim($pageViewer?->getAttribute('class') ?? ''));
+        foreach ($xpath->query('.//*[@class]', $pageViewer) as $node) {
+            array_push($classes, ...(array) preg_split('/\s+/', trim($node->getAttribute('class'))));
+        }
+        foreach (['bg-neutral-900', 'bg-neutral-800', 'text-neutral-950', 'text-neutral-300', 'text-neutral-400', 'text-neutral-100', 'border-neutral-800', 'border-neutral-700'] as $legacyClass) {
+            expect($classes)->not->toContain($legacyClass);
+        }
+    }
 
     $this->actingAsVersioned($owner)
         ->get(route('pages.show', ['page' => $page, 'versions_page' => 2]))

@@ -1,19 +1,28 @@
 <section class="w-full space-y-6" wire:poll.30s>
+    <style>
+        .postmaster-onboarding-row { align-items: start; display: grid; gap: .75rem; }
+        .postmaster-onboarding-action { width: 100%; }
+        @media (min-width: 640px) {
+            .postmaster-onboarding-row { grid-template-columns: minmax(0, 1fr) auto; }
+            .postmaster-onboarding-action { width: auto; }
+        }
+    </style>
+
     <div>
         <flux:heading size="xl">{{ __('Postmaster map') }}</flux:heading>
         <flux:subheading>{{ __('Registered CLI installations and their current routing health.') }}</flux:subheading>
     </div>
 
     <section class="space-y-4 rounded-xl border border-zinc-200 bg-zinc-50 p-5 dark:border-zinc-700 dark:bg-zinc-900" data-testid="postmaster-onboarding">
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
+        <div class="postmaster-onboarding-row" data-testid="postmaster-onboarding-row">
+            <div class="min-w-0">
                 <flux:heading size="lg">{{ __('Connect a local agent') }}</flux:heading>
                 <flux:text class="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
                     {{ __('Generate a short-lived package device authorization installer.') }}
                 </flux:text>
             </div>
 
-            <flux:button type="button" size="sm" wire:click="generateOnboardingSnippet" wire:loading.attr="disabled">
+            <flux:button class="postmaster-onboarding-action" type="button" size="sm" wire:click="generateOnboardingSnippet" wire:loading.attr="disabled">
                 {{ $onboardingSnippet === null ? __('Generate installer') : __('Generate another') }}
             </flux:button>
         </div>

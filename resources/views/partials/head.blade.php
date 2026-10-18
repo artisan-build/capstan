@@ -1,5 +1,18 @@
 @inject('appBrand', \App\Support\AppBrand::class)
-@php($brand = $appBrand->current())
+@php
+    $brand = rescue(
+        fn () => $appBrand->current(),
+        new \App\Support\AppBrandValues(
+            displayName: (string) config('app.name', 'Capstan'),
+            accentLight: null,
+            accentDark: null,
+            markUrl: null,
+            logoLightUrl: null,
+            logoDarkUrl: null,
+        ),
+        false,
+    );
+@endphp
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
@@ -7,9 +20,7 @@
     {{ filled($title ?? null) ? $title.' - '.$brand->displayName : $brand->displayName }}
 </title>
 
-<link rel="icon" href="/favicon.ico" sizes="any">
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" href="{{ $brand->iconLightUrl() ?? config('built-for-cloud.manifest.icon') }}">
 
 @fonts
 

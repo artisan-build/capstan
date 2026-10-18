@@ -10,12 +10,9 @@ use Illuminate\Support\Facades\App;
 use Illuminate\Support\Facades\View;
 
 /**
- * Built for Cloud's page shell wearing the applied brand. Configured as
- * built-for-cloud.layout, so every <x-bfc-layout> page (sign-in, invitation,
- * password reset, members, credentials) and full-page Livewire screen gets
- * the applied name, icon and accent. Without an applied kit the shell shows
- * the configured app name and Capstan's built-in mark. The Scalpels wordmark
- * and navigation are the package's, unchanged.
+ * Routes every Built for Cloud page through Capstan's shared application shell.
+ * The shared shell supplies Scalpels chrome, signed-in navigation and the
+ * currently applied brand without changing the package's views.
  */
 class BrandedBuiltForCloudLayout extends Layout
 {
