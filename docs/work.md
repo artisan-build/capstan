@@ -48,7 +48,10 @@ one argument per element. They are never shell strings.
 | `request_timeout_seconds` | Timeout for one HTTP request, greater than 0 and at most 120 seconds. |
 | `role_commands` | Role-to-argv map. Every value is a non-empty JSON list of strings. |
 
-Relative paths are resolved from the config file's directory. The command placeholders are
+Relative paths are resolved from the config file's directory. The examples' `prompt_template`,
+`orchestrator_prompt_template`, and `generic.json`'s `{config_dir}/../harness/stub_worker.py` are relative
+to `drain/examples`, so repoint them to absolute paths when you copy an example out of the repository.
+The `./credentials` and `./var` paths are meant to stay relative to the copied config. The command placeholders are
 `{item_id}`, `{task_id}`, `{brief_url}`, `{milestone_url}`, `{steers_url}`, `{orchestration_url}`,
 `{orchestrate_url}`, `{prompt_file}`, `{links_file}`, `{work_dir}`, `{config_dir}`, `{session_ref}`,
 `{seat_fence}`, and `{prompt}`. Unknown placeholders stop configuration loading. Prefer stdin or
