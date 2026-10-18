@@ -77,5 +77,6 @@ class AppServiceProvider extends ServiceProvider
         );
 
         RateLimiter::for('api', fn (Request $request): Limit => Limit::perMinute(60)->by('actor:'.AuthenticateBoundCredential::actorId($request)));
+        RateLimiter::for('postmaster-install', fn (Request $request): Limit => Limit::perMinute(15)->by((string) $request->ip()));
     }
 }

@@ -80,8 +80,8 @@ cloud deploy -n
 ```
 
 If you turn on Postmaster, open `/postmaster` after the deploy and use **Connect a local agent**. Generate
-the installer, copy its one-line `curl -fsSL '…' | sh` command, and run it on the computer that will poll
-Capstan. The command needs `curl`, `php`, and `crontab`. It prints the verification address and code and
+the installer, copy its one-line `curl -sSL --fail-with-body '…' | sh` command, and run it on the computer
+that will poll Capstan. The command needs `curl`, `php`, and `crontab`. It prints the verification address and code and
 opens that address when the operating system supports it. Approve the code while signed in as the same
 member who generated the installer. The new spoke appears as Pending after its first poll and turns Green
 after its first probe passes.

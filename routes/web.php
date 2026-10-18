@@ -23,7 +23,7 @@ Route::middleware('bfc.auth')->group(function (): void {
 });
 
 Route::get('postmaster/install/{token}', PostmasterInstallController::class)
-    ->middleware([ProtectInstallCapabilityTelemetry::class, 'throttle:15,1'])
+    ->middleware([ProtectInstallCapabilityTelemetry::class, 'throttle:postmaster-install'])
     ->name('postmaster.install');
 
 // The content route lives in routes/render.php on a lean, sessionless stack.

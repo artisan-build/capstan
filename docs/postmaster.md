@@ -182,7 +182,7 @@ a device authorization.
 Generation produces one command:
 
 ```sh
-curl -fsSL 'https://capstan.example/postmaster/install/…' | sh
+curl -sSL --fail-with-body 'https://capstan.example/postmaster/install/…' | sh
 ```
 
 The URL is an unauthenticated, single-use capability. Its 256-bit token is stored only as a SHA-256 hash,

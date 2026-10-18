@@ -2,6 +2,7 @@
 
 namespace App\Postmaster;
 
+use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -15,6 +16,8 @@ final readonly class PendingInstallLinks
     public function issue(Request $request, string $actorId): PendingInstallLink
     {
         return DB::transaction(function () use ($request, $actorId): PendingInstallLink {
+            User::query()->whereKey($actorId)->lockForUpdate()->firstOrFail();
+
             $generated = $this->snippet->generateWithAuthorization($request, $actorId);
             $expiresAt = DB::table('credential_authorizations')
                 ->where('id', $generated->authorizationId)
@@ -49,7 +52,7 @@ final readonly class PendingInstallLinks
             $url = $this->absoluteInstallUrl($token);
 
             return new PendingInstallLink(
-                command: 'curl -fsSL '.escapeshellarg($url).' | sh',
+                command: 'curl -sSL --fail-with-body '.escapeshellarg($url).' | sh',
                 script: $generated->script,
                 expiresAt: CarbonImmutable::parse($expiresAt),
             );
