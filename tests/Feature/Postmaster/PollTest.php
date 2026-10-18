@@ -147,6 +147,48 @@ test('presence replaces the routing table and stamps poll state', function (): v
         ->and(Inbox::query()->where('local_part', 'a')->value('actor_id'))->toBe((string) $user->id);
 });
 
+test('poll device names are sanitized refreshed and never overwrite a custom name', function (): void {
+    $user = capstanUser();
+    $token = spokeToken($user);
+
+    $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => [
+            'ready_inboxes' => [],
+            'device_name' => '  '.str_repeat('x', 80).'  ',
+        ],
+    ])->assertOk();
+
+    $spoke = Spoke::query()->sole();
+    expect($spoke->device_name)->toBe(str_repeat('x', 64));
+    $spoke->forceFill(['name' => 'My custom runner'])->save();
+
+    $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => [
+            'ready_inboxes' => [],
+            'device_name' => "  Work\0station\n  ",
+        ],
+    ])->assertOk();
+    expect($spoke->refresh()->device_name)->toBe('Workstation')
+        ->and($spoke->name)->toBe('My custom runner');
+
+    $hostile = '<script>alert("device")</script>';
+    $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => [], 'device_name' => $hostile],
+    ])->assertOk();
+    expect($spoke->refresh()->device_name)->toBe($hostile)
+        ->and($spoke->name)->toBe('My custom runner');
+
+    foreach (['   ', ['not-a-string']] as $invalid) {
+        $this->withToken($token)->postJson('/api/v1/poll', [
+            'presence' => ['ready_inboxes' => [], 'device_name' => $invalid],
+        ])->assertOk();
+    }
+
+    expect($spoke->refresh()->device_name)->toBe($hostile)
+        ->and($spoke->name)->toBe('My custom runner')
+        ->and(Spoke::query()->count())->toBe(1);
+});
+
 test('sending the same envelope is idempotent', function (): void {
     $user = capstanUser();
     $token = spokeToken($user);

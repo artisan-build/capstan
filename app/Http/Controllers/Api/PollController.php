@@ -96,7 +96,7 @@ class PollController extends Controller
             /** @var array{payload: array{inbound: list<array<string, mixed>>, cursor: string|null, probe_challenge?: array{probe_id: string, nonce: string, algorithm: string}}, failure: array{Spoke, SpokeProbe}|null} $result */
             $result = DB::transaction(function () use ($credential, $actorId, $validation, $envelopes, $serverId, $probeManager, $sender, $acknowledger, $spokes): array {
                 $now = CarbonImmutable::now();
-                $spoke = $spokes->resolve($actorId, $credential->id, $now);
+                $spoke = $spokes->resolve($actorId, $credential->id, $now, deviceName: $validation['device_name']);
                 $readyInboxes = array_values(array_unique($validation['ready_inboxes']));
                 $failedProbe = $probeManager->respond($spoke, $validation['probe_response'], $now);
 
@@ -146,7 +146,7 @@ class PollController extends Controller
     }
 
     /**
-     * @return array{ready_inboxes: list<string>, outbound: list<array<string, mixed>>, acks: list<string>, cursor: string|null, probe_response: array{probe_id: string, digest: string}|null}|JsonResponse
+     * @return array{ready_inboxes: list<string>, device_name: mixed, outbound: list<array<string, mixed>>, acks: list<string>, cursor: string|null, probe_response: array{probe_id: string, digest: string}|null}|JsonResponse
      */
     private function validatePayload(stdClass $payload): array|JsonResponse
     {
@@ -244,6 +244,7 @@ class PollController extends Controller
 
         return [
             'ready_inboxes' => $validated['presence']['ready_inboxes'],
+            'device_name' => $presence instanceof stdClass ? ($presence->device_name ?? null) : null,
             'outbound' => $validated['outbound'],
             'acks' => $validated['acks'],
             'cursor' => $validated['cursor'],

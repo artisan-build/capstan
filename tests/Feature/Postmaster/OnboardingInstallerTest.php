@@ -56,6 +56,8 @@ test('the generated installer is valid shell and protects local credentials and 
         ->toContain('chmod 600 "$CAPSTAN_ACTOR_FILE"')
         ->toContain('chmod 700 "$CAPSTAN_POLL_SCRIPT"')
         ->toContain("'https://capstan.example/bfc/device/token'")
+        ->toContain('scutil --get ComputerName 2>/dev/null')
+        ->toContain('hostname -s 2>/dev/null || hostname 2>/dev/null')
         ->toContain('Authorization: Bearer', 'X-Capstan-Actor-ID', '| curl --config -')
         ->not->toContain((string) config('app.key'))
         ->not->toContain($existing['token']);
@@ -125,10 +127,13 @@ test('the generated installer completes approval, installs fake cron, and perfor
     $bin = $directory.'/bin';
     $home = $directory.'/home';
     $crontab = $directory.'/crontab';
+    $pollPayload = $directory.'/poll-payload.json';
     File::makeDirectory($bin, 0700, true);
     File::makeDirectory($home, 0700, true);
 
-    File::put($bin.'/uname', "#!/bin/sh\nprintf '%s\\n' Test\n");
+    File::put($bin.'/uname', "#!/bin/sh\nprintf '%s\\n' Darwin\n");
+    File::put($bin.'/scutil', "#!/bin/sh\nprintf '%s\\n' \"Ed's Test Mac\"\n");
+    File::put($bin.'/hostname', "#!/bin/sh\nprintf '%s\\n' 'Fresh Test Machine'\n");
     File::put($bin.'/crontab', <<<'SH'
 #!/bin/sh
 set -eu
@@ -145,6 +150,7 @@ headers=''
 previous=''
 for argument in "$@"; do
     if [ "$previous" = '--dump-header' ]; then headers="$argument"; fi
+    if [ "$previous" = '--data' ] && [ "$argument" != '@-' ]; then printf '%s' "$argument" > "$CAPSTAN_TEST_POLL_PAYLOAD"; fi
     previous="$argument"
 done
 cat >/dev/null || true
@@ -155,12 +161,13 @@ else
     printf '%s' '{"probe_challenge":{"probe_id":"01ARZ3NDEKTSV4RRFFQ69G5FAA","nonce":"installer-nonce"}}'
 fi
 SH);
-    foreach (['uname', 'crontab', 'curl'] as $command) {
+    foreach (['uname', 'scutil', 'hostname', 'crontab', 'curl'] as $command) {
         chmod($bin.'/'.$command, 0700);
     }
 
     $process = new Process(['/bin/sh', '-c', $snippet], null, [
         'CAPSTAN_TEST_CRONTAB' => $crontab,
+        'CAPSTAN_TEST_POLL_PAYLOAD' => $pollPayload,
         'HOME' => $home,
         'PATH' => $bin.':'.dirname(PHP_BINARY).':/usr/bin:/bin',
     ]);
@@ -177,6 +184,10 @@ SH);
             ->and(fileperms($install.'/actor-id') & 0777)->toBe(0600)
             ->and(fileperms($install.'/poll.sh') & 0777)->toBe(0700)
             ->and(File::get($crontab))->toContain('# capstan-postmaster:'.INSTALLER_SERVER_ID)
+            ->and(json_decode(File::get($pollPayload), true, flags: JSON_THROW_ON_ERROR)['presence'])->toBe([
+                'ready_inboxes' => [],
+                'device_name' => "Ed's Test Mac",
+            ])
             ->and(json_decode(File::get($install.'/probe-response.json'), true, flags: JSON_THROW_ON_ERROR))->toBe([
                 'probe_id' => '01ARZ3NDEKTSV4RRFFQ69G5FAA',
                 'digest' => hash('sha256', 'installer-nonce'),

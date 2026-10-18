@@ -77,11 +77,45 @@
                                 aria-label="{{ $spoke['status']->label() }}"
                             ></span>
 
-                            <div class="min-w-0">
+                            <div class="min-w-0 flex-1">
                                 <flux:heading size="lg" class="truncate">{{ $spoke['name'] }}</flux:heading>
                                 <flux:text class="text-sm text-zinc-500 dark:text-zinc-400">
                                     {{ __('Owned by :name', ['name' => $spoke['owner_name']]) }}
                                 </flux:text>
+
+                                @if ($spoke['can_rename'])
+                                    @if ($renamingSpokeId === $spoke['id'])
+                                        <form
+                                            class="mt-3 grid gap-2 sm:grid-cols-[minmax(12rem,1fr)_auto_auto]"
+                                            wire:submit="renameSpoke({{ $spoke['id'] }})"
+                                            data-testid="postmaster-spoke-rename-form"
+                                        >
+                                            <flux:input
+                                                wire:model="spokeName"
+                                                maxlength="64"
+                                                aria-label="{{ __('Spoke name') }}"
+                                                placeholder="{{ $spoke['device_name'] ?? __('Spoke name') }}"
+                                            />
+                                            <flux:button type="submit" size="sm">{{ __('Save') }}</flux:button>
+                                            <flux:button type="button" size="sm" variant="ghost" wire:click="cancelRenaming">
+                                                {{ __('Cancel') }}
+                                            </flux:button>
+                                            @error('spokeName')
+                                                <flux:text class="text-sm text-red-600 sm:col-span-3 dark:text-red-400">{{ $message }}</flux:text>
+                                            @enderror
+                                        </form>
+                                    @else
+                                        <flux:button
+                                            class="mt-2"
+                                            type="button"
+                                            size="sm"
+                                            variant="ghost"
+                                            wire:click="beginRenaming({{ $spoke['id'] }})"
+                                        >
+                                            {{ __('Rename') }}
+                                        </flux:button>
+                                    @endif
+                                @endif
                             </div>
                         </div>
 

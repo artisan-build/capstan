@@ -184,7 +184,9 @@ test('keeps the exact read-effect tools on the read door when the write door is 
     foreach (['send_postmaster_message', 'ack_postmaster_messages', 'answer_escalation', 'apply_brand_draft', 'create_artifact_share', 'publish_page', 'release_seat', 'take_seat', 'update_brand_draft', 'update_page', 'upload_brand_asset'] as $excluded) {
         $response = capstanMcpReadCall($excluded, (object) [], $token);
         expect($response->status())->toBeIn([200, 400])
-            ->and($response->getContent())->not->toContain('storage_key', 'signing_key_id', 'APP_KEY');
+            ->and($response->getContent())->not->toContain('storage_key')
+            ->and($response->getContent())->not->toContain('signing_key_id')
+            ->and($response->getContent())->not->toContain('APP_KEY');
         capstanMcpReadError($response);
     }
 
@@ -224,7 +226,7 @@ test('keeps the exact read-effect tools on the read door when the write door is 
 });
 
 test('lists only actor owned spokes and routed actor owned inboxes without credential data', function (): void {
-    $owner = capstanUser();
+    $owner = capstanUser(['name' => 'MCP Owner']);
     $other = capstanUser();
     $token = capstanMcpReadToken($owner);
     $owned = Spoke::query()->create([
@@ -234,6 +236,8 @@ test('lists only actor owned spokes and routed actor owned inboxes without crede
         'last_polled_at' => now(),
         'probe_status' => 'green',
     ]);
+    $deviceName = '<script>alert("tool")</script>';
+    $owned->forceFill(['device_name' => $deviceName])->save();
     $foreign = Spoke::query()->create([
         'actor_id' => (string) $other->id,
         'credential_id' => (string) Str::uuid(),
@@ -249,9 +253,39 @@ test('lists only actor owned spokes and routed actor owned inboxes without crede
     $response = capstanMcpReadCall('postmaster_spokes', ['limit' => 25], $token, str_repeat('i', 254))->assertOk();
     expect($response->json('result.structuredContent.items'))->toHaveCount(1)
         ->and($response->json('result.structuredContent.items.0.name'))->toBe('Owned')
+        ->and($response->json('result.structuredContent.items.0.device_name'))->toBe($deviceName)
+        ->and($response->json('result.structuredContent.items.0.owner_name'))->toBe('MCP Owner')
         ->and($response->json('result.structuredContent.items.0.inboxes'))->toBe(['owned'])
-        ->and($response->getContent())->not->toContain('credential_id', (string) $foreign->credential_id)
+        ->and($response->getContent())->not->toContain('credential_id')
+        ->and($response->getContent())->not->toContain((string) $foreign->credential_id)
         ->and(strlen($response->getContent()))->toBeLessThan(1_048_576);
+});
+
+test('spoke tool uses device fallback and disambiguates duplicate display names', function (): void {
+    $owner = capstanUser(['name' => '', 'email' => 'tool-owner@example.test']);
+    $token = capstanMcpReadToken($owner);
+    $spokes = collect(range(1, 2))->map(function () use ($owner): Spoke {
+        $spoke = Spoke::query()->create([
+            'actor_id' => (string) $owner->id,
+            'credential_id' => (string) Str::uuid(),
+            'name' => null,
+            'last_polled_at' => now(),
+            'probe_status' => 'green',
+        ]);
+        $spoke->forceFill(['device_name' => 'Shared Mac'])->save();
+
+        return $spoke;
+    });
+
+    $items = collect(capstanMcpReadStructured(
+        capstanMcpReadCall('postmaster_spokes', ['limit' => 25], $token),
+    )['items'])->keyBy('id');
+
+    foreach ($spokes as $spoke) {
+        expect($items[$spoke->id]['name'])->toBe("Shared Mac (#{$spoke->id})")
+            ->and($items[$spoke->id]['device_name'])->toBe('Shared Mac')
+            ->and($items[$spoke->id]['owner_name'])->toBe('tool-owner@example.test');
+    }
 });
 
 test('spoke cursors bind the actor and exact query', function (): void {
@@ -453,7 +487,9 @@ test('reads signed message content without acknowledging and hides internal rout
     expect($decoded->result->structuredContent->items[0]->body)->toBeInstanceOf(stdClass::class)
         ->and($decoded->result->structuredContent->items[0]->body->{'0'})->toBe('numeric object key')
         ->and($decoded->result->structuredContent->items[0]->signature)->toBe($envelope->signature)
-        ->and($response->getContent())->not->toContain('signing_key_id', 'to_local_part', 'to_server_id')
+        ->and($response->getContent())->not->toContain('signing_key_id')
+        ->and($response->getContent())->not->toContain('to_local_part')
+        ->and($response->getContent())->not->toContain('to_server_id')
         ->and(strlen($response->getContent()))->toBeLessThan(1_048_576);
 
     $envelope->refresh();
