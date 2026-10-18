@@ -2,10 +2,12 @@
 
 namespace App\Mcp;
 
+use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
-use ArtisanBuild\BuiltForCloud\Console\RequestAssertion;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\Exceptions\DelegatedPrincipalUnsupported;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
+use ArtisanBuild\BuiltForCloud\Exceptions\NoActingPrincipal;
 use ArtisanBuild\BuiltForCloud\ManagedAccountAccess;
 use ArtisanBuild\BuiltForCloud\ManagedAuthConnection;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
@@ -20,19 +22,24 @@ final readonly class OwnerSubjectResolver
 {
     public function __construct(
         private Request $request,
+        private ActingPrincipalResolver $principals,
         private ManagedAccountAccess $managedAccess,
     ) {}
 
     public function resolve(): OwnerSubject
     {
-        $actingPrincipal = RequestAssertion::principal($this->request);
+        try {
+            $actingPrincipal = $this->principals->require($this->request);
+        } catch (DelegatedPrincipalUnsupported|NoActingPrincipal) {
+            throw new UnsupportedMcpPrincipal;
+        }
 
-        if ($actingPrincipal?->delegatedActor instanceof DelegatedActor) {
+        if ($actingPrincipal->delegatedActor instanceof DelegatedActor) {
             return $this->delegatedOwner($actingPrincipal->delegatedActor)
                 ?? throw new UnsupportedMcpPrincipal;
         }
 
-        $principal = ($this->request->getUserResolver())();
+        $principal = $actingPrincipal->principal;
 
         $owner = $principal instanceof Credential
             ? $this->credentialOwner($principal)

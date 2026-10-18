@@ -4,7 +4,6 @@ use App\Auth\CapstanCredentialDeclaration;
 use App\Postmaster\OnboardingSnippet;
 use App\Support\ServerIdentity;
 use ArtisanBuild\BuiltForCloud\User;
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\File;
 use Laravel\Pennant\Feature;
 use Symfony\Component\Process\Process;
@@ -27,7 +26,7 @@ function installerSnippet(object $test): string
 {
     $user = capstanUser();
     $test->actingAs($user);
-    $request = Request::create('/postmaster', 'GET');
+    $request = request();
     $request->setUserResolver(static fn (): User => $user);
     $request->setLaravelSession(resolve('session')->driver());
 
