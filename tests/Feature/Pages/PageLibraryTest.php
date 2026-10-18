@@ -348,6 +348,31 @@ test('owner viewer shows bounded newest-first history and controls while recipie
         ->and(strpos($ownerViewer->content(), 'Version 27'))
         ->toBeLessThan(strpos($ownerViewer->content(), 'Version 26'));
 
+    $versionViewer = $this->actingAsVersioned($owner)
+        ->get(route('pages.versions.show', [
+            'page' => $page,
+            'version' => $page->versions()->oldest('version_number')->firstOrFail(),
+        ]))
+        ->assertOk()
+        ->assertSee($title)
+        ->assertSee('data-testid="page-viewer"', false)
+        ->assertSee('data-testid="page-owner-metadata"', false);
+    foreach ([$ownerViewer, $versionViewer] as $viewer) {
+        $document = new DOMDocument;
+        @$document->loadHTML($viewer->content());
+        $xpath = new DOMXPath($document);
+        $pageViewer = $xpath->query('//*[@data-testid="page-viewer"]')->item(0);
+        expect($pageViewer)->not->toBeNull()
+            ->and($pageViewer?->textContent)->toContain($title);
+        $classes = (array) preg_split('/\s+/', trim($pageViewer?->getAttribute('class') ?? ''));
+        foreach ($xpath->query('.//*[@class]', $pageViewer) as $node) {
+            array_push($classes, ...(array) preg_split('/\s+/', trim($node->getAttribute('class'))));
+        }
+        foreach (['bg-neutral-900', 'bg-neutral-800', 'text-neutral-950', 'text-neutral-300', 'text-neutral-400', 'text-neutral-100', 'border-neutral-800', 'border-neutral-700'] as $legacyClass) {
+            expect($classes)->not->toContain($legacyClass);
+        }
+    }
+
     $this->actingAsVersioned($owner)
         ->get(route('pages.show', ['page' => $page, 'versions_page' => 2]))
         ->assertOk()
