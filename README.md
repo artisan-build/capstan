@@ -10,17 +10,21 @@ organisation, and you own the server, the database, and the data.
 
 ## What it does
 
-Capstan ships two capabilities today. Each one is off until you switch it on.
+Capstan ships three capabilities today. Each one is off until you switch it on.
 
 **Artifact hosting.** Your tools `POST` a page of HTML to Capstan and get back a signed, expiring link
 they can share. The HTML is stored privately and served from a second hostname that never receives
 your login cookie, inside a sandboxed iframe under a strict content security policy. That is how
-untrusted AI-generated HTML is made safe here — by isolating it, not by stripping tags out of it.
+untrusted AI-generated HTML is made safe here: by isolating it, not by stripping tags out of it.
 
 **Postmaster.** A signed message bus. Command-line agents on your machines poll Capstan once a minute,
 announce which inboxes they are ready to receive on, and hand work to each other through addresses
 like `build-agent@<server-id>`. Capstan signs every message it delivers and tracks which agents are
 alive.
+
+**Work.** A queue of tasks for your agents. You create a task and queue items on it from an MCP client,
+and a small drain process on each machine claims an item and starts the command assigned to its role.
+The reference drain and its configuration are in [docs/work.md](docs/work.md).
 
 Together they replace the per-seat link-sharing and agent-messaging tools you would otherwise pay for
 per person.
@@ -29,17 +33,19 @@ per person.
 
 [Scalpels](https://scalpels.app/products/capstan) does the setup for you: it forks Capstan, provisions
 what it needs on your Laravel Cloud account, and deploys it. The repository and the infrastructure end
-up yours either way — the difference is who spends the afternoon on the steps below.
+up yours either way. The difference is who spends the afternoon on the steps below.
 
-Installed that way there is **nothing to set** for either capability:
+Installed that way, Scalpels sets `CAPSTAN_FEATURE_ARTIFACTS` to `true` and fills
+`CAPSTAN_ARTIFACT_RENDER_ORIGIN` with the environment's own `laravel.cloud` address. Artifact hosting
+still stays off until you add a custom domain in Laravel Cloud, because until then `APP_URL` is that
+same `laravel.cloud` address and there is no second host to serve artifact HTML from. Once the domain is
+attached, `APP_URL` follows it, the two hosts differ, and artifacts, pages and the brand kit start
+working. Remove the custom domain and they switch back off on their own. Postmaster's signing root is
+ensured on every deploy, so there is no key to create by hand. Postmaster and Work stay off until you
+set `CAPSTAN_FEATURE_POSTMASTER` or `CAPSTAN_FEATURE_WORK` to `true` on the environment.
 
-- `CAPSTAN_ARTIFACT_RENDER_ORIGIN` is filled in for you with the environment's own
-  `laravel.cloud` address.
-- **Artifact hosting turns itself on once you add a custom domain in Laravel Cloud.** `APP_URL`
-  follows that domain, so the app and the artifact origin stop being the same host and the isolation
-  the feature depends on exists. Until then artifacts stay off and the rest of the app is unaffected.
-  Remove the custom domain and they switch back off on their own.
-- Postmaster's signing root is **ensured on every deploy**, so there is no key to create by hand.
+[Getting started with Capstan via Scalpels](docs/getting-started.md) walks a new team from the install
+to its first drained Work item and its first published page.
 
 Running it yourself is free of licence cost; Capstan is MIT licensed. You still pay for the
 infrastructure it runs on, and you do the provisioning, deployment and upgrade work described here.
@@ -68,7 +74,7 @@ cloud auth          # opens a browser; writes a token to ~/.config/cloud/config.
 **If you want artifact hosting you need a *second* hostname.** Capstan serves the app on one and
 artifact HTML on another. Using one hostname for both is not a shortcut: Capstan refuses to serve
 artifacts at all rather than give up the separation. Postmaster on its own needs only the app
-hostname. Locally you do not need DNS for this — see step 5.
+hostname. Locally you do not need DNS for this (see step 5).
 
 ### 1. Fork it, then install it
 
@@ -89,7 +95,7 @@ composer setup
 installs and builds the frontend.
 
 **Run it on a fresh clone only.** It keeps an existing `.env` file, but it always regenerates
-`APP_KEY` — so running it in an installation you already use invalidates that installation's
+`APP_KEY`, so running it in an installation you already use invalidates that installation's
 encrypted values and signs everyone out. On an existing checkout run the pieces you need by hand
 (`composer install`, `php artisan migrate`, `npm install && npm run build`) and leave `key:generate`
 alone.
@@ -125,7 +131,7 @@ line:
 php artisan create-admin --local --email=you@example.com --name="Your Name"
 ```
 
-It asks for a password twice, then prints `Admin user you@example.com created.` Ignore the wording —
+It asks for a password twice, then prints `Admin user you@example.com created.` Ignore the wording:
 the *first* account is always the **Owner**, the one account that can promote and remove admins.
 Afterwards the command refuses to run again (`An Owner already exists`) unless you add `--force`, which
 creates an Admin.
@@ -147,20 +153,32 @@ creates an Admin.
 
 ### 4. Start the app
 
+The frontend has to be built before you sign in. `composer setup` builds it; on any other checkout run
+this first:
+
+```bash
+npm ci && npm run build
+```
+
+Without it every signed-in page returns `500` with `Vite manifest not found at
+.../public/build/manifest.json`. Then start the app:
+
 ```bash
 php artisan dev
 ```
 
 This runs the web server, the queue worker, the Vite dev server and a log tail together, and prints
-`Server running on [http://127.0.0.1:8000]`. Open <http://localhost:8000>, sign in with the account
-from step 3, and you land on the dashboard.
+`Server running on [http://127.0.0.1:8000]`. Sign in at <http://localhost:8000/bfc/login> with the
+account from step 3 and you land on the dashboard. There is no `/login` or `/register` page; sign-in
+belongs to Built for Cloud and lives under `/bfc`.
 
-Keep this terminal visible. With the default `MAIL_MAILER=log`, mail Capstan sends — invitations in
-particular — is written to the log rather than delivered, and the `logs` pane is where you read it.
+Keep this terminal visible. With the default `MAIL_MAILER=log`, mail Capstan sends (invitations in
+particular) is written to the log rather than delivered, and the `logs` pane is where you read it.
 
 ### 5. Turn on the capability you want
 
-Both capabilities are off in a fresh `.env`. Each is one boolean.
+All three capabilities are off in a fresh `.env`. Each is one boolean, and there is no switch for them
+in the app itself.
 
 **Artifacts** need the flag plus a second hostname. Locally, use a `.localhost` subdomain: browsers and
 macOS resolve anything under `.localhost` to `127.0.0.1`, so this needs no DNS and no `/etc/hosts`
@@ -171,7 +189,7 @@ CAPSTAN_FEATURE_ARTIFACTS=true
 CAPSTAN_ARTIFACT_RENDER_ORIGIN=http://artifacts.localhost:8000
 ```
 
-Leave `APP_URL` alone — the value `.env.example` ships is already the right one for local work, and
+Leave `APP_URL` alone. The value `.env.example` ships is already the right one for local work, and
 what matters is only that the render origin is a *different* host from it. The render origin
 `.env.example` ships is a placeholder that resolves nowhere, so replace it with the `.localhost`
 form above. If the two ever name the same host, Capstan treats artifact hosting as switched off
@@ -190,8 +208,14 @@ php artisan bfc:signing-root:ensure --local
 That prints `Installation signing root is present. No secret was exported.` The key never leaves the
 server and cannot be read back, which is the point. Without it Capstan refuses to deliver messages.
 
-`ensure` is safe to run as often as you like — it creates the root only if there isn't one. (The older
+`ensure` is safe to run as often as you like, because it creates the root only if there isn't one. (The older
 `bfc:signing-root:provision` refuses once a root exists, which is why deploy scripts use `ensure`.)
+
+**Work** needs only its flag. Setting up a drain is covered in [docs/work.md](docs/work.md).
+
+```dotenv
+CAPSTAN_FEATURE_WORK=true
+```
 
 Restart the app after changing `.env`. A **Postmaster** link appears in the sidebar once that flag is on.
 
@@ -208,7 +232,7 @@ Restart the app after changing `.env`. A **Postmaster** link appears in the side
 > cat .cloud/config.json     # whose application is this?
 > ```
 >
-> The binding stays in place through `cloud ship` — `ship` prints the ids it creates but does not write
+> The binding stays in place through `cloud ship`: `ship` prints the ids it creates but does not write
 > this file. **`cloud repo:config`, immediately after, is the command that replaces it.** Until you have
 > run that and checked the file, run no other Cloud command from this directory.
 
@@ -222,7 +246,7 @@ The `cloud` CLI is pre-1.0 and its flags move between releases. Confirm any comm
    ```
 
    Answer the prompts: region, application name, this repository, and **let it create and attach a
-   PostgreSQL database** — that path attaches reliably, and attaching by CLI flag afterwards does not
+   PostgreSQL database**. That path attaches reliably, and attaching by CLI flag afterwards does not
    work. Enable the scheduler when it offers: Postmaster's liveness sweep runs every minute.
 
    `ship` takes the application's repository from this checkout's `origin`, which is why step 1 had you
@@ -251,7 +275,7 @@ The `cloud` CLI is pre-1.0 and its flags move between releases. Confirm any comm
    cloud managed-queue:create <env> --name capstan --size <size> -n --json
    ```
 
-   Note the `id` in that response — `set-default` takes the **queue instance id** as its only
+   Note the `id` in that response. `set-default` takes the **queue instance id** as its only
    argument, not the environment and not the name:
 
    ```bash
@@ -260,12 +284,12 @@ The `cloud` CLI is pre-1.0 and its flags move between releases. Confirm any comm
 
    Use a managed queue rather than a worker instance.
 
-4. **Set your environment variables — and only yours.**
+4. **Set your environment variables, and only yours.**
 
    > ⚠️ **Never set an environment variable for something Laravel Cloud provisioned for you.** When
-   > you attach a database, cache, queue or bucket, Cloud writes all of its settings — the passwords
+   > you attach a database, cache, queue or bucket, Cloud writes all of its settings (the passwords
    > *and* the connection names like `DB_CONNECTION`, `QUEUE_CONNECTION`, `CACHE_STORE`,
-   > `SESSION_DRIVER`, `FILESYSTEM_DISK` and the `AWS_*` keys — into a managed file the app reads. If
+   > `SESSION_DRIVER`, `FILESYSTEM_DISK` and the `AWS_*` keys) into a managed file the app reads. If
    > you set any of them yourself, your value silently replaces Cloud's and the resource stops
    > working. Provision, attach, deploy, and let Cloud fill them in.
 
@@ -276,11 +300,9 @@ The `cloud` CLI is pre-1.0 and its flags move between releases. Confirm any comm
    # plus the CAPSTAN_* keys from the Configuration table
    ```
 
-   Let Cloud generate `APP_KEY`.
-
-   **Do not set `APP_URL`.** Cloud injects it, and it injects your custom domain once one is attached
-   and verified — a value you set yourself shadows that and then stops tracking the domain. `APP_URL`
-   is load-bearing for both capabilities (it names the only page allowed to frame artifacts, and it is
+   Let Cloud generate `APP_KEY`, and **do not set `APP_URL`.** Cloud injects it, and it injects your custom domain once one is attached
+   and verified. A value you set yourself shadows that and then stops tracking the domain. `APP_URL`
+   matters to artifacts and Postmaster (it names the only page allowed to frame artifacts, and it is
    the base of the poll and token URLs handed to Postmaster agents), so read it back in step 7 rather
    than writing it.
 
@@ -291,8 +313,8 @@ The `cloud` CLI is pre-1.0 and its flags move between releases. Confirm any comm
    cloud domain:create <env> --name <render-host> --wildcard-enabled=false -n --json   # artifacts only
    ```
 
-   Each response carries an `id` and a `dnsRecords` array. **Place exactly the records Cloud returns** —
-   that is its statement of what it wants for that hostname right now — then verify each domain by the
+   Each response carries an `id` and a `dnsRecords` array. **Place exactly the records Cloud returns**,
+   since that is its statement of what it wants for that hostname right now. Then verify each domain by the
    **id from its own `domain:create` response**, which is the only argument this command takes:
 
    ```bash
@@ -301,7 +323,7 @@ The `cloud` CLI is pre-1.0 and its flags move between releases. Confirm any comm
 
    Once the app hostname is attached and verified, `APP_URL` becomes that hostname on the next
    deploy. You do not have to nominate a primary domain to make that happen, and you do not have to
-   set `APP_URL` yourself — confirm it in step 7.
+   set `APP_URL` yourself. Confirm it in step 7.
 
    **Leave `SESSION_DOMAIN` unset.** If the app and artifact hostnames are neighbours under one domain,
    a shared `SESSION_DOMAIN` hands your login cookie to the artifact origin and removes the isolation
@@ -354,7 +376,7 @@ The `cloud` CLI is pre-1.0 and its flags move between releases. Confirm any comm
    php artisan bfc:signing-root:ensure --local
    ```
 
-   To create it once by hand instead, run it inside the environment rather than pointing it at one —
+   To create it once by hand instead, run it inside the environment rather than pointing it at one;
    the verb is local-only by design. No `--no-monitor`: wait for the result, or you will not know the
    key exists.
 
@@ -371,9 +393,9 @@ The settings a self-hosted Capstan normally changes. Laravel's own settings are 
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `APP_URL` | `http://localhost` | The app's own hostname. Load-bearing: it names the only page allowed to frame artifacts, and it is the base of the poll and token URLs handed to Postmaster agents. **On Laravel Cloud, do not set it** — Cloud injects it, and it becomes your custom domain once one is attached and verified. Setting it shadows the injected value and stops it tracking the domain. Read it back (step 7) instead. |
+| `APP_URL` | `http://localhost` | The app's own hostname. It names the only page allowed to frame artifacts, and it is the base of the poll and token URLs handed to Postmaster agents. **On Laravel Cloud, do not set it.** Cloud injects it, and it becomes your custom domain once one is attached and verified. Setting it shadows the injected value and stops it tracking the domain. Read it back (step 7) instead. |
 | `CAPSTAN_FEATURE_ARTIFACTS` | `false` | Turns artifact hosting on. While off, the artifact API and viewer return `404`. |
-| `CAPSTAN_ARTIFACT_RENDER_ORIGIN` | *(none)* | The second hostname artifact HTML is served from, which must not be the app's own host. **Installed through Scalpels there is nothing to set:** it is filled in with the environment's `laravel.cloud` address, and artifact hosting switches itself on once you add a custom domain in Laravel Cloud, because `APP_URL` follows that domain and the two hosts stop matching. **Self-hosted outside Scalpels:** give it an `https` origin on a hostname different from `APP_URL`'s. With no value — or the app's own host — artifact hosting is off: ingest and viewing both return `404`, the app itself serves normally, and nothing falls back onto the app hostname. |
+| `CAPSTAN_ARTIFACT_RENDER_ORIGIN` | *(none)* | The second hostname artifact HTML is served from, which must not be the app's own host. **Installed through Scalpels there is nothing to set:** it is filled in with the environment's `laravel.cloud` address, and artifact hosting switches itself on once you add a custom domain in Laravel Cloud, because `APP_URL` follows that domain and the two hosts stop matching. **Self-hosted outside Scalpels:** give it an `https` origin on a hostname different from `APP_URL`'s. With no value, or the app's own host, artifact hosting is off: ingest and viewing both return `404`, the app itself serves normally, and nothing falls back onto the app hostname. |
 | `CAPSTAN_ARTIFACT_MAX_CONTENT_BYTES` | `1048576` | Largest artifact accepted, in bytes. Anything bigger is a `422`. |
 | `CAPSTAN_ARTIFACT_CSP_SCRIPT_SRC` | *(empty)* | Comma-separated extra sources artifact HTML may load scripts from. Empty means none. |
 | `CAPSTAN_ARTIFACT_CSP_STYLE_SRC` | *(empty)* | Same, for stylesheets. |
@@ -385,32 +407,38 @@ The settings a self-hosted Capstan normally changes. Laravel's own settings are 
 | `CAPSTAN_POSTMASTER_PROBE_INTERVAL_SECONDS` | `300` | Minimum gap between liveness challenges to one agent. |
 | `CAPSTAN_POSTMASTER_PROBE_TIMEOUT_SECONDS` | `900` | How long an agent has to answer a challenge before it is marked failed. |
 | `CAPSTAN_POSTMASTER_PROBE_BACKOFF_SECONDS` | `1800` | How long to wait before challenging an agent that already failed. |
+| `CAPSTAN_FEATURE_WORK` | `false` | Turns Work on. While off, the Work API, MCP tools, scheduled sweeps and `/work` page are unavailable and the routes return `404`. |
 | `BUILT_FOR_CLOUD_PRODUCT` | `Capstan` | The product name reported by the public `GET /bfc/meta` endpoint. |
 | `BUILT_FOR_CLOUD_CREDENTIAL_GUARD` | `bfc` | Name of the auth guard credentials resolve through. The default works; change it only if it collides with a guard you added. |
-| `MAIL_MAILER` | `log` | Invitation email. While this is `log`, nothing is delivered — the message is written to the log instead. |
+| `MAIL_MAILER` | `log` | Invitation email. While this is `log`, nothing is delivered; the message is written to the log instead. |
 
 ## Using it
 
 ### Getting a token
 
 Capstan's APIs do not accept a password. They accept a **bearer token** issued for one specific job,
-called a *purpose*. Capstan has two:
+called a *purpose*. Capstan has three:
 
 | Purpose | Used for |
 | --- | --- |
 | `capstan.artifact.ingest` | `POST /api/v1/artifacts` |
 | `capstan.postmaster.poll` | `POST /api/v1/poll` |
+| `capstan.work.drain` | `POST /api/v1/work/{team}/claim`, `/renew`, `/transition` |
 
 A token is bound to its purpose, to this installation, and to the person it was issued to. A token for
-one purpose is rejected on the other endpoint.
+one purpose is rejected on the other endpoints. A Work drain needs a `capstan.work.drain` token, and the
+device flow below is how you get one: set `app_purpose` to `capstan.work.drain` in step 2.
 
 Tokens are issued by a **device authorization**: a program asks for one, you approve it in your
 browser, and the program collects it. This is the flow that produces a token the APIs accept.
 
-> **Not the Personal credentials page.** `/bfc/ui/credentials/personal` offers to issue a token for
-> either purpose, but a token from that page is rejected with `401` by both APIs — a bug in the
-> version of Built for Cloud this release pins. Use the device flow below instead. For Postmaster you
-> do not do any of this by hand: the installer on the Postmaster page runs the whole flow for you.
+> **Not the credentials pages.** `/settings/credentials/personal` and
+> `/settings/credentials/installation` both offer to issue a token, and the personal page answers
+> `201 Created`, but the APIs reject a token minted there with `401 unauthenticated`. That holds for
+> all three purposes, `capstan.work.drain` included. The same purpose, person and endpoint succeed with
+> a device-flow token. Last checked on 2026-10-18 against Built for Cloud v0.20.0. Use the device flow
+> below. For Postmaster you do not do any of this by hand: the installer on the Postmaster page runs
+> the whole flow for you.
 
 You also need your **actor id**, a number the UI does not display. Read it once:
 
@@ -435,7 +463,7 @@ curl -s -b "$JAR" -c "$JAR" -X POST "$CAPSTAN_URL/bfc/login" \
   -d "_token=$CSRF" -d "email=you@example.com" -d "password=<your password>"
 
 # 2. Ask for a token. Prints device_code, user_code and verification_uri.
-CSRF=$(curl -s -b "$JAR" -c "$JAR" "$CAPSTAN_URL/bfc/ui" \
+CSRF=$(curl -s -b "$JAR" -c "$JAR" "$CAPSTAN_URL/settings" \
   | grep -o 'name="_token" value="[^"]*"' | cut -d'"' -f4)
 curl -s -b "$JAR" -c "$JAR" -X POST "$CAPSTAN_URL/bfc/device-authorizations" \
   -H "Content-Type: application/json" -H "Accept: application/json" -H "X-CSRF-TOKEN: $CSRF" \
@@ -499,13 +527,13 @@ permits inline scripts and styles and `data:` images, and blocks the page from r
 all. It can load an external script, stylesheet or image only from a source you add yourself
 through the `CAPSTAN_ARTIFACT_CSP_*` variables. Fonts remain blocked by `font-src 'none'`.
 
-Fields you can send:
+The request takes four fields.
 
-- `content` — the HTML. **Required.**
-- `content_type` — `text/html` or `application/xhtml+xml`. **Required.**
-- `visibility` — `org_auth` (default; anyone signed in to this Capstan can open it) or `signed_url`
+- `content`: the HTML. **Required.**
+- `content_type`: `text/html` or `application/xhtml+xml`. **Required.**
+- `visibility`: `org_auth` (default; anyone signed in to this Capstan can open it) or `signed_url`
   (anyone holding the link can open it, signed in or not).
-- `expires_at` — an ISO-8601 time in the future. After it, the link returns `404`.
+- `expires_at`: an ISO-8601 time in the future. After it, the link returns `404`.
 
 Application errors share one shape, so you can read `error.code`:
 
@@ -604,7 +632,7 @@ opens. It stores a token, writes a poll script under `~/.config/capstan/<server-
 once-a-minute cron entry. It needs `curl`, `php` and `crontab` on that machine.
 
 **The installed poller only announces presence and answers liveness probes.** Out of the box it
-advertises no inboxes, sends nothing, and acknowledges nothing — it will go green on the map and carry
+advertises no inboxes, sends nothing, and acknowledges nothing. It will go green on the map and carry
 no mail. To receive messages, give it an address:
 
 ```bash
@@ -641,13 +669,13 @@ curl -X POST http://localhost:8000/api/v1/poll \
       }'
 ```
 
-`type` must be one of `handoff`, `kb_nomination`, `solicitation` or `generic` — anything else is a `422`.
+`type` must be one of `handoff`, `kb_nomination`, `solicitation` or `generic`; anything else is a `422`.
 You may only send `from` an inbox you have advertised at least once, so the sending address belongs in
 `ready_inboxes` too. Never send a `signature` yourself: the server signs on delivery and rejects your
 version. `refs` must be an empty array in version 1, and `created_at` is UTC to the second.
 
 The response carries `inbound` and `cursor`. Each inbound envelope comes back with the server's
-`signature` added — a 64-character hex HMAC — and keeps being redelivered on every poll until you name
+`signature` added (a 64-character hex HMAC) and keeps being redelivered on every poll until you name
 its `message_id` in `acks`. After that it stops.
 
 The wire format, inbox ownership rules, request caps and probe protocol are in
@@ -659,7 +687,7 @@ Sign in as Owner or Admin, open **/bfc/members**, and invite an email address. O
 invite Members; only an Owner can invite an Admin.
 
 With the default `MAIL_MAILER=log` nothing is emailed. The members page lists the pending invitation
-but **does not show its link** — the message is written to the log instead, so find it there:
+but **does not show its link**. The message is written to the log instead, so find it there:
 
 ```bash
 grep -o 'http[^ ]*/bfc/invitations/[A-Za-z0-9_-]*' storage/logs/laravel.log | tail -1
@@ -667,15 +695,16 @@ grep -o 'http[^ ]*/bfc/invitations/[A-Za-z0-9_-]*' storage/logs/laravel.log | ta
 
 Send that link to the person yourself. Opening it leads to an acceptance form; once they submit it,
 they appear in the members list as active with the role you chose. To deliver invitations properly,
-configure a mailer — see [docs/email-cloudflare.md](docs/email-cloudflare.md).
+configure a mailer (see [docs/email-cloudflare.md](docs/email-cloudflare.md)).
 
 ## Troubleshooting
 
 **The install stops because PHP is too old.** Capstan requires PHP 8.5. Check with `php -v`; if you
 manage several versions, make sure the 8.5 binary is the one on your `PATH`.
 
-**An API token returns `401`.** If you issued it from `/bfc/ui/credentials/personal`, that is expected
-at the pinned Built for Cloud version — use the device flow above. Otherwise check that
+**An API token returns `401`.** If you issued it from `/settings/credentials/personal` or
+`/settings/credentials/installation`, that is expected (see [Getting a token](#getting-a-token)), so use
+the device flow instead. Otherwise check that
 `X-Capstan-Actor-ID` is *your* id: Capstan compares the header against the token's owner and rejects a
 mismatch before doing anything else.
 
@@ -683,7 +712,7 @@ mismatch before doing anything else.
 order: `CAPSTAN_FEATURE_ARTIFACTS` is still `false`; `CAPSTAN_ARTIFACT_RENDER_ORIGIN` is empty or names
 the same host as `APP_URL`; the artifact has expired or the id is wrong; or you are requesting artifact
 *content* from the app hostname. Content is served only from the render hostname and the viewer page
-only from the app hostname — each refuses the other's host deliberately, so both names must resolve
+only from the app hostname. Each refuses the other's host deliberately, so both names must resolve
 before artifacts work, including locally.
 
 Without a usable second host the feature reports itself **off**, so ingest refuses too rather than
@@ -694,7 +723,7 @@ state and not a misconfiguration: add the domain and artifacts begin working wit
 hostname is editing it. Capstan sends `Cache-Control: no-transform`, which Cloudflare honours; if you
 have another proxy, turn off its HTML rewriting for that hostname.
 
-**Postmaster messages are never delivered.** The signing root is missing — Capstan signs every envelope
+**Postmaster messages are never delivered.** The signing root is missing. Capstan signs every envelope
 as it hands it over and refuses rather than deliver an unsigned one. Run
 `php artisan bfc:signing-root:ensure --local`, or inside a deployed environment as shown in step 8. A
 deploy that ensures the root (as a Scalpels install does) should make this impossible.
@@ -705,7 +734,7 @@ over UTC timestamps, so any other timezone silently breaks every signature.
 
 **An agent shows red or pending on the map.** Work down this list:
 
-1. **Is it polling?** Red comes first from poll recency — an agent that has never polled, or has not
+1. **Is it polling?** Red comes first from poll recency: an agent that has never polled, or has not
    polled within `CAPSTAN_POSTMASTER_MAP_STALE_AFTER_SECONDS` (default five minutes), is red whatever
    its probe says. Check `crontab -l` on the agent machine, then run its poll script by hand and read
    the error: a bad token or an unreachable host fails silently under cron.
@@ -718,18 +747,21 @@ over UTC timestamps, so any other timezone silently breaks every signature.
    server.
 
 **An invitation was sent but nobody received it.** With `MAIL_MAILER=log` that is the designed
-behaviour — read the link out of `storage/logs/laravel.log` as shown above.
+behaviour. Read the link out of `storage/logs/laravel.log` as shown above.
 
 **`php artisan serve` behaves differently from the tests.** `serve` only passes through some
-environment variables, so it can quietly use a different database than you expect. Prefer `php artisan
+environment variables, so it can use a different database than you expect. Prefer `php artisan
 dev`.
 
 ## More documentation
 
-- [docs/built-for-cloud.md](docs/built-for-cloud.md) — how accounts, sign-in and API credentials work.
-- [docs/postmaster.md](docs/postmaster.md) — the Postmaster wire contract, in full.
-- [docs/email-cloudflare.md](docs/email-cloudflare.md) — sending invitation email.
+- [docs/getting-started.md](docs/getting-started.md): getting started with Capstan via Scalpels, from
+  the install to a first drained Work item and a first published page.
+- [docs/work.md](docs/work.md): the Work drain: configuration, recovery and limits.
+- [docs/built-for-cloud.md](docs/built-for-cloud.md): how accounts, sign-in and API credentials work.
+- [docs/postmaster.md](docs/postmaster.md): the Postmaster wire contract, in full.
+- [docs/email-cloudflare.md](docs/email-cloudflare.md): sending invitation email.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
