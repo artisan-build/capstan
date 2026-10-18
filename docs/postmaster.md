@@ -25,7 +25,10 @@ An authenticated spoke calls `POST /api/v1/poll` with a JSON object containing:
 
 ```json
 {
-  "presence": { "ready_inboxes": ["inbox-a", "inbox-b"] },
+  "presence": {
+    "ready_inboxes": ["inbox-a", "inbox-b"],
+    "device_name": "Ed's MacBook Pro"
+  },
   "outbound": [],
   "acks": [],
   "cursor": null
@@ -33,6 +36,8 @@ An authenticated spoke calls `POST /api/v1/poll` with a JSON object containing:
 ```
 
 `presence.ready_inboxes` is required and replaces that spoke's routing set on every successful poll.
+`presence.device_name` is optional. The server removes control characters, trims it and stores at most 64
+characters. Empty and invalid values are ignored, so a machine-name lookup failure does not break polling.
 `outbound`, `acks`, `cursor`, and `probe_response` may be omitted. Each outbound envelope contains `id`, `type`,
 `version`, `from`, `to`, `created_at`, `message_id`, `body`, and `refs`; clients must omit `signature`.
 Version 1 requires an empty `refs` array. After authenticating the bound credential and confirming sender
@@ -64,15 +69,15 @@ a server error, and never leaves a spoke unable to poll again.
 
 Every local part is owned by exactly one user; the first user to advertise it claims it. Claims persist
 after every spoke of that user stops advertising the inbox, so pending mail can never be captured by a
-later claimant. Multiple spokes of the **same** user may advertise the same inbox — this is the
+later claimant. Multiple spokes of the same user may advertise the same inbox — this is the
 `{inbox-or-role-or-pool}@{server}` pool: several CLI installs competing for one address, each receiving
-the unacknowledged batch until one of them acks. A spoke of a **different** user advertising a claimed
+the unacknowledged batch until one of them acks. A spoke of a different user advertising a claimed
 inbox is rejected with 409 `inbox_claimed`; `error.inboxes` lists the offending local parts and nothing
 in that request is applied, including any other first-claims it bundled.
 
 The persisted routing table, not the request array, decides what a spoke may read and acknowledge.
 Delivery is scoped to the inboxes the polling spoke currently routes for (its persisted routing rows,
-restricted to inboxes its user owns). Acknowledgements are scoped to every inbox the polling **user**
+restricted to inboxes its user owns). Acknowledgements are scoped to every inbox the polling user
 owns, so a spoke that has stopped advertising an inbox can still ack the batch it already received.
 
 ### Sender authentication
@@ -159,9 +164,9 @@ remain attribution and routing metadata, not a human read ACL.
 
 Displayed liveness combines polling recency with the independent probe outcome:
 
-- **Green:** the spoke polled within the staleness window and its probe state is `green`.
-- **Red:** the spoke has not polled within the window, has never polled, or its probe state is `red`.
-- **Pending:** the spoke polled within the window but its probe state remains `unknown`.
+- A green spoke polled within the staleness window and its probe state is `green`.
+- A red spoke has not polled within the window, has never polled, or its probe state is `red`.
+- A pending spoke polled within the window but its probe state remains `unknown`.
 
 `CAPSTAN_POSTMASTER_MAP_STALE_AFTER_SECONDS` configures the staleness window and defaults to 300
 seconds, allowing five missed polls at the expected once-a-minute cadence. A poll exactly at the
@@ -173,7 +178,7 @@ pending, not green; it becomes green only after its first probe passes.
 
 ### Onboarding a spoke
 
-Every active Owner, Admin, and Member can generate an installer from **Connect a local agent** on the
+Every active Owner, Admin, and Member can generate an installer from Connect a local agent on the
 Postmaster map. Opening or polling the page does not start a grant. Generation is limited to 15 attempts
 per minute per source IP. Postmaster's feature flag is checked on the initial page request and every
 Livewire round-trip; disabling it makes both the map and installer generation return 404 without starting
@@ -215,14 +220,17 @@ process argument list.
 The poll script initially advertises no inboxes. To receive mail, edit
 `~/.config/capstan/{server-id}/inboxes.json` and replace `[]` with a JSON list of local parts, for example
 `["build-agent"]`. The next poll claims those inboxes for the approving user and advertises them on every
-subsequent poll. The poller persists a pending probe response beside the credential files when needed
+subsequent poll. Each poll also reports the computer name shown on the Postmaster map. You can rename your
+own spoke on the map or clear that name to use the reported computer name again. Existing installations
+must be reinstalled before they report a computer name; they can still be renamed on the map. The poller
+persists a pending probe response beside the credential files when needed
 and returns that response without dropping the configured inbox list. The package stores hashes of the
 pending device and user codes plus the authorization profile, status, expiry, and initiating actor. A
 successful exchange consumes that authorization and stores the package credential metadata and bearer
 hash; plaintext bearer material is not retained by the server.
 
-The initial poll makes the spoke visible as **Pending**. The next poll returns the first challenge's
-correct digest and makes it **Green**. A stale poller or a failed probe is **Red**.
+The initial poll makes the spoke visible as Pending. The next poll returns the first challenge's
+correct digest and makes it Green. A stale poller or a failed probe is Red.
 
 Treat a copied command or installer as sensitive until its ten-minute device grant expires or is consumed.
 Capstan redacts the capability from Nightwatch request URLs and execution context. The URL still reaches

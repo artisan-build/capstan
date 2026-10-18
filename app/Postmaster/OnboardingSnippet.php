@@ -140,7 +140,10 @@ $inboxes = json_decode(file_get_contents($argv[1]), true, flags: JSON_THROW_ON_E
 if (! is_array($inboxes) || ! array_is_list($inboxes)) {
     throw new RuntimeException('inboxes.json must contain a JSON list.');
 }
-$payload = ['presence' => ['ready_inboxes' => $inboxes]];
+$payload = ['presence' => [
+    'ready_inboxes' => $inboxes,
+    'device_name' => $argv[3],
+]];
 if (is_file($argv[2])) {
     $payload['probe_response'] = json_decode(file_get_contents($argv[2]), true, flags: JSON_THROW_ON_ERROR);
 }
@@ -167,7 +170,11 @@ PHP;
             'CAPSTAN_ACTOR_FILE="$CAPSTAN_HOME/actor-id"',
             'CAPSTAN_INBOX_FILE="$CAPSTAN_HOME/inboxes.json"',
             'CAPSTAN_PENDING_FILE="$CAPSTAN_HOME/probe-response.json"',
-            'CAPSTAN_PAYLOAD="$(php -r '.$this->quote($payloadBuilder).' "$CAPSTAN_INBOX_FILE" "$CAPSTAN_PENDING_FILE")"',
+            'case "$(uname -s)" in',
+            '    Darwin) CAPSTAN_DEVICE_NAME="$(scutil --get ComputerName 2>/dev/null || true)" ;;',
+            '    *) CAPSTAN_DEVICE_NAME="$(hostname -s 2>/dev/null || hostname 2>/dev/null || true)" ;;',
+            'esac',
+            'CAPSTAN_PAYLOAD="$(php -r '.$this->quote($payloadBuilder).' "$CAPSTAN_INBOX_FILE" "$CAPSTAN_PENDING_FILE" "$CAPSTAN_DEVICE_NAME")"',
             'CAPSTAN_RESPONSE="$(printf \'header = "Authorization: Bearer %s"\nheader = "X-Capstan-Actor-ID: %s"\n\' "$(cat "$CAPSTAN_TOKEN_FILE")" "$(cat "$CAPSTAN_ACTOR_FILE")" | curl --config - --fail --silent --show-error --connect-timeout 5 --max-time 15 --request POST --header \'Content-Type: application/json\' --data "$CAPSTAN_PAYLOAD" "$CAPSTAN_POLL_URL")"',
             'rm -f "$CAPSTAN_PENDING_FILE"',
             'printf \'%s\' "$CAPSTAN_RESPONSE" | php -r '.$this->quote($probeParser).' "$CAPSTAN_PENDING_FILE"',

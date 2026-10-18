@@ -15,8 +15,10 @@ use ArtisanBuild\BuiltForCloud\Mcp\Classification;
 use ArtisanBuild\BuiltForCloud\Mcp\Effect;
 use ArtisanBuild\BuiltForCloud\Mcp\ToolClassification;
 use ArtisanBuild\BuiltForCloud\Mcp\ToolEffect;
+use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonInterface;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
+use Illuminate\Support\Collection;
 use Illuminate\Validation\Rule;
 use Laravel\Mcp\Exceptions\JsonRpcException;
 use Laravel\Mcp\Request;
@@ -62,6 +64,7 @@ final class PostmasterSpokesTool extends CapstanTool
             'status' => ['sometimes', 'required', Rule::enum(SpokeMapStatus::class)],
         ]);
         $owner = $owners->resolve();
+        $ownerName = $this->ownerName($owner->actorId);
         $limit = (int) ($validated['limit'] ?? 10);
         $status = isset($validated['status']) ? SpokeMapStatus::from($validated['status']) : null;
         $actorBinding = $owner->type.':'.$owner->ref;
@@ -77,6 +80,17 @@ final class PostmasterSpokesTool extends CapstanTool
         }
 
         $staleBefore = now()->subSeconds($staleAfter);
+        /** @var Collection<int, Spoke> $nameRows */
+        $nameRows = Spoke::query()
+            ->where('actor_id', $owner->actorId)
+            ->get(['id', 'actor_id', 'name', 'device_name']);
+        $baseNames = $nameRows->mapWithKeys(fn (Spoke $spoke): array => [
+            $spoke->id => $this->baseDisplayName($spoke),
+        ]);
+        $duplicateNames = $nameRows
+            ->groupBy(fn (Spoke $spoke): string => $spoke->actor_id."\0".$baseNames[$spoke->id])
+            ->map->count()
+            ->all();
         $query = Spoke::query()
             ->where('actor_id', $owner->actorId)
             ->when($lastId !== null, fn ($query) => $query->where('id', '>', $lastId));
@@ -112,7 +126,9 @@ final class PostmasterSpokesTool extends CapstanTool
 
             $item = [
                 'id' => $spoke->id,
-                'name' => $this->displayName($spoke),
+                'name' => $this->displayName($spoke, $baseNames, $duplicateNames),
+                'device_name' => $this->deviceName($spoke),
+                'owner_name' => $ownerName,
                 'last_polled_at' => $spoke->last_polled_at?->toJSON(),
                 'inboxes_count' => $spoke->inboxes->count(),
                 'inboxes' => $spoke->inboxes->pluck('local_part')->values()->all(),
@@ -160,8 +176,48 @@ final class PostmasterSpokesTool extends CapstanTool
         };
     }
 
-    private function displayName(Spoke $spoke): string
+    /**
+     * @param  Collection<int, string>  $baseNames
+     * @param  array<int|string, int>  $duplicateNames
+     */
+    private function displayName(Spoke $spoke, Collection $baseNames, array $duplicateNames): string
     {
-        return $spoke->name ?? 'Spoke #'.$spoke->id;
+        $name = $baseNames[$spoke->id];
+
+        return $duplicateNames[$spoke->actor_id."\0".$name] > 1
+            ? $name.' (#'.$spoke->id.')'
+            : $name;
+    }
+
+    private function baseDisplayName(Spoke $spoke): string
+    {
+        foreach ([$spoke->name, $this->deviceName($spoke)] as $name) {
+            if (is_string($name) && trim($name) !== '') {
+                return trim($name);
+            }
+        }
+
+        return 'Spoke #'.$spoke->id;
+    }
+
+    private function deviceName(Spoke $spoke): ?string
+    {
+        $deviceName = $spoke->getAttribute('device_name');
+
+        return is_string($deviceName) ? $deviceName : null;
+    }
+
+    private function ownerName(string $actorId): string
+    {
+        $user = User::query()->find($actorId, ['id', 'name', 'email']);
+
+        if (! $user instanceof User) {
+            return 'Unknown user';
+        }
+
+        $name = trim($user->name);
+        $email = trim($user->email);
+
+        return $name !== '' ? $name : ($email !== '' ? $email : 'Unknown user');
     }
 }

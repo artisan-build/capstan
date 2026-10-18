@@ -31,10 +31,11 @@ afterEach(function (): void {
 
 function createMapSpoke(
     User $user,
-    string $name,
+    ?string $name,
     ?CarbonInterface $lastPolledAt,
     SpokeLiveness $probeStatus,
     int $inboxes = 0,
+    ?string $deviceName = null,
 ): Spoke {
     $spoke = Spoke::query()->create([
         'actor_id' => (string) $user->id,
@@ -43,6 +44,10 @@ function createMapSpoke(
         'last_polled_at' => $lastPolledAt,
         'probe_status' => $probeStatus,
     ]);
+
+    if ($deviceName !== null) {
+        $spoke->forceFill(['device_name' => $deviceName])->save();
+    }
 
     for ($index = 1; $index <= $inboxes; $index++) {
         $inbox = Inbox::query()->create([
@@ -56,13 +61,14 @@ function createMapSpoke(
 }
 
 test('the authenticated map page renders registered spoke data', function (): void {
-    $owner = capstanUser(['role' => UserRole::Owner->value]);
+    $owner = capstanUser(['name' => 'Map Owner', 'role' => UserRole::Owner->value]);
     $spoke = createMapSpoke($owner, 'rendered-spoke', now(), SpokeLiveness::Green, 2);
 
     $this->actingAsVersioned($owner)
         ->get(route('postmaster.map'))
         ->assertOk()
         ->assertSee($spoke->name)
+        ->assertSee('Owned by Map Owner')
         ->assertSeeHtml('wire:poll.30s')
         ->assertSeeHtml('data-testid="postmaster-onboarding-row"')
         ->assertSeeHtml('data-status="green"')
@@ -73,6 +79,86 @@ test('the authenticated map page renders registered spoke data', function (): vo
     $row = (new DOMXPath($document))->query('//*[@data-testid="postmaster-onboarding-row"]')->item(0);
     expect($row)->not->toBeNull()
         ->and((new DOMXPath($document))->query('.//button', $row)->length)->toBe(1);
+});
+
+test('map owner names use display name then email without exposing actor ids', function (): void {
+    $viewer = capstanUser(['role' => UserRole::Owner->value]);
+    $named = capstanUser(['name' => 'Ada Lovelace', 'email' => 'ada@example.test']);
+    $emailOnly = capstanUser(['name' => '  ', 'email' => 'email-only@example.test']);
+    $missing = capstanUser();
+    $namedSpoke = createMapSpoke($named, 'named-owner', now(), SpokeLiveness::Green);
+    $emailSpoke = createMapSpoke($emailOnly, 'email-owner', now(), SpokeLiveness::Green);
+    $missingSpoke = createMapSpoke($missing, 'missing-owner', now(), SpokeLiveness::Green);
+    $missingId = (string) $missing->id;
+    $missing->delete();
+
+    $spokes = Livewire::actingAs($viewer)->test(SpokeMap::class)->viewData('spokes')->keyBy('id');
+
+    expect($spokes[$namedSpoke->id]['owner_name'])->toBe('Ada Lovelace')
+        ->and($spokes[$emailSpoke->id]['owner_name'])->toBe('email-only@example.test')
+        ->and($spokes[$missingSpoke->id]['owner_name'])->toBe('Unknown user')
+        ->and($spokes->pluck('owner_name'))->not->toContain((string) $named->id)
+        ->and($spokes->pluck('owner_name'))->not->toContain((string) $emailOnly->id)
+        ->and($spokes->pluck('owner_name'))->not->toContain($missingId);
+});
+
+test('display names prefer a custom name then device name and disambiguate owner collisions', function (): void {
+    $owner = capstanUser();
+    $other = capstanUser();
+    $custom = createMapSpoke($owner, 'Desk', now(), SpokeLiveness::Green);
+    $device = createMapSpoke($owner, null, now(), SpokeLiveness::Green, deviceName: 'Desk');
+    $otherOwner = createMapSpoke($other, null, now(), SpokeLiveness::Green, deviceName: 'Desk');
+    $unnamed = createMapSpoke($owner, null, now(), SpokeLiveness::Green);
+
+    $spokes = Livewire::actingAs($owner)->test(SpokeMap::class)->viewData('spokes')->keyBy('id');
+
+    expect($spokes[$custom->id]['name'])->toBe("Desk (#{$custom->id})")
+        ->and($spokes[$device->id]['name'])->toBe("Desk (#{$device->id})")
+        ->and($spokes[$otherOwner->id]['name'])->toBe('Desk')
+        ->and($spokes[$unnamed->id]['name'])->toBe("Spoke #{$unnamed->id}");
+});
+
+test('an owner can rename and clear a spoke name inline', function (): void {
+    $owner = capstanUser();
+    $spoke = createMapSpoke($owner, null, now(), SpokeLiveness::Green, deviceName: 'Owner Laptop');
+    $component = Livewire::actingAs($owner)->test(SpokeMap::class);
+
+    $component->call('beginRenaming', $spoke->id)
+        ->assertSet('renamingSpokeId', $spoke->id)
+        ->set('spokeName', 'Release runner')
+        ->call('renameSpoke', $spoke->id)
+        ->assertSee('Release runner');
+    expect($spoke->refresh()->name)->toBe('Release runner');
+
+    $component->call('beginRenaming', $spoke->id)
+        ->set('spokeName', '   ')
+        ->call('renameSpoke', $spoke->id)
+        ->assertSee('Owner Laptop');
+    expect($spoke->refresh()->name)->toBeNull();
+});
+
+test('a tampered rename call cannot change another users spoke', function (): void {
+    $admin = capstanUser(['role' => UserRole::Admin->value]);
+    $owner = capstanUser();
+    $spoke = createMapSpoke($owner, 'Original name', now(), SpokeLiveness::Green);
+
+    Livewire::actingAs($admin)
+        ->test(SpokeMap::class)
+        ->set('spokeName', 'Tampered name')
+        ->call('renameSpoke', $spoke->id)
+        ->assertForbidden();
+
+    expect($spoke->refresh()->name)->toBe('Original name');
+});
+
+test('device names are escaped in the map', function (): void {
+    $owner = capstanUser();
+    createMapSpoke($owner, null, now(), SpokeLiveness::Green, deviceName: '<script>alert("map")</script>');
+
+    $html = Livewire::actingAs($owner)->test(SpokeMap::class)->html();
+
+    expect($html)->toContain('&lt;script&gt;alert(&quot;map&quot;)&lt;/script&gt;')
+        ->not->toContain('<script>alert("map")</script>');
 });
 
 test('map status combines poll recency and probe state', function (): void {
