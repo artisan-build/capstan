@@ -1,5 +1,7 @@
 <?php
 
+use App\Features\Work;
+use App\Livewire\Postmaster\SpokeMap;
 use App\Livewire\Work\Index;
 use App\Models\Team;
 use App\Models\WorkTask;
@@ -191,4 +193,35 @@ test('addressed users see escaped escalations and page answers recheck feature a
     expect($escalation->fresh()->answer)->toBe('<svg onload=alert(1)>')
         ->and($escalation->fresh()->workItem->transitions()->count())->toBe(1)
         ->and($other->fresh()->answered_at)->toBeNull();
+});
+
+test('turning Work off changes nothing outside Work', function (): void {
+    // AC9's last clause, "and nothing else in the app changes", had no test at all: as written it is not
+    // assertable, so this bounds it. The probes go through the components, because the HTTP routes redirect
+    // at managed-auth middleware before any application guard runs — a route-status comparison would be two
+    // 302s agreeing and could not fail.
+    config(['capstan.features.artifacts' => true, 'capstan.features.postmaster' => true]);
+    Feature::flushCache();
+    $user = capstanUser();
+    $this->actingAsVersioned($user);
+
+    $probe = function (): array {
+        try {
+            Livewire::test(SpokeMap::class)->assertOk();
+            $postmaster = 'ok';
+        } catch (Throwable $exception) {
+            $postmaster = $exception::class;
+        }
+
+        return ['postmaster' => $postmaster, 'health' => $this->get('/up')->getStatusCode()];
+    };
+
+    $withWork = $probe();
+    expect($withWork)->toBe(['postmaster' => 'ok', 'health' => 200]);
+
+    config(['capstan.features.work' => false]);
+    Feature::flushCache();
+
+    expect($probe())->toBe($withWork)
+        ->and(Feature::active(Work::class))->toBeFalse();
 });
