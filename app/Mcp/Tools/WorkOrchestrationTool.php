@@ -3,6 +3,7 @@
 namespace App\Mcp\Tools;
 
 use App\Features\Work;
+use App\Http\ApiErrorException;
 use App\Mcp\DurableWriteCoordinator;
 use App\Mcp\OwnerSubjectResolver;
 use App\Mcp\ToolResponse;
@@ -205,7 +206,11 @@ abstract class WorkOrchestrationTool extends CapstanTool
             throw new UnsupportedMcpPrincipal;
         }
         if ($this->name() === 'orchestrate') {
-            $work->validateAction($input['action'], $input['input']);
+            try {
+                $work->validateAction($input['action'], $input['input']);
+            } catch (ApiErrorException $exception) {
+                return ToolResponse::structured(['outcome' => 'refused', 'reason' => $exception->errorCode]);
+            }
         }
 
         if ($this->isWrite()) {
