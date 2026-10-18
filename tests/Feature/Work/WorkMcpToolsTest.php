@@ -577,8 +577,8 @@ test('interactive MCP acted finish refuses blank state before effects and permit
     ];
     $before = $snapshot();
 
-    $response = workMcpCall('orchestrate', $base + ['input' => $invalidInput], $token);
-    expect($response->status() !== 200 || $response->json('result.isError') === true)->toBeTrue();
+    $response = workMcpCall('orchestrate', $base + ['input' => $invalidInput], $token)->assertOk();
+    expect($response->json('result.structuredContent'))->toBe(['outcome' => 'refused', 'reason' => 'invalid_orchestration_action']);
     expect($snapshot())->toBe($before);
 
     $finished = workMcpResult('orchestrate', $base + [
@@ -606,6 +606,55 @@ test('interactive MCP acted finish refuses blank state before effects and permit
     'empty content' => [['state' => 'acted', 'content' => '']],
 ]);
 
+test('MCP orchestrate refuses an invalid action input readably without internal disclosure and still accepts the corrected call', function (): void {
+    $user = capstanUser(['role' => 'owner']);
+    $token = workMcpToken($user);
+    $team = workMcpTeam(['pool_work' => true]);
+    $parent = WorkTask::query()->findOrFail(workMcpCreate($team, $token)['task']['id']);
+    resolve(WorkOrchestrationService::class)->event($parent, 'mcp-invalid-input', 'test_event');
+    $taken = workMcpResult('take_seat', [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'session_ref' => 'mcp-invalid-input',
+        'idempotency_key' => 'mcp-invalid-input-take',
+    ], $token);
+    $base = [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'spoke_id' => $taken['seat']['spoke_id'],
+        'seat_fence' => $taken['seat']['seat_fence'], 'session_ref' => 'mcp-invalid-input', 'action' => 'escalate',
+    ];
+    $input = [
+        'addressed_actor' => (string) $user->id, 'question' => 'Canary question '.Str::random(12).'?',
+        'options' => ['Canary option '.Str::random(12)], 'recommendation' => 'Canary recommendation '.Str::random(12),
+    ];
+    $before = [WorkEscalation::query()->count(), WorkItem::query()->count(), DB::table('mcp_write_claims')->count()];
+
+    $response = workMcpCall('orchestrate', $base + ['input' => $input, 'idempotency_key' => 'mcp-invalid-input-missing-key'], $token)->assertOk();
+    $refused = $response->json('result.structuredContent');
+    $definition = resolve('App\\Mcp\\Tools\\OrchestrateTool')->toArray();
+    assertWorkSchema(json_decode($response->content())->result->structuredContent, $definition['outputSchema']);
+    expect($refused)->toBe(['outcome' => 'refused', 'reason' => 'invalid_orchestration_action'])
+        ->and($response->json('result.isError'))->toBeFalse()
+        ->and($response->json('error'))->toBeNull()
+        ->and($response->json('result.content.0.text'))->not->toBe('An internal server error occurred.')
+        ->and([WorkEscalation::query()->count(), WorkItem::query()->count(), DB::table('mcp_write_claims')->count()])->toBe($before);
+    $body = $response->content();
+    expect($body)->not->toContain('.php');
+    expect($body)->not->toContain('WorkOrchestrationSurface');
+    expect($body)->not->toContain('App\\\\');
+    expect($body)->not->toContain('trace');
+    expect($body)->not->toContain('line');
+    expect($body)->not->toContain('field is required');
+    expect($body)->not->toContain($input['question']);
+    expect($body)->not->toContain($input['options'][0]);
+    expect($body)->not->toContain($input['recommendation']);
+    expect($body)->not->toContain('mcp-invalid-input-missing-key');
+
+    $accepted = workMcpResult('orchestrate', $base + [
+        'input' => $input + ['key' => 'mcp-invalid-input-corrected'], 'idempotency_key' => 'mcp-invalid-input-corrected',
+    ], $token);
+    expect($accepted['outcome'])->toBe('accepted')
+        ->and(WorkEscalation::query()->count())->toBe($before[0] + 1)
+        ->and(DB::table('mcp_write_claims')->count())->toBe($before[2] + 1);
+});
+
 test('MCP child orchestration enforces canonical intent and team defaults before durable effects', function (): void {
     $user = capstanUser(['role' => 'owner']);
     $token = workMcpToken($user);
@@ -631,7 +680,8 @@ test('MCP child orchestration enforces canonical intent and team defaults before
     $refuse = function (array $extra, string $key) use ($call): void {
         $before = [WorkTask::query()->count(), WorkBriefRevision::query()->count(), DB::table('mcp_write_claims')->count()];
         $response = $call($extra, $key);
-        expect($response->status() !== 200 || $response->json('result.isError') === true || $response->json('error') !== null)->toBeTrue();
+        expect($response->status() !== 200 || $response->json('result.isError') === true || $response->json('error') !== null
+            || $response->json('result.structuredContent') === ['outcome' => 'refused', 'reason' => 'invalid_orchestration_action'])->toBeTrue();
         expect([WorkTask::query()->count(), WorkBriefRevision::query()->count(), DB::table('mcp_write_claims')->count()])->toBe($before);
     };
 
@@ -737,7 +787,8 @@ test('MCP evidence action and addressed-user bounds refuse before durable effect
     ] as $key => $evidence) {
         $before = [WorkOrchestrationDecision::query()->count(), DB::table('mcp_write_claims')->count()];
         $response = $call('decide', ['event_id' => $event->id, 'decision' => 'No', 'rationale' => 'Invalid', 'evidence' => $evidence], 'mcp-evidence-'.$key);
-        expect($response->status() !== 200 || $response->json('result.isError') === true || $response->json('error') !== null)->toBeTrue();
+        expect($response->status() !== 200 || $response->json('result.isError') === true || $response->json('error') !== null
+            || $response->json('result.structuredContent') === ['outcome' => 'refused', 'reason' => 'invalid_orchestration_action'])->toBeTrue();
         expect([WorkOrchestrationDecision::query()->count(), DB::table('mcp_write_claims')->count()])->toBe($before);
     }
 
@@ -751,7 +802,8 @@ test('MCP evidence action and addressed-user bounds refuse before durable effect
     ] as [$action, $input, $key]) {
         $before = [WorkBriefRevision::query()->count(), WorkSteer::query()->count(), WorkEscalation::query()->count(), WorkItem::query()->count(), DB::table('mcp_write_claims')->count()];
         $response = $call($action, $input, $key);
-        expect($response->status() !== 200 || $response->json('result.isError') === true || $response->json('error') !== null)->toBeTrue();
+        expect($response->status() !== 200 || $response->json('result.isError') === true || $response->json('error') !== null
+            || $response->json('result.structuredContent') === ['outcome' => 'refused', 'reason' => 'invalid_orchestration_action'])->toBeTrue();
         expect([WorkBriefRevision::query()->count(), WorkSteer::query()->count(), WorkEscalation::query()->count(), WorkItem::query()->count(), DB::table('mcp_write_claims')->count()])->toBe($before);
     }
     expect(workMcpResult('orchestrate', $base + [
