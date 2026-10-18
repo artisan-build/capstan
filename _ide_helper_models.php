@@ -412,6 +412,32 @@ namespace App\Models{
 
 namespace App\Models{
 /**
+ * @property int $id
+ * @property int $team_id
+ * @property string $actor
+ * @property string $surface
+ * @property bool $old_pool_work
+ * @property bool $new_pool_work
+ * @property CarbonImmutable $created_at
+ * @property-read Team $team
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|TeamWorkPolicyChange newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|TeamWorkPolicyChange newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|TeamWorkPolicyChange query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|TeamWorkPolicyChange whereActor($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|TeamWorkPolicyChange whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|TeamWorkPolicyChange whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|TeamWorkPolicyChange whereNewPoolWork($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|TeamWorkPolicyChange whereOldPoolWork($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|TeamWorkPolicyChange whereSurface($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|TeamWorkPolicyChange whereTeamId($value)
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperTeamWorkPolicyChange {}
+}
+
+namespace App\Models{
+/**
  * @property string $id
  * @property string $work_task_id
  * @property int $sequence
