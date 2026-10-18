@@ -323,6 +323,7 @@ namespace App\Models{
  * @property CarbonImmutable $created_at
  * @property CarbonImmutable $updated_at
  * @property-read int|null $inboxes_count
+ * @property string|null $device_name
  * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\Inbox> $inboxes
  * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\SpokeProbe> $probes
  * @property-read int|null $probes_count
@@ -333,6 +334,7 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereCreatedAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereCredentialBacked($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereCredentialId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereDeviceName($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereId($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereLastCursor($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereLastPolledAt($value)
