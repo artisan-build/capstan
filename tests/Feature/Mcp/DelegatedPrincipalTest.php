@@ -12,6 +12,7 @@ use App\Mcp\Tools\CreateTaskTool;
 use App\Mcp\Tools\GetBrandKitTool;
 use App\Mcp\Tools\GetPageTool;
 use App\Mcp\Tools\GetTaskTool;
+use App\Mcp\Tools\GetTeamWorkPolicyTool;
 use App\Mcp\Tools\ListEscalationsTool;
 use App\Mcp\Tools\ListLayoutsTool;
 use App\Mcp\Tools\ListPagesTool;
@@ -25,6 +26,7 @@ use App\Mcp\Tools\QueueItemTool;
 use App\Mcp\Tools\ReleaseSeatTool;
 use App\Mcp\Tools\ReviseBriefTool;
 use App\Mcp\Tools\SendPostmasterMessageTool;
+use App\Mcp\Tools\SetTeamWorkPolicyTool;
 use App\Mcp\Tools\SteerTool;
 use App\Mcp\Tools\TakeSeatTool;
 use App\Mcp\Tools\UpdateBrandDraftTool;
@@ -407,6 +409,7 @@ test('the delegated enforcement harness reaches every tool through the canonical
         GetBrandKitTool::class => [],
         GetPageTool::class => ['page_id' => $uuid],
         GetTaskTool::class => ['team_id' => $team->id, 'task_id' => $uuid],
+        GetTeamWorkPolicyTool::class => ['team_id' => $team->id],
         ListEscalationsTool::class => ['team_id' => $team->id],
         ListLayoutsTool::class => [],
         ListPagesTool::class => [],
@@ -420,6 +423,7 @@ test('the delegated enforcement harness reaches every tool through the canonical
         ReleaseSeatTool::class => ['team_id' => $team->id, 'task_id' => $uuid, 'seat_fence' => 1, 'idempotency_key' => 'all-tools-release'],
         ReviseBriefTool::class => ['team_id' => $team->id, 'task_id' => $uuid, 'brief' => 'Revised.', 'idempotency_key' => 'all-tools-revise'],
         SendPostmasterMessageTool::class => ['idempotency_key' => 'all-tools-send', 'from' => 'relay@'.$server, 'to' => 'receiver@'.$server, 'type' => 'generic', 'version' => Envelope::CURRENT_VERSION, 'message_id' => 'all-tools-message', 'body' => ['subject' => 'Delegated']],
+        SetTeamWorkPolicyTool::class => ['team_id' => $team->id, 'pool_work' => true, 'idempotency_key' => 'all-tools-pool-work'],
         SteerTool::class => ['team_id' => $team->id, 'task_id' => $uuid, 'content' => 'Keep going.', 'idempotency_key' => 'all-tools-steer'],
         TakeSeatTool::class => ['team_id' => $team->id, 'task_id' => $uuid, 'session_ref' => 'all-tools-session', 'idempotency_key' => 'all-tools-take'],
         UpdateBrandDraftTool::class => ['idempotency_key' => 'all-tools-update-brand', 'changes' => ['display_name' => 'Delegated brand']],
@@ -435,6 +439,8 @@ test('the delegated enforcement harness reaches every tool through the canonical
         GetTaskTool::class,
         SteerTool::class,
         CancelTaskTool::class,
+        GetTeamWorkPolicyTool::class,
+        SetTeamWorkPolicyTool::class,
         TakeSeatTool::class,
         ReleaseSeatTool::class,
         ListEscalationsTool::class,
@@ -594,7 +600,7 @@ test('the delegated enforcement harness reaches every tool through the canonical
     $delegated = $report->families['mcp_delegated'];
 
     expect($delegated->applicability)->toBe('applicable')
-        ->and($delegated->visited)->toBe(28)
+        ->and($delegated->visited)->toBe(30)
         ->and($delegated->expected)->toBe($sortedExpected)
         ->and($delegated->discovered)->toBe($sortedExpected)
         ->and($delegated->violations)->toBe([]);

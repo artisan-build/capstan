@@ -168,7 +168,7 @@ test('keeps the exact read-effect tools on the read door when the write door is 
         ->and($meta->json('endpoints'))->toBe(['mcp' => '/mcp', 'mcp_write' => '/mcp/write']);
 
     $tools = collect(capstanMcpReadList($token)->assertOk()->json('result.tools'))->keyBy('name');
-    expect($tools->keys()->sort()->values()->all())->toBe(['get_brand_kit', 'get_page', 'get_task', 'list_escalations', 'list_layouts', 'list_pages', 'list_work', 'postmaster_messages', 'postmaster_spokes', 'preview_brand_draft']);
+    expect($tools->keys()->sort()->values()->all())->toBe(['get_brand_kit', 'get_page', 'get_task', 'get_team_work_policy', 'list_escalations', 'list_layouts', 'list_pages', 'list_work', 'postmaster_messages', 'postmaster_spokes', 'preview_brand_draft']);
 
     foreach ([
         'postmaster_spokes' => 'metadata',
@@ -200,6 +200,7 @@ test('keeps the exact read-effect tools on the read door when the write door is 
             'get_brand_kit',
             'get_page',
             'get_task',
+            'get_team_work_policy',
             'list_escalations',
             'list_layouts',
             'list_pages',
@@ -213,6 +214,7 @@ test('keeps the exact read-effect tools on the read door when the write door is 
             'release_seat',
             'revise_brief',
             'send_postmaster_message',
+            'set_team_work_policy',
             'steer',
             'take_seat',
             'update_brand_draft',
@@ -633,7 +635,7 @@ test('feature gating and unsupported subject types fail closed without changing 
 
     config(['capstan.features.postmaster' => false]);
     Feature::flushCache();
-    expect(capstanMcpReadList($token)->json('result.tools.*.name'))->toHaveCount(10);
+    expect(capstanMcpReadList($token)->json('result.tools.*.name'))->toHaveCount(11);
     capstanMcpReadCall('postmaster_spokes', (object) [], $token)
         ->assertOk()
         ->assertJsonPath('result.isError', true)

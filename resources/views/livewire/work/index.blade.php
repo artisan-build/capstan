@@ -1,6 +1,24 @@
 <div data-testid="work-board" class="space-y-6">
     <flux:heading size="xl">{{ __('Work') }}</flux:heading>
     <flux:text>{{ __('Latest 25 tasks, up to 25 items per task.') }}</flux:text>
+    <section data-testid="work-pool-setting-{{ $team->pool_work ? 'on' : 'off' }}" class="space-y-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-700">
+        <flux:heading size="lg">{{ __('Pooled work') }}</flux:heading>
+        <flux:text>{{ __('Changes apply to the :team team.', ['team' => $team->name]) }}</flux:text>
+        <flux:text>{{ __('When pooled work is on, new tasks can be claimed by any of this team\'s machines. When it is off, a new task stays with the person who created it, unless they address it to someone else.') }}</flux:text>
+        <flux:text>{{ __('Existing tasks are not affected. Only tasks created after a change follow the new setting.') }}</flux:text>
+        <flux:badge color="{{ $team->pool_work ? 'green' : 'zinc' }}">{{ $team->pool_work ? __('On') : __('Off') }}</flux:badge>
+        @if ($canManagePoolWork)
+            <flux:button data-testid="work-pool-setting-toggle" wire:click="setPoolWork({{ $team->pool_work ? 'false' : 'true' }})">
+                {{ $team->pool_work ? __('Turn pooled work off') : __('Turn pooled work on') }}
+            </flux:button>
+        @else
+            <flux:button data-testid="work-pool-setting-toggle" disabled>
+                {{ $team->pool_work ? __('Turn pooled work off') : __('Turn pooled work on') }}
+            </flux:button>
+            <flux:text>{{ __('Only an Owner or Admin can change this.') }}</flux:text>
+        @endif
+        <flux:error name="poolWork" />
+    </section>
     <section data-testid="work-escalations" class="space-y-4">
         <flux:heading size="lg">{{ __('Escalations') }}</flux:heading>
         <flux:text>{{ __('Pending questions addressed to you, up to 25.') }}</flux:text>

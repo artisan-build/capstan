@@ -81,12 +81,12 @@ cloud deploy -n
 
 ## 5. Connect your agent over MCP
 
-An agent connected to your installation through Scalpels gets 28 Capstan tools. Ten of them are
+An agent connected to your installation through Scalpels gets 30 Capstan tools. Eleven of them are
 read-only. Capstan also serves the same MCP server itself at `/mcp` and `/mcp/write`.
 
 | Area | Read-only tools | Tools that change data |
 | --- | --- | --- |
-| Work | `list_work`, `get_task`, `list_escalations` | `create_task`, `revise_brief`, `queue_item`, `cancel_item`, `steer`, `cancel_task`, `take_seat`, `release_seat`, `answer_escalation`, `orchestrate` |
+| Work | `list_work`, `get_task`, `list_escalations`, `get_team_work_policy` | `create_task`, `revise_brief`, `queue_item`, `cancel_item`, `steer`, `cancel_task`, `take_seat`, `release_seat`, `answer_escalation`, `orchestrate`, `set_team_work_policy` |
 | Postmaster | `postmaster_spokes`, `postmaster_messages` | `send_postmaster_message`, `ack_postmaster_messages` |
 | Pages and artifacts | `list_pages`, `get_page` | `publish_page`, `update_page`, `create_artifact_share` |
 | Brand kit | `get_brand_kit`, `list_layouts`, `preview_brand_draft` | `update_brand_draft`, `upload_brand_asset`, `apply_brand_draft` |
@@ -182,6 +182,16 @@ python3 drain/capstan_drain.py --config /absolute/path/to/config.json
 
 It claims the item and starts the stub, which reports `started` and then `done`. `list_work` or the
 `/work` page shows the result.
+
+The drain above runs as you, so it can claim the tasks you create. If your organisation runs its own
+machines under a separate service account, that account's drain is never offered your tasks, because
+each new task is addressed to the person who created it. Turn on pooled work for the team, either from
+the Pooled work section of the `/work` page or by calling `set_team_work_policy` with `team_id` `1`,
+`pool_work` `true` and an `idempotency_key`. New tasks can then be claimed by any of the team's machines.
+Tasks that already exist keep their address. If you only want to send particular tasks to a machine,
+leave the setting off and pass the service account's actor id as `user_actor_address` when you call
+`create_task`. Only an Owner or Admin can change the setting. [docs/work.md](work.md#who-can-claim-a-task)
+has the details.
 
 For the real loop, change `role_commands` to the harness you use (`drain/examples/claude.json` runs
 `claude -p`, `drain/examples/opencode.json` runs `opencode run`) and schedule the script once a minute.

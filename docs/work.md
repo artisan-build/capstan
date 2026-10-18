@@ -21,6 +21,31 @@ device-flow token for the same purpose, person and endpoint is accepted (last ch
 for Cloud v0.20.0). Write the `access_token` value alone into the file named by `credential_file` and
 set its mode to `0600`.
 
+## Who can claim a task
+
+A drain is offered only tasks that are unaddressed or addressed to its own `actor_id`. By default,
+`create_task` and the orchestrator's `create_child` address each new task to the person who created it, so
+a drain running as a separate service account never sees the tasks its colleagues create.
+
+Pooled work changes that default for one team. When it is on, new tasks can be claimed by any of the team's
+machines: they are created unaddressed, and any eligible drain on the team can claim them. When it is off,
+new tasks go back to being addressed to their creator. In both cases a creator who passes
+`user_actor_address` gets exactly that address, so you can send a single task to a service account
+without changing the setting.
+
+Existing tasks are not affected. A task created while pooled work was off stays addressed to its creator
+after it is turned on, and only tasks created after the change follow the new setting.
+
+Only an Owner or Admin can change it. The Work page at `/work` has a Pooled work section that names the
+team it changes (the default team) and a button that turns it on or off. A Member sees the button
+disabled. Over MCP, `get_team_work_policy` reads the setting for a `team_id`, and `set_team_work_policy`
+changes it with `team_id`, `pool_work` (`true` or `false`) and an `idempotency_key`. A Member calling
+either tool gets `Only an admitted Owner or Admin may manage Work.`
+
+Each change adds a row to `team_work_policy_changes` with the team, the actor id of the person who made
+it, where it came from (`web` for the page, `mcp` for the tool), the old and new values, and the time.
+Setting the value a team already has adds no row, and the MCP response reports `changed` as `false`.
+
 ## Configuration
 
 The drain reads one local JSON file. It does not require environment variables. Start from one of the
