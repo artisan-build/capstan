@@ -6,8 +6,20 @@ cron starts a new Python process each minute, and that process starts a fresh wo
 a working recipe for an organisation to adapt, not a required runtime or a launcher framework.
 
 Work is off by default. When the Work feature is off, its API, MCP tools, scheduled sweeps, and page are
-not available; the routes return not found and the rest of Capstan keeps working. Turn it on through the
-Capstan feature configuration before testing a drain.
+not available; the routes return not found and the rest of Capstan keeps working. Turn it on with
+`CAPSTAN_FEATURE_WORK=true` in the environment before testing a drain. There is no switch for it in the
+app.
+
+## The drain credential
+
+The drain authenticates with a `capstan.work.drain` bearer that belongs to the person whose numeric id is
+in `actor_id`. Get it through the device flow in the README's
+[Getting a token](../README.md#getting-a-token) section, with `app_purpose` set to `capstan.work.drain`.
+Do not mint it from `/settings/credentials/personal` or `/settings/credentials/installation`. Those pages
+issue a token, but `POST /api/v1/work/{team}/claim` rejects it with `401 unauthenticated`, while a
+device-flow token for the same purpose, person and endpoint is accepted (last checked 2026-10-18, Built
+for Cloud v0.20.0). Write the `access_token` value alone into the file named by `credential_file` and
+set its mode to `0600`.
 
 ## Configuration
 
@@ -60,6 +72,13 @@ and feature state without claiming an item:
 ```sh
 python3 drain/capstan_drain.py --config /absolute/path/to/config.json --dry-claim
 ```
+
+The reference drain sends `User-Agent: capstan-drain/1` on every request, and the stub worker does the
+same. Keep an explicit User-Agent in any drain you adapt. Python's default, `Python-urllib/3.x`, is
+refused by Cloudflare in front of Laravel Cloud with `403` and the body `error code: 1010`, before the
+request reaches Capstan, and the drain reports `API request failed (403 request_failed)`. None of this
+happens against localhost, so a drain that works locally can still fail every request against a Cloud
+install.
 
 ## What one run does
 

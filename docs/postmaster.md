@@ -213,7 +213,7 @@ correct digest and makes it **Green**. A stale poller or a failed probe is **Red
 Treat a copied snippet as sensitive until its ten-minute device grant expires or is consumed. If it
 leaks before approval, do not approve it; generate a new snippet and let the old code expire. If it
 leaks after approval or may have been exchanged, revoke the resulting personal credential at
-`/bfc/ui/credentials/personal`, remove the local credential files and cron entry, then generate a fresh
+`/settings/credentials/personal`, remove the local credential files and cron entry, then generate a fresh
 snippet.
 
 ### Deployment requirements
