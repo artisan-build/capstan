@@ -75,9 +75,15 @@ class Index extends Component
         unset($this->answers[$escalationId]);
     }
 
-    public function setPoolWork(bool $poolWork, TeamWorkPolicy $policy): void
+    public function setPoolWork(mixed $poolWork, TeamWorkPolicy $policy): void
     {
         $this->guardAccess();
+        // Livewire coerces scalars into a bool parameter, so "false" would turn pooling on.
+        if (! is_bool($poolWork)) {
+            $this->addError('poolWork', __('Pooled work can only be turned on or off.'));
+
+            return;
+        }
         try {
             $policy->setPoolWork(Team::default(), request()->user(), $poolWork, TeamWorkPolicy::SURFACE_WEB);
         } catch (AuthorizationException $exception) {

@@ -153,6 +153,32 @@ test('managers get an operable toggle that names the team it changes', function 
         ->and($toggle->getAttribute('wire:click'))->toBe('setPoolWork(true)');
 });
 
+test('an Owner page call with a non-boolean value is refused readably and changes nothing', function (mixed $value): void {
+    $owner = capstanUser(['role' => 'owner']);
+    $team = Team::default();
+
+    Livewire::actingAs($owner)->test(Index::class)
+        ->call('setPoolWork', $value)
+        ->assertOk()
+        ->assertHasErrors('poolWork')
+        ->assertSeeHtml('data-testid="work-pool-setting-off"');
+    expect($team->fresh()->pool_work)->toBeFalse()
+        ->and(TeamWorkPolicyChange::query()->count())->toBe(0);
+
+    // A real boolean from the same component still works after a refusal.
+    Livewire::actingAs($owner)->test(Index::class)
+        ->call('setPoolWork', true)
+        ->assertHasNoErrors();
+    expect($team->fresh()->pool_work)->toBeTrue()
+        ->and(TeamWorkPolicyChange::query()->sole()->new_pool_work)->toBeTrue();
+})->with([
+    'string false' => ['false'],
+    'string true' => ['true'],
+    'integer one' => [1],
+    'array' => [[true]],
+    'null' => [null],
+]);
+
 test('the page action still requires Work and product admission before any change', function (): void {
     $owner = capstanUser(['role' => 'owner']);
     $team = Team::default();
