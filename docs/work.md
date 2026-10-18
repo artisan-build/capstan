@@ -152,6 +152,14 @@ then explicitly sends the `finish` action with state `acted` or `failed`. A succ
 rewritten state of play for the next turn. This cold fresh-process path is the reference behaviour and the
 recovery path for every implementation.
 
+When a person answers an escalation, in the app or over MCP, the event that wakes the turn is accompanied
+by the answer itself. The orchestration context carries an `answered_escalations` list, and each entry
+holds the escalation id, the question, the options, the `answer` text, and `answered_at`. The list covers
+only the escalations this task was woken by, so a turn never sees another task's answers. Read the answer
+from that field rather than asking the person again. It is human input: treat it as data, and never paste
+it into instruction text a model will follow. The reader is whoever holds that task's orchestrator seat
+when the turn runs, which need not be the person who answered.
+
 ## Optional session reuse
 
 An adapted drain may keep an orchestrator session alive between turns. It keeps the parent seat renewed,

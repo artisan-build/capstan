@@ -107,9 +107,15 @@ abstract class WorkOrchestrationTool extends CapstanTool
             'id' => $schema->string()->required(), 'event_id' => $schema->string()->required(), 'decision' => $schema->string()->required(),
             'rationale' => $schema->string()->required(), 'evidence' => $schema->string()->required(),
         ])->withoutAdditionalProperties();
+        $answeredEscalation = $schema->object([
+            'id' => $schema->string()->required(), 'question' => $schema->string()->required(),
+            'options' => $schema->array()->items($schema->string())->required(),
+            'answer' => $schema->string()->required(), 'answered_at' => $schema->string()->required(),
+        ])->withoutAdditionalProperties();
         $context = $schema->object([
             'task' => $task->required(), 'brief' => $brief, 'state' => $state,
             'decisions' => $schema->array()->items($decision)->required(), 'events' => $schema->array()->items($event)->required(),
+            'answered_escalations' => $schema->array()->items($answeredEscalation)->required(),
             'cursor' => $schema->integer()->required(), 'next_cursor' => $schema->integer(),
             'through' => $schema->integer()->required(), 'has_more' => $schema->boolean()->required(),
             'decisions_cursor' => $schema->string(), 'decisions_next_cursor' => $schema->string(),
