@@ -423,6 +423,39 @@ class ApiTransportTests(DrainTestCase):
         for sensitive in ("secret-bearer", "918273645", "location-secret", "redirect-secret", "redirect_body_secret"):
             self.assertNotIn(sensitive, str(failure.exception))
 
+    def test_requests_carry_an_explicit_user_agent_on_the_wire(self) -> None:
+        received_headers: list[dict[str, str]] = []
+
+        class ClaimHandler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                received_headers.append(dict(self.headers))
+                body = b'{"items":[]}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_: object) -> None:
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), ClaimHandler)
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        try:
+            self.write_config(capstan_url=f"http://127.0.0.1:{server.server_port}")
+            client = drain.ApiClient(drain.load_config(self.config_path), "secret-bearer")
+            self.assertEqual(client.claim(0, ["builder"], ["php"]), [])
+        finally:
+            server.shutdown()
+            server.server_close()
+            server_thread.join()
+
+        self.assertEqual(len(received_headers), 1)
+        user_agent = received_headers[0].get("User-Agent")
+        self.assertTrue(user_agent)
+        self.assertNotIn("Python-urllib", user_agent)
+
     def test_capstan_url_requires_https_except_for_local_loopback_http(self) -> None:
         accepted = (
             "https://capstan.test",

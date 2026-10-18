@@ -284,6 +284,7 @@ class ApiClient:
             "Accept": "application/json",
             "Authorization": f"Bearer {credential}",
             "Content-Type": "application/json",
+            "User-Agent": "capstan-drain/1",
             "X-Capstan-Actor-ID": config.actor_id,
         }
         self.timeout = config.request_timeout_seconds
