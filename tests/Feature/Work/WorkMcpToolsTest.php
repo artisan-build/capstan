@@ -3,6 +3,7 @@
 use App\Auth\CapstanCredentialDeclaration;
 use App\Enums\WorkItemState;
 use App\Mcp\CapstanServer;
+use App\Mcp\Tools\OrchestrateTool;
 use App\Mcp\WriteFaultInjector;
 use App\Models\Spoke;
 use App\Models\Team;
@@ -628,7 +629,7 @@ test('MCP orchestrate refuses an invalid action input readably without internal 
 
     $response = workMcpCall('orchestrate', $base + ['input' => $input, 'idempotency_key' => 'mcp-invalid-input-missing-key'], $token)->assertOk();
     $refused = $response->json('result.structuredContent');
-    $definition = resolve('App\\Mcp\\Tools\\OrchestrateTool')->toArray();
+    $definition = resolve(OrchestrateTool::class)->toArray();
     assertWorkSchema(json_decode($response->content())->result->structuredContent, $definition['outputSchema']);
     expect($refused)->toBe(['outcome' => 'refused', 'reason' => 'invalid_orchestration_action'])
         ->and($response->json('result.isError'))->toBeFalse()
