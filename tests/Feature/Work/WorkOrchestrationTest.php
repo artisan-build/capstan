@@ -1147,8 +1147,14 @@ test('an answered escalation reaches the woken turn with its answer and never an
 
     $answer = 'Option A: finish now, and open a follow-up task tomorrow.';
     resolve(WorkOrchestrationMcpService::class)->answer($parent->team_id, $escalation->id, $actor, $answer, CarbonImmutable::now());
-    // AC4: a replayed answer must not produce a second entry in the read.
+    // AC4, upstream half: a replayed answer is a no-op, so it writes neither a new answer nor a second event.
     resolve(WorkOrchestrationMcpService::class)->answer($parent->team_id, $escalation->id, $actor, 'A different answer', CarbonImmutable::now());
+    expect($escalation->fresh()->answer)->toBe($answer)
+        ->and(WorkOrchestrationEvent::query()->where('source_key', 'answer:'.$escalation->id)->count())->toBe(1);
+
+    // AC4, read half: two pointers to the same escalation in one window must still yield one entry, so a
+    // read that built an entry per pointing event instead of per row would be caught here.
+    $engine->event($parent, 'second-pointer-same-escalation', 'escalation_answered', ['escalation_id' => $escalation->id], inheritAuthor: false);
 
     $host = orchestrationHost('answer-reaches-host');
     $turn = orchestrationClaims($parent, $host)[0];
@@ -1156,6 +1162,7 @@ test('an answered escalation reaches the woken turn with its answer and never an
 
     // The invariant first, so a regression says "the read does not carry the answer" rather than erroring on a missing path.
     expect($read->json('context.answered_escalations.0.answer'))->toBe($answer);
+    expect($read->json('context.events'))->toHaveCount(2); // both pointers are inside this turn's window
     $read->assertJsonCount(1, 'context.answered_escalations')
         ->assertJsonPath('context.answered_escalations.0.id', $escalation->id)
         ->assertJsonPath('context.answered_escalations.0.question', 'Which way should the worker finish?')

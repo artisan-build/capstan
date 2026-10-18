@@ -20,6 +20,7 @@ use Closure;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Laravel\Pennant\Feature;
 
 /** The single auditable boundary for writes made with an orchestrator authority. */
@@ -322,7 +323,7 @@ final readonly class WorkOrchestrationCapability
     {
         $ids = $events->where('kind', 'escalation_answered')
             ->map(fn (WorkOrchestrationEvent $event): mixed => $event->evidence['escalation_id'] ?? null)
-            ->filter(fn (mixed $id): bool => is_string($id))
+            ->filter(fn (mixed $id): bool => is_string($id) && Str::isUuid($id))
             ->unique()
             ->values()
             ->all();
