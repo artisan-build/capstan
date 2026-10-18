@@ -2,6 +2,7 @@
 
 namespace App\Mcp\Tools;
 
+use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Mcp\AdvertisesToolEffect;
 use ArtisanBuild\BuiltForCloud\Mcp\RespectsEffectCeiling;
 use Illuminate\Validation\ValidationException;
@@ -73,14 +74,24 @@ abstract class CapstanTool extends Tool
 
     private function rawArgumentObject(): ?stdClass
     {
-        $payload = json_decode(request()->getContent(), false);
+        $httpRequest = request();
+        $payload = json_decode($httpRequest->getContent(), false);
         $params = $payload instanceof stdClass && property_exists($payload, 'params') ? $payload->params : null;
-        if (! $params instanceof stdClass) {
+        if ($params instanceof stdClass) {
+            $arguments = property_exists($params, 'arguments') ? $params->arguments : new stdClass;
+
+            return $arguments instanceof stdClass ? $arguments : null;
+        }
+
+        if (! is_callable($httpRequest->attributes->get(ActingPrincipalResolver::OBSERVER_ATTRIBUTE))) {
             return null;
         }
 
-        $arguments = property_exists($params, 'arguments') ? $params->arguments : new stdClass;
+        $mcpRequest = app('mcp.request');
+        if (! $mcpRequest instanceof Request) {
+            return null;
+        }
 
-        return $arguments instanceof stdClass ? $arguments : null;
+        return json_decode(json_encode((object) $mcpRequest->all(), JSON_THROW_ON_ERROR), false, flags: JSON_THROW_ON_ERROR);
     }
 }

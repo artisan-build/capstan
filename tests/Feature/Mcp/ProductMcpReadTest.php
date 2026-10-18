@@ -10,6 +10,7 @@ use App\Models\Envelope;
 use App\Models\Inbox;
 use App\Models\Spoke;
 use App\Support\JsonCanonicalizer;
+use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
@@ -384,7 +385,11 @@ test('reading spokes performs no writes with the production database cache store
 
     $response = resolve(PostmasterSpokesTool::class)->handle(
         new McpRequest(['limit' => 1]),
-        new OwnerSubjectResolver($httpRequest, resolve(ManagedAccountAccess::class)),
+        new OwnerSubjectResolver(
+            $httpRequest,
+            resolve(ActingPrincipalResolver::class),
+            resolve(ManagedAccountAccess::class),
+        ),
         resolve(SignedCursor::class),
     );
     expect($response)->toBeInstanceOf(ResponseFactory::class)

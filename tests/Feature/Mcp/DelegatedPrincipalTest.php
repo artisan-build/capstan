@@ -1,20 +1,47 @@
 <?php
 
+use App\Enums\PageLayout;
 use App\Mcp\CapstanServer;
+use App\Mcp\Tools\AckPostmasterMessagesTool;
+use App\Mcp\Tools\AnswerEscalationTool;
+use App\Mcp\Tools\ApplyBrandDraftTool;
+use App\Mcp\Tools\CancelItemTool;
+use App\Mcp\Tools\CancelTaskTool;
+use App\Mcp\Tools\CreateArtifactShareTool;
 use App\Mcp\Tools\CreateTaskTool;
+use App\Mcp\Tools\GetBrandKitTool;
+use App\Mcp\Tools\GetPageTool;
 use App\Mcp\Tools\GetTaskTool;
+use App\Mcp\Tools\ListEscalationsTool;
+use App\Mcp\Tools\ListLayoutsTool;
 use App\Mcp\Tools\ListPagesTool;
 use App\Mcp\Tools\ListWorkTool;
 use App\Mcp\Tools\OrchestrateTool;
+use App\Mcp\Tools\PostmasterMessagesTool;
+use App\Mcp\Tools\PostmasterSpokesTool;
+use App\Mcp\Tools\PreviewBrandDraftTool;
+use App\Mcp\Tools\PublishPageTool;
 use App\Mcp\Tools\QueueItemTool;
+use App\Mcp\Tools\ReleaseSeatTool;
+use App\Mcp\Tools\ReviseBriefTool;
+use App\Mcp\Tools\SendPostmasterMessageTool;
+use App\Mcp\Tools\SteerTool;
 use App\Mcp\Tools\TakeSeatTool;
+use App\Mcp\Tools\UpdateBrandDraftTool;
+use App\Mcp\Tools\UpdatePageTool;
+use App\Mcp\Tools\UploadBrandAssetTool;
 use App\Models\Envelope;
 use App\Models\Inbox;
+use App\Models\Page;
 use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkOrchestratorSeat;
 use App\Models\WorkTask;
+use App\Support\BrandKitService;
+use App\Work\WorkOrchestrationMcpService;
+use App\Work\WorkToolService;
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
+use ArtisanBuild\BuiltForCloud\Console\ActingPrincipal;
 use ArtisanBuild\BuiltForCloud\Console\Assertion;
 use ArtisanBuild\BuiltForCloud\Console\AssertionPurpose;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleRole;
@@ -26,7 +53,9 @@ use ArtisanBuild\BuiltForCloud\Mcp\Effect;
 use ArtisanBuild\BuiltForCloud\Mcp\RequestEffectCeiling;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
-use ArtisanBuild\BuiltForCloud\Testing\McpDelegatedTools;
+use ArtisanBuild\BuiltForCloud\Testing\ConsumerConformance;
+use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
+use ArtisanBuild\BuiltForCloud\Testing\McpDelegatedEnforcement;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Carbon\CarbonImmutable;
@@ -35,9 +64,12 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Laravel\Mcp\ResponseFactory;
 use Laravel\Pennant\Feature;
 use PHPUnit\Framework\Assert;
-use PHPUnit\Framework\AssertionFailedError;
+use Ramsey\Uuid\Uuid;
+
+uses(ContractAssertions::class);
 
 beforeEach(function (): void {
     config([
@@ -69,12 +101,16 @@ beforeEach(function (): void {
     ]);
 });
 
-function delegatedPrincipalUser(string $scalpelsId, UserRole $role = UserRole::Owner): User
-{
+function delegatedPrincipalUser(
+    string $scalpelsId,
+    UserRole $role = UserRole::Owner,
+    string $issuer = 'https://scalpels.test',
+    string $connectionId = 'delegated-principal-connection',
+): User {
     return capstanUser([
         'role' => $role->value,
-        'scalpels_issuer' => 'https://scalpels.test',
-        'scalpels_connection_id' => 'delegated-principal-connection',
+        'scalpels_issuer' => $issuer,
+        'scalpels_connection_id' => $connectionId,
         'scalpels_id' => $scalpelsId,
         'managed_membership_status' => 'active',
         'managed_membership_role' => $role->value,
@@ -286,74 +322,251 @@ test('a delegated member receives a readable Work authorization error with debug
         ->assertHasErrors(['Only an admitted Owner or Admin may manage Work.']);
 });
 
-test('every registered read and write tool resolves a fully published delegated RequestAssertion', function (): void {
-    $user = delegatedPrincipalUser('all-tools-scalpels-user');
+test('the delegated enforcement harness reaches every tool through the canonical principal resolver', function (): void {
+    DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
+        'issuer' => 'https://bfc-enforcement.test',
+        'authority_base_url' => 'https://bfc-enforcement.test',
+    ]);
+    $connectionId = 'delegated-principal-connection';
+    $user = delegatedPrincipalUser(
+        'bfc-enforcement-primary',
+        issuer: 'https://bfc-enforcement.test',
+        connectionId: $connectionId,
+    );
+    delegatedPrincipalUser(
+        'bfc-enforcement-secondary',
+        UserRole::Admin,
+        issuer: 'https://bfc-enforcement.test',
+        connectionId: $connectionId,
+    );
     $team = Team::query()->create([
         'name' => 'Every delegated tool team',
         'slug' => 'every-delegated-tool-team',
         'pool_work' => true,
     ]);
     Inbox::query()->create(['actor_id' => (string) $user->getKey(), 'local_part' => 'relay']);
-
+    resolve(BrandKitService::class)->updateDraft($user, ['display_name' => 'Delegated brand']);
+    $orchestrationTask = resolve(WorkToolService::class)->write('create_task', [
+        'team_id' => $team->id,
+        'title' => 'Delegated enforcement orchestration task',
+        'brief' => 'Used to reach the orchestration handler.',
+        'failover' => true,
+        'required_capabilities' => [],
+        'timebox_minutes' => 30,
+    ], (string) $user->getKey());
+    $enforcementIdentityHash = DelegatedActor::identityHash(
+        'https://bfc-enforcement.test',
+        'bfc-enforcement-primary',
+    );
+    $enforcementCredentialId = (string) Uuid::uuid5(
+        Uuid::NAMESPACE_URL,
+        DelegatedActor::class."\0".$enforcementIdentityHash,
+    );
+    $seat = resolve(WorkOrchestrationMcpService::class)->take(
+        $team->id,
+        $orchestrationTask['task']['id'],
+        (string) $user->getKey(),
+        $enforcementCredentialId,
+        null,
+        'all-tools-session',
+        0,
+        CarbonImmutable::now(),
+        credentialBacked: false,
+    );
     $uuid = (string) Str::uuid7();
     $server = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
     $arguments = [
-        'ack_postmaster_messages' => ['idempotency_key' => 'all-tools-ack', 'message_ids' => ['missing-message']],
-        'answer_escalation' => ['team_id' => $team->id, 'escalation_id' => $uuid, 'answer' => 'No.', 'idempotency_key' => 'all-tools-answer'],
-        'apply_brand_draft' => ['idempotency_key' => 'all-tools-apply-brand', 'draft_fingerprint' => str_repeat('a', 64)],
-        'cancel_item' => ['team_id' => $team->id, 'item_id' => $uuid, 'idempotency_key' => 'all-tools-cancel-item'],
-        'cancel_task' => ['team_id' => $team->id, 'task_id' => $uuid, 'idempotency_key' => 'all-tools-cancel-task'],
-        'create_artifact_share' => ['idempotency_key' => 'all-tools-artifact', 'content' => '<p>Delegated artifact</p>', 'content_type' => 'text/html', 'visibility' => 'org_auth'],
-        'create_task' => ['team_id' => $team->id, 'title' => 'Every tool task', 'brief' => 'Exercise delegated principal resolution.', 'idempotency_key' => 'all-tools-create-task'],
-        'get_brand_kit' => [],
-        'get_page' => ['page_id' => $uuid],
-        'get_task' => ['team_id' => $team->id, 'task_id' => $uuid],
-        'list_escalations' => ['team_id' => $team->id],
-        'list_layouts' => [],
-        'list_pages' => [],
-        'list_work' => ['team_id' => $team->id],
-        'orchestrate' => ['team_id' => $team->id, 'task_id' => $uuid, 'seat_fence' => 1, 'session_ref' => 'all-tools-session', 'action' => 'finish', 'input' => ['state' => 'acted'], 'idempotency_key' => 'all-tools-orchestrate'],
-        'postmaster_messages' => ['inbox' => 'relay'],
-        'postmaster_spokes' => [],
-        'preview_brand_draft' => [],
-        'publish_page' => ['idempotency_key' => 'all-tools-publish-page', 'title' => 'Delegated page', 'recipe' => 'Rebuild from the delegated test.', 'layout' => 'report', 'content' => '<p>Delegated page</p>', 'content_type' => 'text/html'],
-        'queue_item' => ['team_id' => $team->id, 'task_id' => $uuid, 'role' => 'builder', 'idempotency_key' => 'all-tools-queue'],
-        'release_seat' => ['team_id' => $team->id, 'task_id' => $uuid, 'seat_fence' => 1, 'idempotency_key' => 'all-tools-release'],
-        'revise_brief' => ['team_id' => $team->id, 'task_id' => $uuid, 'brief' => 'Revised.', 'idempotency_key' => 'all-tools-revise'],
-        'send_postmaster_message' => ['idempotency_key' => 'all-tools-send', 'from' => 'relay@'.$server, 'to' => 'receiver@'.$server, 'type' => 'generic', 'version' => Envelope::CURRENT_VERSION, 'message_id' => 'all-tools-message', 'body' => ['subject' => 'Delegated']],
-        'steer' => ['team_id' => $team->id, 'task_id' => $uuid, 'content' => 'Keep going.', 'idempotency_key' => 'all-tools-steer'],
-        'take_seat' => ['team_id' => $team->id, 'task_id' => $uuid, 'session_ref' => 'all-tools-session', 'idempotency_key' => 'all-tools-take'],
-        'update_brand_draft' => ['idempotency_key' => 'all-tools-update-brand', 'changes' => ['display_name' => 'Delegated brand']],
-        'update_page' => ['idempotency_key' => 'all-tools-update-page', 'page_id' => $uuid, 'content' => '<p>Updated delegated page</p>', 'content_type' => 'text/html'],
-        'upload_brand_asset' => ['idempotency_key' => 'all-tools-upload-brand', 'kind' => 'mark', 'bytes_base64' => base64_encode((string) base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', true))],
+        AckPostmasterMessagesTool::class => ['idempotency_key' => 'all-tools-ack', 'message_ids' => ['missing-message']],
+        AnswerEscalationTool::class => ['team_id' => $team->id, 'escalation_id' => $uuid, 'answer' => 'No.', 'idempotency_key' => 'all-tools-answer'],
+        ApplyBrandDraftTool::class => ['idempotency_key' => 'all-tools-apply-brand', 'draft_fingerprint' => str_repeat('a', 64)],
+        CancelItemTool::class => ['team_id' => $team->id, 'item_id' => $uuid, 'idempotency_key' => 'all-tools-cancel-item'],
+        CancelTaskTool::class => ['team_id' => $team->id, 'task_id' => $uuid, 'idempotency_key' => 'all-tools-cancel-task'],
+        CreateArtifactShareTool::class => ['idempotency_key' => 'all-tools-artifact', 'content' => '<p>Delegated artifact</p>', 'content_type' => 'text/html', 'visibility' => 'org_auth'],
+        CreateTaskTool::class => ['team_id' => $team->id, 'title' => 'Every tool task', 'brief' => 'Exercise delegated principal resolution.', 'idempotency_key' => 'all-tools-create-task'],
+        GetBrandKitTool::class => [],
+        GetPageTool::class => ['page_id' => $uuid],
+        GetTaskTool::class => ['team_id' => $team->id, 'task_id' => $uuid],
+        ListEscalationsTool::class => ['team_id' => $team->id],
+        ListLayoutsTool::class => [],
+        ListPagesTool::class => [],
+        ListWorkTool::class => ['team_id' => $team->id],
+        OrchestrateTool::class => ['team_id' => $team->id, 'task_id' => $orchestrationTask['task']['id'], 'seat_fence' => $seat['seat']['seat_fence'], 'session_ref' => 'all-tools-session', 'action' => 'create_child', 'input' => ['under_task_id' => $orchestrationTask['task']['id'], 'title' => 'Harness child', 'brief' => 'Created by delegated enforcement.'], 'idempotency_key' => 'all-tools-orchestrate'],
+        PostmasterMessagesTool::class => ['inbox' => 'relay'],
+        PostmasterSpokesTool::class => [],
+        PreviewBrandDraftTool::class => [],
+        PublishPageTool::class => ['idempotency_key' => 'all-tools-publish-page', 'title' => 'Delegated page', 'recipe' => 'Rebuild from the delegated test.', 'layout' => 'report', 'content' => '<p>Delegated page</p>', 'content_type' => 'text/html'],
+        QueueItemTool::class => ['team_id' => $team->id, 'task_id' => $uuid, 'role' => 'builder', 'idempotency_key' => 'all-tools-queue'],
+        ReleaseSeatTool::class => ['team_id' => $team->id, 'task_id' => $uuid, 'seat_fence' => 1, 'idempotency_key' => 'all-tools-release'],
+        ReviseBriefTool::class => ['team_id' => $team->id, 'task_id' => $uuid, 'brief' => 'Revised.', 'idempotency_key' => 'all-tools-revise'],
+        SendPostmasterMessageTool::class => ['idempotency_key' => 'all-tools-send', 'from' => 'relay@'.$server, 'to' => 'receiver@'.$server, 'type' => 'generic', 'version' => Envelope::CURRENT_VERSION, 'message_id' => 'all-tools-message', 'body' => ['subject' => 'Delegated']],
+        SteerTool::class => ['team_id' => $team->id, 'task_id' => $uuid, 'content' => 'Keep going.', 'idempotency_key' => 'all-tools-steer'],
+        TakeSeatTool::class => ['team_id' => $team->id, 'task_id' => $uuid, 'session_ref' => 'all-tools-session', 'idempotency_key' => 'all-tools-take'],
+        UpdateBrandDraftTool::class => ['idempotency_key' => 'all-tools-update-brand', 'changes' => ['display_name' => 'Delegated brand']],
+        UpdatePageTool::class => ['idempotency_key' => 'all-tools-update-page', 'page_id' => $uuid, 'content' => '<p>Updated delegated page</p>', 'content_type' => 'text/html'],
+        UploadBrandAssetTool::class => ['idempotency_key' => 'all-tools-upload-brand', 'kind' => 'mark', 'bytes_base64' => base64_encode((string) base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', true))],
     ];
-    ksort($arguments);
+    $expected = [
+        CreateTaskTool::class,
+        ReviseBriefTool::class,
+        QueueItemTool::class,
+        CancelItemTool::class,
+        ListWorkTool::class,
+        GetTaskTool::class,
+        SteerTool::class,
+        CancelTaskTool::class,
+        TakeSeatTool::class,
+        ReleaseSeatTool::class,
+        ListEscalationsTool::class,
+        AnswerEscalationTool::class,
+        OrchestrateTool::class,
+        PostmasterSpokesTool::class,
+        PostmasterMessagesTool::class,
+        SendPostmasterMessageTool::class,
+        AckPostmasterMessagesTool::class,
+        CreateArtifactShareTool::class,
+        PublishPageTool::class,
+        UpdatePageTool::class,
+        ListPagesTool::class,
+        GetPageTool::class,
+        GetBrandKitTool::class,
+        ListLayoutsTool::class,
+        PreviewBrandDraftTool::class,
+        UpdateBrandDraftTool::class,
+        UploadBrandAssetTool::class,
+        ApplyBrandDraftTool::class,
+    ];
+    $negativeAuthorization = static function (
+        ActingPrincipal $first,
+        ActingPrincipal $second,
+        Closure $invoke,
+    ): void {
+        $firstUser = User::query()
+            ->where('scalpels_issuer', 'https://bfc-enforcement.test')
+            ->where('scalpels_connection_id', 'delegated-principal-connection')
+            ->where('scalpels_id', $first->delegatedActor?->subject)
+            ->sole();
+        $secondUser = User::query()
+            ->where('scalpels_issuer', 'https://bfc-enforcement.test')
+            ->where('scalpels_connection_id', 'delegated-principal-connection')
+            ->where('scalpels_id', $second->delegatedActor?->subject)
+            ->sole();
+        $page = Page::query()->create([
+            'owner_user_id' => (string) $firstUser->getKey(),
+            'title' => 'Primary enforcement subject only',
+            'refresh_recipe' => 'Created by the delegated enforcement isolation case.',
+            'layout' => PageLayout::Report,
+        ]);
 
-    $registered = collect(McpDelegatedTools::discover(CapstanServer::class)['tools'])
-        ->mapWithKeys(fn (string $class): array => [resolve($class)->name() => $class])
-        ->sortKeys();
+        $response = $invoke(ListPagesTool::class);
 
-    expect($registered->keys()->all())->toBe(array_keys($arguments));
+        Assert::assertInstanceOf(ResponseFactory::class, $response);
+        $structured = $response->getStructuredContent();
+        Assert::assertIsArray($structured);
+        Assert::assertNotSame((string) $firstUser->getKey(), (string) $secondUser->getKey());
+        Assert::assertNotContains($page->id, array_column($structured['items'] ?? [], 'id'));
+    };
 
-    foreach ($registered as $name => $class) {
-        $actor = publishDelegatedPrincipal('unbound-all-tools-user', $arguments[$name]);
-        expect(RequestAssertion::principal(request())?->delegatedActor)->toBe($actor);
-        $response = CapstanServer::tool($class, $arguments[$name]);
-        try {
-            $response->assertHasErrors(['This MCP principal is not supported.']);
-        } catch (AssertionFailedError $error) {
-            Assert::fail("The unbound delegated call to {$name} did not reach principal resolution: {$error->getMessage()}");
-        }
-    }
+    McpDelegatedEnforcement::assertHonors(
+        CapstanServer::class,
+        $expected,
+        ConsoleRole::Admin,
+        $negativeAuthorization,
+        $arguments,
+    );
+    $probe = McpDelegatedEnforcement::probe(
+        CapstanServer::class,
+        ConsoleRole::Admin,
+        $negativeAuthorization,
+        $arguments,
+    );
+    $sortedExpected = $expected;
+    sort($sortedExpected);
 
-    foreach ($registered as $name => $class) {
-        $actor = publishDelegatedPrincipal('all-tools-scalpels-user', $arguments[$name]);
-        expect(RequestAssertion::principal(request())?->delegatedActor)->toBe($actor);
-        try {
-            CapstanServer::tool($class, $arguments[$name])
-                ->assertDontSee('This MCP principal is not supported.');
-        } catch (AssertionFailedError $error) {
-            Assert::fail("The bound delegated call to {$name} failed after principal resolution: {$error->getMessage()}");
-        }
-    }
+    expect($probe['tools'])->toBe($sortedExpected)
+        ->and($probe['invoked'])->toBe($sortedExpected)
+        ->and($probe['refusals'])->toBe([])
+        ->and($probe['principal_mismatches'])->toBe([])
+        ->and($probe['unreached'])->toBe([])
+        ->and($probe['negative_authorization'])->toBe('passed')
+        ->and($probe['violations'])->toBe([]);
+
+    $this->assertBuiltForCloudFleetConformance(new ConsumerConformance(
+        consumer: 'capstan',
+        consumerRoot: base_path(),
+        packageRoot: base_path('vendor/artisan-build/built-for-cloud'),
+        sourceRoots: [base_path('app/Mcp')],
+        providerFiles: [
+            base_path('vendor/artisan-build/built-for-cloud/src/BuiltForCloudServiceProvider.php'),
+        ],
+        runtimeAssertions: ['meta'],
+        capabilities: ['mcp-delegated'],
+        purposeMappings: [],
+        mcpServer: CapstanServer::class,
+        expected: [
+            'runtime.meta' => [],
+            'runtime.auth_schema' => [],
+            'runtime.credential_listing' => [],
+            'runtime.transport_parity' => [],
+            'thin_host' => [],
+            'credential_paths' => [
+                'path:Basic|ArtisanBuild\BuiltForCloud\Auth\BasicAuthenticator',
+                'path:Bearer|ArtisanBuild\BuiltForCloud\Auth\BearerAuthenticator',
+                'path:HMAC|Http\Middleware\VerifyHmacSignature+Hmac\HmacVerifier',
+                'path:MCP|Http\Middleware\AuthenticateMcp:store-bearer+v4.public',
+                'path:asymmetric|Actions\MintCredential::mintEnrollment+CompleteAsymmetricEnrollment+AsymmetricVerificationKeys',
+                'path:device|Http\Controllers\DeviceAuthorizations+Actions\StartDeviceAuthorization/DecideDeviceAuthorization/PollDeviceAuthorization+BoundBearerCredentialAuthenticator+ContainCredentialAuthorizations',
+                'path:enrollment|OnboardingToken+POST:/bfc/claim,/bfc/onboarding/issue,/exchange,/verify',
+                'path:loopback|Http\Controllers\LoopbackAuthorizations+Actions\StartLoopbackAuthorization/DecideLoopbackAuthorization/ExchangeLoopbackAuthorization+BoundBearerCredentialAuthenticator+ContainCredentialAuthorizations',
+                'path:system|SubjectType::Operator/Application/Installation+AuditActorType::CliOperator',
+            ],
+            'credential_writers' => [
+                'ArtisanBuild\BuiltForCloud\Actions\MintCredential::mintEnrollment',
+                'ArtisanBuild\BuiltForCloud\Actions\MintCredential::mintSecretBearing',
+                'ArtisanBuild\BuiltForCloud\Actions\MintCredential::mintSigningKey',
+                'ArtisanBuild\BuiltForCloud\Actions\RotateCredential::replaceWithEnrollment',
+                'ArtisanBuild\BuiltForCloud\Actions\RotateCredential::replaceWithPendingSigningKey',
+                'ArtisanBuild\BuiltForCloud\Actions\RotateCredential::replaceWithSecret',
+                'ArtisanBuild\BuiltForCloud\OwnerCredentialMinter::mintFromHash',
+                'ArtisanBuild\BuiltForCloud\UnifiedStoreCredentialMinter::mint',
+            ],
+            'legacy_removal' => [],
+            'system_authority' => [
+                'ArtisanBuild\BuiltForCloud\Commands\ConsoleReKeyCommand',
+                'ArtisanBuild\BuiltForCloud\Commands\ConsoleRetireKeyCommand',
+                'ArtisanBuild\BuiltForCloud\Commands\CreateAdminCommand',
+                'ArtisanBuild\BuiltForCloud\Commands\CredentialActivateCommand',
+                'ArtisanBuild\BuiltForCloud\Commands\CredentialListCommand',
+                'ArtisanBuild\BuiltForCloud\Commands\CredentialMintCommand',
+                'ArtisanBuild\BuiltForCloud\Commands\CredentialRevokeCommand',
+                'ArtisanBuild\BuiltForCloud\Commands\CredentialRotateCommand',
+                'ArtisanBuild\BuiltForCloud\Commands\FreshCommand',
+                'ArtisanBuild\BuiltForCloud\Commands\HmacRewrapCommand',
+                'ArtisanBuild\BuiltForCloud\Commands\InstallOperatorCredentialCommand',
+                'ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand',
+                'ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand',
+                'ArtisanBuild\BuiltForCloud\Commands\OwnershipRemintOwnerTokenCommand',
+                'ArtisanBuild\BuiltForCloud\Commands\PruneCredentialAuthorizationsCommand',
+                'ArtisanBuild\BuiltForCloud\Commands\SigningRootEnsureCommand',
+                'ArtisanBuild\BuiltForCloud\Commands\SigningRootProvisionCommand',
+                'ArtisanBuild\BuiltForCloud\Commands\SubjectOffboardCommand',
+                'ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand',
+                'ArtisanBuild\BuiltForCloud\Jobs\DeliverOwnershipWebhook',
+                'Closure@package/src/SystemAuthoritySchedule.php:27',
+            ],
+            'no_signing_path' => [],
+            'ui_config_reads' => [
+                'ArtisanBuild\BuiltForCloud\AppPurposeRegistry|built-for-cloud.credentials.app_purposes|1',
+                'ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTransitions|built-for-cloud.ui.managed_transitions|1',
+                'ArtisanBuild\BuiltForCloud\Http\Controllers\UiHome|built-for-cloud.ui.installation_credentials|1',
+                'ArtisanBuild\BuiltForCloud\Http\Controllers\UiHome|built-for-cloud.ui.managed_transitions|1',
+                'ArtisanBuild\BuiltForCloud\Http\Controllers\UiHome|built-for-cloud.ui.member_management|1',
+                'ArtisanBuild\BuiltForCloud\Http\Controllers\UiHome|built-for-cloud.ui.personal_credentials|1',
+                'ArtisanBuild\BuiltForCloud\Http\Controllers\UiHome|built-for-cloud.ui.session_management|1',
+                'ArtisanBuild\BuiltForCloud\LandingManifest|built-for-cloud.manifest|1',
+                'ArtisanBuild\BuiltForCloud\Mcp\TwoPhaseConfirmationStore|built-for-cloud.manifest.slug|1',
+                'ArtisanBuild\BuiltForCloud\UiCredentialPurposes|built-for-cloud.ui.credential_purposes|1',
+            ],
+            'mcp_delegated' => $sortedExpected,
+        ],
+    ));
 });
