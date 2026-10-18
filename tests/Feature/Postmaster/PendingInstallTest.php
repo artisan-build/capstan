@@ -137,7 +137,7 @@ test('expired unknown and replaced install capabilities return the same shell sa
 });
 
 test('the install route redacts its capability before Nightwatch and rate limiting run', function (): void {
-    $route = app('router')->getRoutes()->getByName('postmaster.install');
+    $route = resolve('router')->getRoutes()->getByName('postmaster.install');
     expect($route)->not->toBeNull()
         ->and($route->gatherMiddleware())->toContain(
             ProtectInstallCapabilityTelemetry::class,
