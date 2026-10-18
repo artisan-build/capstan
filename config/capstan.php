@@ -45,6 +45,9 @@ return [
             'turn_budget' => 20,
             'child_budget' => 100,
             'attempt_cap' => 3,
+            // Bounds how far ahead request_wake may set due_at. A wake parked
+            // beyond it would leave the orchestrator turn asleep for good.
+            'wake_horizon_days' => 30,
         ],
     ],
 
