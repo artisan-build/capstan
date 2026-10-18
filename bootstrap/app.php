@@ -3,6 +3,7 @@
 use App\Http\Middleware\AuthenticateBoundCredential;
 use App\Http\Middleware\NoIndexArtifactPaths;
 use App\Http\Middleware\RenderOriginIsolation;
+use App\Http\Responses\BrandedErrorResponse;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -46,6 +47,10 @@ return Application::configure(basePath: dirname(__DIR__))
 
     })
     ->withExceptions(function (Exceptions $exceptions): void {
+        $exceptions->render(
+            fn (Throwable $exception, Request $request) => resolve(BrandedErrorResponse::class)
+                ->render($exception, $request),
+        );
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api/*') || $request->expectsJson(),
         );

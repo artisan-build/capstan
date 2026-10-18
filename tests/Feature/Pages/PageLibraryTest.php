@@ -261,13 +261,13 @@ test('pages navigation is feature gated and current in sidebar and header varian
         ->assertSee('href="'.route('pages.index').'"', false);
     $sidebarPagesTags = pagesNavigationTags($sidebar->content());
     expect($sidebarPagesTags)->toHaveCount(1)
-        ->and($sidebarPagesTags[0])->toContain('data-current="data-current"');
+        ->and($sidebarPagesTags[0])->toContain('aria-current="page"');
 
     $dashboardPagesTags = pagesNavigationTags(
         $this->actingAsVersioned($user)->get(route('bfc.dashboard'))->assertOk()->content(),
     );
     expect($dashboardPagesTags)->toHaveCount(1)
-        ->and($dashboardPagesTags[0])->not->toContain('data-current="data-current"');
+        ->and($dashboardPagesTags[0])->not->toContain('aria-current="page"');
 
     Route::get('/_tests/pages-header', fn () => view('layouts.app.header', [
         'slot' => new HtmlString('<main data-testid="header-test-body"></main>'),
@@ -276,9 +276,9 @@ test('pages navigation is feature gated and current in sidebar and header varian
         ->assertOk()
         ->assertSee('data-testid="header-test-body"', false);
     $headerPagesTags = pagesNavigationTags($header->content());
-    expect($headerPagesTags)->toHaveCount(2);
+    expect($headerPagesTags)->toHaveCount(1);
     foreach ($headerPagesTags as $tag) {
-        expect($tag)->toContain('data-current="data-current"');
+        expect($tag)->toContain('aria-current="page"');
     }
 
     config(['capstan.features.artifacts' => false]);

@@ -82,17 +82,17 @@ test('sidebar and desktop mobile header Work navigation are feature gated and st
     $user = capstanUser();
     $sidebar = $this->actingAsVersioned($user)->get(route('work.index'))->assertOk();
     $tags = workNavigationTags($sidebar->content());
-    expect($tags)->toHaveCount(1)->and($tags[0])->toContain('href="'.route('work.index').'"', 'data-current="data-current"');
+    expect($tags)->toHaveCount(1)->and($tags[0])->toContain('href="'.route('work.index').'"', 'aria-current="page"');
     Route::get('/_tests/work-header', fn () => view('layouts.app.header', [
         'slot' => new HtmlString('<main data-testid="work-header-body"></main>'),
     ]))->name('work.header-test');
     $header = $this->actingAsVersioned($user)->get('/_tests/work-header')->assertOk();
-    expect(workNavigationTags($header->content()))->toHaveCount(2);
+    expect(workNavigationTags($header->content()))->toHaveCount(1);
     foreach (workNavigationTags($header->content()) as $tag) {
-        expect($tag)->toContain('href="'.route('work.index').'"', 'data-current="data-current"');
+        expect($tag)->toContain('href="'.route('work.index').'"', 'aria-current="page"');
     }
     $dashboard = $this->get(route('bfc.dashboard'))->assertOk();
-    expect(workNavigationTags($dashboard->content())[0])->not->toContain('data-current="data-current"');
+    expect(workNavigationTags($dashboard->content())[0])->not->toContain('aria-current="page"');
     config(['capstan.features.work' => false]);
     Feature::flushCache();
     $this->get(route('work.index'))->assertNotFound();

@@ -281,6 +281,7 @@ test('one public viewer and render grant always serves latest then revocation st
         ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive')
         ->assertHeaderMissing('Set-Cookie')
         ->assertSee('data-testid="page-shared-viewer"', false)
+        ->assertDontSee('data-testid="app-shell"', false)
         ->assertSee($page->title)
         ->assertSee('sandbox="allow-scripts"', false)
         ->assertDontSee('allow-same-origin', false)

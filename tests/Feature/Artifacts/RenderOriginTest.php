@@ -147,6 +147,7 @@ test('content route refuses app host and viewer uses opaque-origin sandbox ifram
         ->assertOk()
         ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive')
         ->assertSee('sandbox="allow-scripts"', false)
+        ->assertDontSee('data-testid="app-shell"', false)
         ->assertDontSee('allow-same-origin', false);
 
     expect($response->content())->toContain('https://artifacts.capstan.test/artifacts/'.$artifact->id.'/content');

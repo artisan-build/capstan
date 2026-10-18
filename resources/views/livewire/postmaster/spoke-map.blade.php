@@ -5,15 +5,15 @@
     </div>
 
     <section class="space-y-4 rounded-xl border border-zinc-200 bg-zinc-50 p-5 dark:border-zinc-700 dark:bg-zinc-900" data-testid="postmaster-onboarding">
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
+        <div class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start" data-testid="postmaster-onboarding-row">
+            <div class="min-w-0">
                 <flux:heading size="lg">{{ __('Connect a local agent') }}</flux:heading>
                 <flux:text class="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
                     {{ __('Generate a short-lived package device authorization installer.') }}
                 </flux:text>
             </div>
 
-            <flux:button type="button" size="sm" wire:click="generateOnboardingSnippet" wire:loading.attr="disabled">
+            <flux:button class="w-full shrink-0 sm:w-auto" type="button" size="sm" wire:click="generateOnboardingSnippet" wire:loading.attr="disabled">
                 {{ $onboardingSnippet === null ? __('Generate installer') : __('Generate another') }}
             </flux:button>
         </div>
