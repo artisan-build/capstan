@@ -134,6 +134,7 @@ test('the generated installer completes approval, installs fake cron, and perfor
     File::put($bin.'/uname', "#!/bin/sh\nprintf '%s\\n' Darwin\n");
     File::put($bin.'/scutil', "#!/bin/sh\nprintf '%s\\n' \"Ed's Test Mac\"\n");
     File::put($bin.'/hostname', "#!/bin/sh\nprintf '%s\\n' 'Fresh Test Machine'\n");
+    File::put($bin.'/open', "#!/bin/sh\nexit 0\n");
     File::put($bin.'/crontab', <<<'SH'
 #!/bin/sh
 set -eu
@@ -161,7 +162,7 @@ else
     printf '%s' '{"probe_challenge":{"probe_id":"01ARZ3NDEKTSV4RRFFQ69G5FAA","nonce":"installer-nonce"}}'
 fi
 SH);
-    foreach (['uname', 'scutil', 'hostname', 'crontab', 'curl'] as $command) {
+    foreach (['uname', 'scutil', 'hostname', 'open', 'crontab', 'curl'] as $command) {
         chmod($bin.'/'.$command, 0700);
     }
 
