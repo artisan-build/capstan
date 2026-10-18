@@ -6,7 +6,7 @@ use App\Enums\SpokeLiveness;
 use App\Enums\SpokeMapStatus;
 use App\Features\Postmaster;
 use App\Models\Spoke;
-use App\Postmaster\OnboardingSnippet;
+use App\Postmaster\PendingInstallLinks;
 use ArtisanBuild\BuiltForCloud\Contracts\IdentityContext;
 use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
@@ -18,10 +18,6 @@ use Livewire\Component;
 
 class SpokeMap extends Component
 {
-    public ?string $onboardingSnippet = null;
-
-    public ?int $onboardingExpiresAt = null;
-
     public function mount(): void
     {
         $this->guardFeature();
@@ -36,7 +32,7 @@ class SpokeMap extends Component
         ]);
     }
 
-    public function generateOnboardingSnippet(OnboardingSnippet $snippet, IdentityContext $identity): void
+    public function generateOnboardingSnippet(PendingInstallLinks $links, IdentityContext $identity): void
     {
         $this->guardFeature();
         abort_unless($identity->canUseProduct(), 403);
@@ -48,8 +44,14 @@ class SpokeMap extends Component
         abort_if(RateLimiter::tooManyAttempts($key, 15), 429);
         RateLimiter::hit($key, 60);
 
-        $this->onboardingSnippet = $snippet->generate(request(), (string) $user->getKey());
-        $this->onboardingExpiresAt = now()->addSeconds(600)->getTimestamp();
+        $install = $links->issue(request(), (string) $user->getKey());
+
+        // Dispatching keeps the capability out of Livewire's persisted snapshot.
+        $this->dispatch('postmaster-installer-generated',
+            command: $install->command,
+            script: $install->script,
+            expiresAt: $install->expiresAt->getTimestamp(),
+        );
     }
 
     /**

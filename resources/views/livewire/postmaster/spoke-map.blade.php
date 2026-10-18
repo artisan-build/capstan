@@ -13,7 +13,12 @@
         <flux:subheading>{{ __('Registered CLI installations and their current routing health.') }}</flux:subheading>
     </div>
 
-    <section class="space-y-4 rounded-xl border border-zinc-200 bg-zinc-50 p-5 dark:border-zinc-700 dark:bg-zinc-900" data-testid="postmaster-onboarding">
+    <section
+        class="space-y-4 rounded-xl border border-zinc-200 bg-zinc-50 p-5 dark:border-zinc-700 dark:bg-zinc-900"
+        data-testid="postmaster-onboarding"
+        x-data="{ command: '', script: '', expiresAt: null }"
+        x-on:postmaster-installer-generated.window="command = $event.detail.command; script = $event.detail.script; expiresAt = $event.detail.expiresAt"
+    >
         <div class="postmaster-onboarding-row" data-testid="postmaster-onboarding-row">
             <div class="min-w-0">
                 <flux:heading size="lg">{{ __('Connect a local agent') }}</flux:heading>
@@ -23,16 +28,28 @@
             </div>
 
             <flux:button class="postmaster-onboarding-action" type="button" size="sm" wire:click="generateOnboardingSnippet" wire:loading.attr="disabled">
-                {{ $onboardingSnippet === null ? __('Generate installer') : __('Generate another') }}
+                <span x-text="command === '' ? @js(__('Generate installer')) : @js(__('Generate another'))"></span>
             </flux:button>
         </div>
 
-        @if ($onboardingSnippet !== null)
-            <pre class="max-h-80 overflow-auto rounded-lg bg-zinc-950 p-4 text-xs leading-5 text-zinc-100" data-testid="postmaster-installer"><code>{{ $onboardingSnippet }}</code></pre>
+        <div class="space-y-3" x-cloak x-show="command !== ''" data-testid="postmaster-installer">
+            <flux:input
+                x-model="command"
+                readonly
+                copyable
+                aria-label="{{ __('Install command') }}"
+                class:input="font-mono text-xs"
+                data-testid="postmaster-install-command"
+            />
             <flux:text class="text-sm text-zinc-500 dark:text-zinc-400">
-                {{ __('Expires at :time.', ['time' => date('H:i:s', $onboardingExpiresAt)]) }}
+                <span x-text="expiresAt === null ? '' : @js(__('Expires at')).concat(' ', new Date(expiresAt * 1000).toLocaleTimeString(), '.')"></span>
             </flux:text>
-        @endif
+
+            <details class="rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-700 dark:bg-zinc-950">
+                <summary class="cursor-pointer text-sm font-medium text-zinc-700 dark:text-zinc-300">{{ __('Show full script') }}</summary>
+                <pre class="mt-3 max-h-80 overflow-auto text-xs leading-5 text-zinc-700 dark:text-zinc-200"><code x-text="script"></code></pre>
+            </details>
+        </div>
     </section>
 
     @if ($spokes->isEmpty())

@@ -173,27 +173,41 @@ pending, not green; it becomes green only after its first probe passes.
 
 ### Onboarding a spoke
 
-Every active Owner, Admin, and Member can generate the **Connect a local agent** snippet on demand from
-the Postmaster map. Opening or polling the page does not start a grant, and generation is limited to 15
-attempts per minute per source IP. Postmaster's feature flag is checked on the initial page request and
-every Livewire round-trip; disabling it makes both the map and snippet generation return 404 without
-starting a device authorization.
+Every active Owner, Admin, and Member can generate an installer from **Connect a local agent** on the
+Postmaster map. Opening or polling the page does not start a grant. Generation is limited to 15 attempts
+per minute per source IP. Postmaster's feature flag is checked on the initial page request and every
+Livewire round-trip; disabling it makes both the map and installer generation return 404 without starting
+a device authorization.
 
-The snippet contains this install's configured application name, immutable server id, absolute poll and
-device-token URLs, verification URL and user code, a random device code, and the literal once-a-minute
-cron entry. The device and user codes belong to the package `/bfc/device` authorization flow. They
-expire after ten minutes, and the device code can be exchanged only once after the signed-in member who
-started it approves the request at the verification URL. The fixed package profile mints a bound
-personal `capstan.postmaster.poll` bearer credential; the snippet never contains an existing durable
-bearer credential or signing-root secret.
+Generation produces one command:
 
-Pasting the snippet requires `curl`, `php`, and `crontab`. It opens the verification URL, waits for
-approval, exchanges the one-time device code, and writes the resulting bearer to
+```sh
+curl -sSL --fail-with-body 'https://capstan.example/postmaster/install/…' | sh
+```
+
+The URL is an unauthenticated, single-use capability. Its 256-bit token is stored only as a SHA-256 hash,
+along with the installer body and the device authorization's expiry. The first successful request consumes
+the link inside a locked database transaction. Used, expired, unknown, and replaced links return the same
+shell-safe `410` response. Generating another installer consumes the member's previous unused link. The
+response is plain text with `Cache-Control: no-store`, and requests are rate-limited by source IP.
+
+The full installer remains available under the command for review before running it. It contains this
+install's configured application name, immutable server id, absolute poll and device-token URLs,
+verification URL and user code, a random device code, and the literal once-a-minute cron entry. The device
+and user codes belong to the package `/bfc/device` authorization flow. They expire after ten minutes, and
+the device code can be exchanged only once after the signed-in member who started it approves the request
+at the verification URL. The fixed package profile mints a bound personal `capstan.postmaster.poll` bearer
+credential; the installer never contains an existing durable bearer credential or signing-root secret.
+
+Running the command requires curl 7.76 or newer, `php`, and `crontab`. The installer is POSIX `sh`, is
+wrapped in one compound command, and does not read the script stream from stdin. A truncated download therefore fails to
+parse before it changes the target computer. The installer opens the verification URL, waits for approval,
+exchanges the one-time device code, and writes the resulting bearer to
 `~/.config/capstan/{server-id}/token` with mode 600. It separately writes the non-secret package actor id
 to `actor-id` with mode 600, writes a mode-700 poll script beside those files, and installs a tagged cron
 entry that runs it every minute. The poller transports bearer and actor in separate headers. The
-installer runs in a subshell, so its error handling and exits cannot change or close the interactive
-shell into which it was pasted. Before changing cron it saves the readable prior crontab to
+installer runs in a subshell, so its error handling and exits cannot change or close the interactive shell.
+Before changing cron it saves the readable prior crontab to
 `crontab.before-capstan`; an unexpected read error aborts without rewriting cron. The device exchange
 body and poll headers are supplied to `curl` through stdin/config input rather than exposed in the
 process argument list.
@@ -210,11 +224,13 @@ hash; plaintext bearer material is not retained by the server.
 The initial poll makes the spoke visible as **Pending**. The next poll returns the first challenge's
 correct digest and makes it **Green**. A stale poller or a failed probe is **Red**.
 
-Treat a copied snippet as sensitive until its ten-minute device grant expires or is consumed. If it
-leaks before approval, do not approve it; generate a new snippet and let the old code expire. If it
+Treat a copied command or installer as sensitive until its ten-minute device grant expires or is consumed.
+Capstan redacts the capability from Nightwatch request URLs and execution context. The URL still reaches
+Laravel Cloud's edge access logs; the short expiry and single-use rule are the accepted boundary there. If it
+leaks before approval, do not approve it; generate a new installer, which invalidates the old link. If it
 leaks after approval or may have been exchanged, revoke the resulting personal credential at
 `/settings/credentials/personal`, remove the local credential files and cron entry, then generate a fresh
-snippet.
+installer.
 
 ### Deployment requirements
 

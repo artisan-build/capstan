@@ -17,6 +17,11 @@ class OnboardingSnippet
 
     public function generate(Request $request, string $actorId): string
     {
+        return $this->generateWithAuthorization($request, $actorId)->script;
+    }
+
+    public function generateWithAuthorization(Request $request, string $actorId): GeneratedOnboardingSnippet
+    {
         $serverName = (string) config('app.name', 'Capstan');
         $serverId = $this->identity->id();
         $pollUrl = $this->installUrl('api.postmaster.poll');
@@ -31,7 +36,7 @@ class OnboardingSnippet
         $pollScriptLines = $this->pollScript($serverId, $pollUrl);
         $cronLine = '* * * * * "$HOME/.config/capstan/'.$serverId.'/poll.sh" # capstan-postmaster:'.$serverId;
 
-        return implode("\n", [
+        $script = implode("\n", [
             '#!/bin/sh',
             '(',
             'set -eu',
@@ -121,6 +126,10 @@ class OnboardingSnippet
             ')',
             '',
         ]);
+
+        // The installer must not read from stdin: under `curl | sh`, stdin is the
+        // script stream itself. Every curl input comes from an explicit pipe.
+        return new GeneratedOnboardingSnippet($script, $device->authorizationId);
     }
 
     /** @return list<string> */

@@ -79,6 +79,17 @@ cloud environment:variables --json -n --action=set --key=CAPSTAN_FEATURE_WORK --
 cloud deploy -n
 ```
 
+If you turn on Postmaster, open `/postmaster` after the deploy and use **Connect a local agent**. Generate
+the installer, copy its one-line `curl -sSL --fail-with-body '…' | sh` command, and run it on the computer
+that will poll Capstan. The command needs curl 7.76 or newer, `php`, and `crontab`. It prints the
+verification address and code and opens that address when the operating system supports it. Approve the
+code while signed in as the same
+member who generated the installer. The new spoke appears as Pending after its first poll and turns Green
+after its first probe passes.
+
+The install link works once and expires with the device authorization after ten minutes. Generating another
+one invalidates the previous unused link. You can expand **Show full script** before running the command.
+
 ## 5. Connect your agent over MCP
 
 An agent connected to your installation through Scalpels gets 30 Capstan tools. Eleven of them are

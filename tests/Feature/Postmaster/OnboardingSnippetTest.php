@@ -6,6 +6,7 @@ use App\Enums\SpokeMapStatus;
 use App\Livewire\Postmaster\SpokeMap;
 use App\Models\Spoke;
 use App\Postmaster\OnboardingSnippet;
+use App\Postmaster\PendingInstallLinks;
 use App\Support\ServerIdentity;
 use ArtisanBuild\BuiltForCloud\Contracts\IdentityContext;
 use ArtisanBuild\BuiltForCloud\User;
@@ -127,7 +128,7 @@ test('onboarding generation is limited to fifteen attempts per minute per ip', f
 
     try {
         $component->generateOnboardingSnippet(
-            resolve(OnboardingSnippet::class),
+            resolve(PendingInstallLinks::class),
             resolve(IdentityContext::class),
         );
         $this->fail('The sixteenth onboarding attempt should be rate limited.');
@@ -136,6 +137,7 @@ test('onboarding generation is limited to fifteen attempts per minute per ip', f
     }
 
     expect(DB::table('credential_authorizations')->count())->toBe(0);
+    expect(DB::table('postmaster_installs')->count())->toBe(0);
 });
 
 test('the first poll is pending and the first passing probe turns the same spoke green', function (): void {
