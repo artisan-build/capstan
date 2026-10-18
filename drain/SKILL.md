@@ -24,8 +24,10 @@ configuration or environment.
 Use the matching checked-in example.
 
 - `drain/examples/claude.json` for `claude -p`;
-- `drain/examples/opencode-mini.json` for `opencode mini --prompt @{prompt_file}`;
+- `drain/examples/opencode.json` for `opencode run --standalone -f {prompt_file}`;
 - `drain/examples/generic.json` for an argv-based local worker or the AC10 stub.
+
+Do not use `opencode mini`; it needs a TTY and cannot run under a detached drain.
 
 If several harnesses are available, ask which roles should use each one. Keep `role_commands` values as
 JSON argv lists. Reject shell strings, redirections, pipes, `sh -c`, and unknown placeholders.
@@ -37,10 +39,26 @@ Capstan URL, team, numeric actor id, capacity, load and memory ceilings, capabil
 role commands. Use absolute paths for anything a scheduler will read. Keep a separate work directory,
 state file, and lock file for each config.
 
+Relative paths resolve from the config file's directory. The examples point back into the repository
+relative to `drain/examples`, so a copy in the private directory must repoint these to absolute paths:
+
+- `prompt_template` -> `/absolute/path/to/drain/worker-prompt.md`;
+- `orchestrator_prompt_template` -> `/absolute/path/to/drain/orchestrator-prompt.md`;
+- `generic.json` only: the `role_commands.builder` script `{config_dir}/../harness/stub_worker.py` ->
+  `/absolute/path/to/drain/harness/stub_worker.py`.
+
+`--check-config` reports a missing prompt template but does not check a script path inside a role command;
+a wrong one fails only when a worker launches. The `./credentials` and `./var` paths are meant to resolve
+inside the private directory and need no change.
+
 The credential file must already contain one `capstan.work.drain` bound bearer and nothing else. Put it
 under the private directory with mode `0600`. If it is missing, stop and tell the user which credential
-file is required and where Capstan manages personal credentials. Do not ask the user to set an environment
-variable, paste the bearer into chat, or pass it as a command argument.
+file is required and that the bearer comes only from the device flow in the README's "Getting a token"
+section (`/bfc/device-authorizations` with `app_purpose` `capstan.work.drain`, approve at `/bfc/device`,
+collect from `/bfc/device/token`), with the `access_token` value alone written to that file. A token minted
+on `/settings/credentials/personal` or `/settings/credentials/installation` is rejected with `401`; do not
+send the user there. Do not ask the user to set an environment variable, paste the bearer into chat, or
+pass it as a command argument.
 
 Verify the file exists and inspect its permission bits without printing its contents. Also confirm the
 configured actor id is the owner of that bound credential; the server rejects a mismatch.
