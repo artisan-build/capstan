@@ -149,6 +149,13 @@ final readonly class WorkOrchestrationSurface
         if ($action === 'decide' && (! $this->safeEvidence($validated['evidence']) || strlen(JsonCanonicalizer::encode($validated['evidence'])) > 8000)) {
             throw $this->invalid();
         }
+        if ($action === 'request_wake') {
+            $due = CarbonImmutable::parse($validated['due_at']);
+            $now = CarbonImmutable::now();
+            if ($due->lt($now) || $due->gt($now->addDays(max(1, (int) config('capstan.work.orchestration.wake_horizon_days', 30))))) {
+                throw new ApiErrorException(422, 'wake_outside_horizon', 'The wake must be due between now and the wake horizon.');
+            }
+        }
         if ($action === 'escalate' && ! User::query()->whereKey($validated['addressed_actor'])->where('status', 'active')->exists()) {
             throw $this->invalid();
         }

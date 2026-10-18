@@ -16,6 +16,7 @@ use App\Models\WorkOrchestratorSeat;
 use App\Models\WorkStateRevision;
 use App\Models\WorkSteer;
 use App\Models\WorkTask;
+use App\Models\WorkWake;
 use App\Work\WorkOrchestrationService;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
@@ -655,6 +656,59 @@ test('MCP orchestrate refuses an invalid action input readably without internal 
         ->and(WorkEscalation::query()->count())->toBe($before[0] + 1)
         ->and(DB::table('mcp_write_claims')->count())->toBe($before[2] + 1);
 });
+
+test('MCP orchestrate refuses a wake due outside the horizon readably and still accepts one at the ceiling', function (Closure $dueAt): void {
+    Date::setTestNow(now()->startOfSecond());
+    $user = capstanUser(['role' => 'owner']);
+    $token = workMcpToken($user);
+    $team = workMcpTeam(['pool_work' => true]);
+    $parent = WorkTask::query()->findOrFail(workMcpCreate($team, $token)['task']['id']);
+    resolve(WorkOrchestrationService::class)->event($parent, 'mcp-wake-horizon', 'test_event');
+    $taken = workMcpResult('take_seat', [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'session_ref' => 'mcp-wake-horizon',
+        'idempotency_key' => 'mcp-wake-horizon-take',
+    ], $token);
+    $base = [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'spoke_id' => $taken['seat']['spoke_id'],
+        'seat_fence' => $taken['seat']['seat_fence'], 'session_ref' => 'mcp-wake-horizon', 'action' => 'request_wake',
+    ];
+    $horizon = (int) config('capstan.work.orchestration.wake_horizon_days');
+    $reason = 'Canary wake reason '.Str::random(12);
+    $before = [WorkWake::query()->count(), DB::table('mcp_write_claims')->count()];
+
+    $response = workMcpCall('orchestrate', $base + [
+        'input' => ['key' => 'mcp-wake-horizon-refused', 'due_at' => $dueAt($horizon), 'reason' => $reason],
+        'idempotency_key' => 'mcp-wake-horizon-refused',
+    ], $token)->assertOk();
+    $definition = resolve(OrchestrateTool::class)->toArray();
+    assertWorkSchema(json_decode($response->content())->result->structuredContent, $definition['outputSchema']);
+    expect($response->json('result.structuredContent'))->toBe(['outcome' => 'refused', 'reason' => 'wake_outside_horizon'])
+        ->and($response->json('result.isError'))->toBeFalse()
+        ->and($response->json('error'))->toBeNull()
+        ->and($response->json('result.content.0.text'))->not->toBe('An internal server error occurred.')
+        ->and([WorkWake::query()->count(), DB::table('mcp_write_claims')->count()])->toBe($before);
+    $body = $response->content();
+    expect($body)->not->toContain('.php');
+    expect($body)->not->toContain('WorkOrchestrationSurface');
+    expect($body)->not->toContain('App\\\\');
+    expect($body)->not->toContain('trace');
+    expect($body)->not->toContain('line');
+    expect($body)->not->toContain('wake_horizon_days');
+    expect($body)->not->toContain($reason);
+
+    $accepted = workMcpResult('orchestrate', $base + [
+        'input' => ['key' => 'mcp-wake-horizon-ceiling', 'due_at' => now()->addDays($horizon)->toJSON(), 'reason' => $reason],
+        'idempotency_key' => 'mcp-wake-horizon-ceiling',
+    ], $token);
+    $wake = WorkWake::query()->where('work_task_id', $parent->id)->sole();
+    expect($accepted['outcome'])->toBe('accepted')
+        ->and($wake->due_at->equalTo(now()->addDays($horizon)))->toBeTrue()
+        ->and(WorkWake::query()->count())->toBe($before[0] + 1);
+})->with([
+    'production value far beyond the ceiling' => [fn (int $horizon): string => '2099-12-31T23:59:59Z'],
+    'one second beyond the ceiling' => [fn (int $horizon): string => now()->addDays($horizon)->addSecond()->toJSON()],
+    'one second in the past' => [fn (int $horizon): string => now()->subSecond()->toJSON()],
+]);
 
 test('MCP child orchestration enforces canonical intent and team defaults before durable effects', function (): void {
     $user = capstanUser(['role' => 'owner']);
