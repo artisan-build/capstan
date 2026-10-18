@@ -58,7 +58,9 @@ test('the generated installer is valid shell and protects local credentials and 
         ->toContain("'https://capstan.example/bfc/device/token'")
         ->toContain('scutil --get ComputerName 2>/dev/null')
         ->toContain('hostname -s 2>/dev/null || hostname 2>/dev/null')
-        ->toContain('Authorization: Bearer', 'X-Capstan-Actor-ID', '| curl --config -')
+        ->toContain('Authorization: Bearer', 'X-Capstan-Actor-ID', '| "$CAPSTAN_CURL" --config -')
+        ->not->toContain('| curl ')
+        ->not->toContain('| php ')
         ->not->toContain((string) config('app.key'))
         ->not->toContain($existing['token']);
 });
@@ -99,6 +101,7 @@ test('device polling sleeps for the greatest current returned and Retry-After in
     File::put($headers, "HTTP/1.1 400 Bad Request\r\nRetry-After: {$retryAfter}\r\n\r\n");
     $script = implode("\n", [
         'set -eu',
+        'CAPSTAN_PHP='.escapeshellarg(PHP_BINARY),
         'CAPSTAN_INTERVAL='.$current,
         'CAPSTAN_TOKEN_RESPONSE='.escapeshellarg(json_encode(['interval' => $returned], JSON_THROW_ON_ERROR)),
         'CAPSTAN_TOKEN_HEADERS='.escapeshellarg($headers),
@@ -125,11 +128,14 @@ test('the generated installer completes approval, installs fake cron, and perfor
     $user = User::query()->sole();
     $directory = sys_get_temp_dir().'/capstan-installer-'.bin2hex(random_bytes(6));
     $bin = $directory.'/bin';
+    $phpBin = $directory.'/php bin';
     $home = $directory.'/home';
     $crontab = $directory.'/crontab';
     $pollPayload = $directory.'/poll-payload.json';
     File::makeDirectory($bin, 0700, true);
+    File::makeDirectory($phpBin, 0700, true);
     File::makeDirectory($home, 0700, true);
+    symlink(PHP_BINARY, $phpBin.'/php');
 
     File::put($bin.'/uname', "#!/bin/sh\nprintf '%s\\n' Darwin\n");
     File::put($bin.'/scutil', "#!/bin/sh\nprintf '%s\\n' \"Ed's Test Mac\"\n");
@@ -144,14 +150,18 @@ if [ "${1:-}" = "-l" ]; then
 fi
 cp "$1" "$CAPSTAN_TEST_CRONTAB"
 SH);
-    File::put($bin.'/curl', <<<'SH'
+    File::put($bin.'/curl', str_replace('__POLL_PAYLOAD__', escapeshellarg($pollPayload), <<<'SH'
 #!/bin/sh
 set -eu
+if [ "${1:-}" = '--version' ]; then
+    printf '%s\n' 'curl test shim'
+    exit 0
+fi
 headers=''
 previous=''
 for argument in "$@"; do
     if [ "$previous" = '--dump-header' ]; then headers="$argument"; fi
-    if [ "$previous" = '--data' ] && [ "$argument" != '@-' ]; then printf '%s' "$argument" > "$CAPSTAN_TEST_POLL_PAYLOAD"; fi
+    if [ "$previous" = '--data' ] && [ "$argument" != '@-' ]; then printf '%s' "$argument" > __POLL_PAYLOAD__; fi
     previous="$argument"
 done
 cat >/dev/null || true
@@ -161,21 +171,30 @@ if [ -n "$headers" ]; then
 else
     printf '%s' '{"probe_challenge":{"probe_id":"01ARZ3NDEKTSV4RRFFQ69G5FAA","nonce":"installer-nonce"}}'
 fi
-SH);
+SH));
     foreach (['uname', 'scutil', 'hostname', 'open', 'crontab', 'curl'] as $command) {
         chmod($bin.'/'.$command, 0700);
     }
 
     $process = new Process(['/bin/sh', '-c', $snippet], null, [
         'CAPSTAN_TEST_CRONTAB' => $crontab,
-        'CAPSTAN_TEST_POLL_PAYLOAD' => $pollPayload,
         'HOME' => $home,
-        'PATH' => $bin.':'.dirname(PHP_BINARY).':/usr/bin:/bin',
+        'PATH' => $bin.':'.$phpBin.':/usr/bin:/bin',
     ]);
 
     try {
         $process->run();
         $install = $home.'/.config/capstan/'.INSTALLER_SERVER_ID;
+        $initialPayload = json_decode(File::get($pollPayload), true, flags: JSON_THROW_ON_ERROR);
+        $cronProcess = new Process([
+            '/usr/bin/env',
+            '-i',
+            'HOME='.$home,
+            'PATH=/usr/bin:/bin',
+            'sh',
+            $install.'/poll.sh',
+        ]);
+        $cronProcess->run();
 
         expect($process->isSuccessful())->toBeTrue($process->getErrorOutput())
             ->and(File::get($install.'/token'))->toBe('approved-test-bearer')
@@ -184,15 +203,43 @@ SH);
             ->and(fileperms($install.'/token') & 0777)->toBe(0600)
             ->and(fileperms($install.'/actor-id') & 0777)->toBe(0600)
             ->and(fileperms($install.'/poll.sh') & 0777)->toBe(0700)
+            ->and(File::get($install.'/poll.sh'))->toContain('CAPSTAN_PHP='.escapeshellarg($phpBin.'/php'))
+            ->and(File::get($install.'/poll.sh'))->toContain('CAPSTAN_CURL='.escapeshellarg($bin.'/curl'))
             ->and(File::get($crontab))->toContain('# capstan-postmaster:'.INSTALLER_SERVER_ID)
-            ->and(json_decode(File::get($pollPayload), true, flags: JSON_THROW_ON_ERROR)['presence'])->toBe([
+            ->and($initialPayload['presence'])->toBe([
                 'ready_inboxes' => [],
                 'device_name' => "Ed's Test Mac",
+            ])
+            ->and($cronProcess->isSuccessful())->toBeTrue($cronProcess->getErrorOutput())
+            ->and(json_decode(File::get($pollPayload), true, flags: JSON_THROW_ON_ERROR)['probe_response'])->toBe([
+                'probe_id' => '01ARZ3NDEKTSV4RRFFQ69G5FAA',
+                'digest' => hash('sha256', 'installer-nonce'),
             ])
             ->and(json_decode(File::get($install.'/probe-response.json'), true, flags: JSON_THROW_ON_ERROR))->toBe([
                 'probe_id' => '01ARZ3NDEKTSV4RRFFQ69G5FAA',
                 'digest' => hash('sha256', 'installer-nonce'),
             ]);
+    } finally {
+        File::deleteDirectory($directory);
+    }
+});
+
+test('the generated installer refuses a php shell function', function (): void {
+    $snippet = "php() { :; }\n".installerSnippet($this);
+    $directory = sys_get_temp_dir().'/capstan-installer-function-'.bin2hex(random_bytes(6));
+    $home = $directory.'/home';
+    File::makeDirectory($home, 0700, true);
+    $process = new Process(['/bin/sh', '-c', $snippet], null, [
+        'HOME' => $home,
+        'PATH' => dirname(PHP_BINARY).':/usr/bin:/bin',
+    ]);
+
+    try {
+        $process->run();
+
+        expect($process->isSuccessful())->toBeFalse()
+            ->and($process->getErrorOutput())->toContain('php must resolve to an executable file.')
+            ->and(File::exists($home.'/.config/capstan'))->toBeFalse();
     } finally {
         File::deleteDirectory($directory);
     }

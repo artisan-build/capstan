@@ -314,17 +314,25 @@ test('rendering several routed spokes uses a bounded query count', function (): 
         ->and($queryCount)->toBeLessThanOrEqual(3);
 });
 
-test('map ordering is deterministic with red spokes first', function (): void {
+test('map ordering stays in id order after rename and status changes', function (): void {
     $owner = capstanUser(['role' => UserRole::Owner->value]);
-    $redZulu = createMapSpoke($owner, 'zulu-red', now(), SpokeLiveness::Red);
-    $pendingAlpha = createMapSpoke($owner, 'alpha-pending', now(), SpokeLiveness::Unknown);
-    $greenGamma = createMapSpoke($owner, 'gamma-green', now(), SpokeLiveness::Green);
-    $redBeta = createMapSpoke($owner, 'beta-red', now()->subSeconds(301), SpokeLiveness::Green);
-    $expected = [$redBeta->id, $redZulu->id, $pendingAlpha->id, $greenGamma->id];
+    $alpha = createMapSpoke($owner, 'alpha', now(), SpokeLiveness::Green);
+    $bravo = createMapSpoke($owner, 'bravo', now(), SpokeLiveness::Green);
+    $charlie = createMapSpoke($owner, 'charlie', now(), SpokeLiveness::Green);
+    $expected = [$alpha->id, $bravo->id, $charlie->id];
+    $before = Livewire::actingAs($owner)->test(SpokeMap::class)->viewData('spokes')->pluck('id')->all();
 
-    $first = Livewire::actingAs($owner)->test(SpokeMap::class)->viewData('spokes')->pluck('id')->all();
-    $second = Livewire::actingAs($owner)->test(SpokeMap::class)->viewData('spokes')->pluck('id')->all();
+    Livewire::actingAs($owner)
+        ->test(SpokeMap::class)
+        ->set('spokeName', 'zulu')
+        ->call('renameSpoke', $alpha->id)
+        ->assertHasNoErrors();
+    $afterRename = Livewire::actingAs($owner)->test(SpokeMap::class)->viewData('spokes')->pluck('id')->all();
 
-    expect($first)->toBe($expected)
-        ->and($second)->toBe($expected);
+    $charlie->forceFill(['probe_status' => SpokeLiveness::Red])->save();
+    $afterStatusChange = Livewire::actingAs($owner)->test(SpokeMap::class)->viewData('spokes')->pluck('id')->all();
+
+    expect($before)->toBe($expected)
+        ->and($afterRename)->toBe($expected)
+        ->and($afterStatusChange)->toBe($expected);
 });
