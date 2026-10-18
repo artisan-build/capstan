@@ -3,6 +3,7 @@
 use App\Enums\WorkItemState;
 use App\Enums\WorkMilestoneKind;
 use App\Http\ApiErrorException;
+use App\Livewire\Work\Index;
 use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkEscalation;
@@ -19,6 +20,7 @@ use App\Work\WorkNotifier;
 use App\Work\WorkOrchestrationAuthor;
 use App\Work\WorkOrchestrationCapability;
 use App\Work\WorkOrchestrationContext;
+use App\Work\WorkOrchestrationMcpService;
 use App\Work\WorkOrchestrationService;
 use App\Work\WorkSeatService;
 use App\Work\WorkSweepService;
@@ -32,6 +34,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Laravel\Pennant\Feature;
+use Livewire\Livewire;
 
 beforeEach(function (): void {
     config([
@@ -1133,4 +1136,75 @@ test('subtree capability refuses ancestors siblings unrelated roots cross team r
     expect(fn () => $capability->queue($context, $child->id, 'builder', CarbonImmutable::now()))
         ->toThrow(ApiErrorException::class);
     expect(WorkItem::query()->count())->toBe($before);
+});
+
+test('an answered escalation reaches the woken turn with its answer and never another task or another team', function (): void {
+    $engine = resolve(WorkOrchestrationService::class);
+    $addressed = capstanUser();
+    $actor = (string) $addressed->id;
+    $parent = orchestrationTask();
+    $escalation = $engine->escalate($parent, 'answer-reaches-worker', $actor, 'Which way should the worker finish?', ['Option A: finish now', 'Option B: keep going'], 'Option A: finish now');
+
+    $answer = 'Option A: finish now, and open a follow-up task tomorrow.';
+    resolve(WorkOrchestrationMcpService::class)->answer($parent->team_id, $escalation->id, $actor, $answer, CarbonImmutable::now());
+    // AC4: a replayed answer must not produce a second entry in the read.
+    resolve(WorkOrchestrationMcpService::class)->answer($parent->team_id, $escalation->id, $actor, 'A different answer', CarbonImmutable::now());
+
+    $host = orchestrationHost('answer-reaches-host');
+    $turn = orchestrationClaims($parent, $host)[0];
+    $read = $this->getJson(resolve(WorkWorkerLinks::class)->forItem($turn)['orchestration'])->assertOk();
+
+    // The invariant first, so a regression says "the read does not carry the answer" rather than erroring on a missing path.
+    expect($read->json('context.answered_escalations.0.answer'))->toBe($answer);
+    $read->assertJsonCount(1, 'context.answered_escalations')
+        ->assertJsonPath('context.answered_escalations.0.id', $escalation->id)
+        ->assertJsonPath('context.answered_escalations.0.question', 'Which way should the worker finish?')
+        ->assertJsonPath('context.answered_escalations.0.options.0', 'Option A: finish now')
+        ->assertJsonPath('context.answered_escalations.0.options.1', 'Option B: keep going')
+        ->assertJsonPath('context.answered_escalations.0.answered_at', CarbonImmutable::now()->toJSON());
+
+    // AC3: the event is only a pointer, so a task woken by one that names ANOTHER task's escalation
+    // must still not receive its answer. Without the task scope on the read, this is a cross-task leak.
+    $sibling = orchestrationTask();
+    $engine->event($sibling, 'sibling-points-elsewhere', 'escalation_answered', ['escalation_id' => $escalation->id], inheritAuthor: false);
+    $siblingTurn = orchestrationClaims($sibling, orchestrationHost('sibling-host'))[0];
+    $siblingRead = $this->getJson(resolve(WorkWorkerLinks::class)->forItem($siblingTurn)['orchestration'])->assertOk();
+    expect($siblingRead->json('context.events.0.kind'))->toBe('escalation_answered');
+    $siblingRead->assertJsonCount(0, 'context.answered_escalations');
+    expect($siblingRead->getContent())->not->toContain($answer);
+
+    // AC3: and the same holds across teams.
+    $otherTeam = Team::query()->create(['name' => 'Other team', 'slug' => 'other-team-'.Str::random(8)]);
+    $otherTask = WorkTask::query()->create([
+        'team_id' => $otherTeam->id, 'title' => 'Other team task', 'required_capabilities' => [],
+        'timebox_minutes' => 10, 'creator_actor' => 'supervisor',
+    ]);
+    $engine->event($otherTask, 'other-team-points-elsewhere', 'escalation_answered', ['escalation_id' => $escalation->id], inheritAuthor: false);
+    $otherTurn = resolve(WorkClaimService::class)->claim($otherTeam->id, 'other-team-host', orchestrationHost('other-team-host')->id, ['orchestrator'], [], 25, CarbonImmutable::now(), 300)[0];
+    $otherRead = $this->getJson(resolve(WorkWorkerLinks::class)->forItem($otherTurn)['orchestration'])->assertOk();
+    expect($otherRead->json('context.events.0.kind'))->toBe('escalation_answered');
+    $otherRead->assertJsonCount(0, 'context.answered_escalations');
+    expect($otherRead->getContent())->not->toContain($answer);
+});
+
+test('an escalation answered on the Work page reaches the woken turn in the same shape', function (): void {
+    $user = capstanUser();
+    $actor = (string) $user->id;
+    $parent = orchestrationTask();
+    $escalation = resolve(WorkOrchestrationService::class)
+        ->escalate($parent, 'answer-from-the-page', $actor, 'Page question?', ['Page option'], 'Page option');
+
+    $answer = 'Answered from the Work page.';
+    Livewire::actingAs($user)->test(Index::class)
+        ->set('answers.'.$escalation->id, $answer)
+        ->call('answerEscalation', $escalation->id)
+        ->assertHasNoErrors();
+
+    $turn = orchestrationClaims($parent, orchestrationHost('page-answer-host'))[0];
+    $read = $this->getJson(resolve(WorkWorkerLinks::class)->forItem($turn)['orchestration'])->assertOk();
+    expect($read->json('context.answered_escalations.0.answer'))->toBe($answer);
+    $read->assertJsonCount(1, 'context.answered_escalations')
+        ->assertJsonPath('context.answered_escalations.0.id', $escalation->id)
+        ->assertJsonPath('context.answered_escalations.0.question', 'Page question?')
+        ->assertJsonPath('context.answered_escalations.0.options.0', 'Page option');
 });

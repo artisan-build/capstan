@@ -94,6 +94,10 @@ read-only. Capstan also serves the same MCP server itself at `/mcp` and `/mcp/wr
 The Pages, artifacts and Brand kit tools stay unavailable until step 3 is done. Each area's tools also
 need that area's flag from step 4.
 
+`list_escalations` and `answer_escalation` are how a person handles a blocked worker without opening
+Capstan. Answering one wakes the orchestrator and hands it the answer. The next turn's
+context carries an `answered_escalations` list holding the question, the options and the answer text.
+
 ## 6. Mint a drain token with the device flow
 
 A drain authenticates with a `capstan.work.drain` bearer. Get it through the device flow. Do not use

@@ -18,6 +18,7 @@ use App\Models\WorkWake;
 use Carbon\CarbonImmutable;
 use Closure;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Laravel\Pennant\Feature;
 
@@ -106,6 +107,7 @@ final readonly class WorkOrchestrationCapability
                     'id' => $event->id, 'sequence' => $event->sequence, 'kind' => $event->kind,
                     'evidence' => $this->boundedJson($event->evidence),
                 ])->values()->all(),
+                'answered_escalations' => $this->answeredEscalations($parent, $events->take(25)),
                 'cursor' => $lower, 'next_cursor' => $events->count() > 25 ? (int) $events[24]->sequence : null,
                 'through' => $upper, 'has_more' => $events->count() > 25,
                 'decisions_cursor' => $decisionsAfter, 'decisions_next_cursor' => $decisions->count() > 25 ? (string) $decisionPage->last()->id : null,
@@ -308,6 +310,47 @@ final readonly class WorkOrchestrationCapability
     private function forbidden(string $message = 'Target is outside the current orchestrator subtree.'): ApiErrorException
     {
         return new ApiErrorException(403, 'orchestration_forbidden', $message);
+    }
+
+    /** An answer is the human's decision, so the turn it wakes must receive the text, not just a pointer.
+     * Scoped to the woken task, so one task's answer can never appear in another task's or team's read.
+     *
+     * @param  Collection<int, WorkOrchestrationEvent>  $events
+     * @return list<array<string, mixed>>
+     */
+    private function answeredEscalations(WorkTask $parent, Collection $events): array
+    {
+        $ids = $events->where('kind', 'escalation_answered')
+            ->map(fn (WorkOrchestrationEvent $event): mixed => $event->evidence['escalation_id'] ?? null)
+            ->filter(fn (mixed $id): bool => is_string($id))
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($ids === []) {
+            return [];
+        }
+
+        $answered = [];
+        $rows = WorkEscalation::query()
+            ->whereIn('id', $ids)
+            ->where('work_task_id', $parent->id)
+            ->whereNotNull('answered_at')
+            ->orderBy('id')
+            ->get();
+
+        foreach ($rows as $escalation) {
+            $options = $escalation->metadata['options'] ?? [];
+            $answered[] = [
+                'id' => $escalation->id,
+                'question' => $escalation->question,
+                'options' => is_array($options) ? array_values(array_filter($options, is_string(...))) : [],
+                'answer' => (string) $escalation->answer,
+                'answered_at' => (string) $escalation->answered_at?->toJSON(),
+            ];
+        }
+
+        return $answered;
     }
 
     /** @param array<string, mixed> $value */
