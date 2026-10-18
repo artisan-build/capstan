@@ -1194,6 +1194,19 @@ test('an answered escalation reaches the woken turn with its answer and never an
     expect($otherRead->getContent())->not->toContain($answer);
 });
 
+test('a malformed escalation pointer is ignored rather than failing the turn read', function (): void {
+    // The event is untrusted input to the read. On Postgres, handing a non-uuid to a native uuid column
+    // raises 22P02, which would take the whole turn read down with a 500 instead of ignoring one pointer.
+    $parent = orchestrationTask();
+    resolve(WorkOrchestrationService::class)
+        ->event($parent, 'malformed-pointer', 'escalation_answered', ['escalation_id' => 'not-a-uuid'], inheritAuthor: false);
+    $turn = orchestrationClaims($parent, orchestrationHost('malformed-pointer-host'))[0];
+
+    $read = $this->getJson(resolve(WorkWorkerLinks::class)->forItem($turn)['orchestration'])->assertOk();
+    expect($read->json('context.events.0.kind'))->toBe('escalation_answered');
+    $read->assertJsonCount(0, 'context.answered_escalations');
+});
+
 test('an escalation answered on the Work page reaches the woken turn in the same shape', function (): void {
     $user = capstanUser();
     $actor = (string) $user->id;
