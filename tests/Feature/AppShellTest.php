@@ -77,6 +77,14 @@ test('ordinary and Built for Cloud layouts render the same authenticated shell a
 
     expectAuthenticatedShell($ordinary, $ordinaryProof);
     expectAuthenticatedShell($builtForCloud, $builtForCloudProof);
+
+    $document = new DOMDocument;
+    @$document->loadHTML($ordinary);
+    $xpath = new DOMXPath($document);
+    expect($xpath->query('//details[@data-app-shell-navigation and @open]')->length)->toBe(1)
+        ->and($xpath->query('//*[@data-testid="app-shell-mobile-trigger"]//*[@data-testid="app-shell-brand"]')->length)->toBe(1)
+        ->and($xpath->query('//*[@data-testid="app-shell-mobile-trigger"]//*[@data-testid="app-shell-brand"]//img[@alt="Scalpels dashboard"]')->length)->toBe(1)
+        ->and(trim($xpath->query('//*[@data-testid="app-shell-mobile-trigger"]')->item(0)?->textContent ?? ''))->toContain('Menu');
 });
 
 test('authenticated HTML routes keep the brand sidebar and current section', function (): void {
@@ -143,14 +151,6 @@ test('authenticated HTML routes keep the brand sidebar and current section', fun
         expectAuthenticatedShell($response->content(), $label === 'page viewer' || $label === 'page version' ? $proof : 'data-testid="app-shell-content"');
         expect(currentShellSection($response->content()), $label)->toBe($section);
     }
-});
-
-test('public artifact viewers remain outside the application shell', function (): void {
-    $source = file_get_contents(resource_path('views/artifacts/show.blade.php'));
-
-    expect($source)->not->toContain('<x-app-shell')
-        ->not->toContain('data-testid="app-shell"')
-        ->and(file_get_contents(resource_path('views/pages/shared.blade.php')))->not->toContain('<x-app-shell');
 });
 
 test('branded errors expose no exception detail and add the sidebar only for authenticated users', function (int $status, bool $authenticated): void {

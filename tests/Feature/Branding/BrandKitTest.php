@@ -576,10 +576,13 @@ test('page CSP follows applied asset classes while drafts and legacy artifacts s
     foreach ([$ownerUrl, $publicUrl] as $url) {
         $before = $this->get($url)->assertOk()->assertStreamed();
         expect($before->streamedContent())->toContain($distinctiveBody, 'data-capstan-brand="applied"')
-            ->not->toContain($draftColour, $tone, $logo->id)
+            ->not->toContain($draftColour)
+            ->not->toContain($tone)
+            ->not->toContain($logo->id)
             ->and($before->headers->get('Content-Security-Policy'))
             ->toContain("font-src 'none'", 'img-src data:', "connect-src 'none'", "form-action 'none'", "base-uri 'none'")
-            ->not->toContain("font-src 'self'", "img-src 'self'");
+            ->not->toContain("font-src 'self'")
+            ->not->toContain("img-src 'self'");
     }
     $draftAsset = $this->get('https://render.brand.test/brand-assets/'.$logo->id)
         ->assertNotFound()
@@ -621,7 +624,9 @@ test('page CSP follows applied asset classes while drafts and legacy artifacts s
     foreach ([$ownerUrl, $publicUrl] as $url) {
         $fontOnly = $this->get($url)->assertOk();
         expect($fontOnly->streamedContent())->toContain('--capstan-font-heading:ui-serif', '--capstan-font-body:ui-monospace')
-            ->not->toContain($logo->id, '@font-face', 'url(')
+            ->not->toContain($logo->id)
+            ->not->toContain('@font-face')
+            ->not->toContain('url(')
             ->and($fontOnly->headers->get('Content-Security-Policy'))
             ->toContain("font-src 'none'", 'img-src data:', "connect-src 'none'", "form-action 'none'", "base-uri 'none'")
             ->not->toContain("img-src 'self'")
@@ -651,7 +656,8 @@ test('page CSP follows applied asset classes while drafts and legacy artifacts s
     $legacyArtifact = $this->get($origin->signedContentUrl($artifact))->assertOk();
     $legacyCsp = $legacyArtifact->headers->get('Content-Security-Policy');
     expect($legacyCsp)->toContain("font-src 'none'", 'img-src data:', "connect-src 'none'", "form-action 'none'", "base-uri 'none'")
-        ->not->toContain("font-src 'self'", "img-src 'self'");
+        ->not->toContain("font-src 'self'")
+        ->not->toContain("img-src 'self'");
 
     expect($service->currentAssetIds())->toBe([$logo->id])
         ->and(BrandAsset::query()->find($logo->id))->toBeInstanceOf(BrandAsset::class)
@@ -691,10 +697,15 @@ test('page CSP follows applied asset classes while drafts and legacy artifacts s
         ->get('https://app.brand.test'.route('pages.show', ['page' => $page], false))
         ->assertOk();
     $publicViewer = $this->get($origin->signedPageShareViewerUrl($share))->assertOk();
-    foreach ([$appViewer, $publicViewer] as $viewer) {
-        foreach ([$draftColour, $tone, $logo->id, 'data-capstan-brand', '--capstan-color-primary'] as $privateBrandValue) {
-            expect($viewer->content())->not->toContain($privateBrandValue);
-        }
+    expect($appViewer->content())->toContain(
+        'data-testid="app-brand-icon"',
+        'https://render.brand.test/brand-assets/'.$logo->id,
+    );
+    foreach ([$draftColour, $tone, 'data-capstan-brand', '--capstan-color-primary'] as $renderOnlyBrandValue) {
+        expect($appViewer->content())->not->toContain($renderOnlyBrandValue);
+    }
+    foreach ([$draftColour, $tone, $logo->id, 'data-capstan-brand', '--capstan-color-primary'] as $privateBrandValue) {
+        expect($publicViewer->content())->not->toContain($privateBrandValue);
     }
     $this->get('https://app.brand.test/brand-assets/'.$logo->id)->assertNotFound()->assertDontSee(brandPng());
 });
