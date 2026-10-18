@@ -11,7 +11,7 @@ import urllib.request
 
 def post(url: str, kind: str) -> None:
     body = json.dumps({"kind": kind, "payload": {"summary": f"AC10 stub posted {kind}"}}).encode()
-    request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
+    request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "User-Agent": "capstan-drain/1"}, method="POST")
     with urllib.request.urlopen(request, timeout=15) as response:
         if response.status != 201:
             raise RuntimeError(f"milestone returned HTTP {response.status}")
