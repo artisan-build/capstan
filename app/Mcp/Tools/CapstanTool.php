@@ -87,7 +87,7 @@ abstract class CapstanTool extends Tool
             return null;
         }
 
-        $mcpRequest = app('mcp.request');
+        $mcpRequest = resolve('mcp.request');
         if (! $mcpRequest instanceof Request) {
             return null;
         }

@@ -41,6 +41,25 @@ use App\Support\BrandKitService;
 use App\Work\WorkOrchestrationMcpService;
 use App\Work\WorkToolService;
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
+use ArtisanBuild\BuiltForCloud\Commands\ConsoleReKeyCommand;
+use ArtisanBuild\BuiltForCloud\Commands\ConsoleRetireKeyCommand;
+use ArtisanBuild\BuiltForCloud\Commands\CreateAdminCommand;
+use ArtisanBuild\BuiltForCloud\Commands\CredentialActivateCommand;
+use ArtisanBuild\BuiltForCloud\Commands\CredentialListCommand;
+use ArtisanBuild\BuiltForCloud\Commands\CredentialMintCommand;
+use ArtisanBuild\BuiltForCloud\Commands\CredentialRevokeCommand;
+use ArtisanBuild\BuiltForCloud\Commands\CredentialRotateCommand;
+use ArtisanBuild\BuiltForCloud\Commands\FreshCommand;
+use ArtisanBuild\BuiltForCloud\Commands\HmacRewrapCommand;
+use ArtisanBuild\BuiltForCloud\Commands\InstallOperatorCredentialCommand;
+use ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand;
+use ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand;
+use ArtisanBuild\BuiltForCloud\Commands\OwnershipRemintOwnerTokenCommand;
+use ArtisanBuild\BuiltForCloud\Commands\PruneCredentialAuthorizationsCommand;
+use ArtisanBuild\BuiltForCloud\Commands\SigningRootEnsureCommand;
+use ArtisanBuild\BuiltForCloud\Commands\SigningRootProvisionCommand;
+use ArtisanBuild\BuiltForCloud\Commands\SubjectOffboardCommand;
+use ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipal;
 use ArtisanBuild\BuiltForCloud\Console\Assertion;
 use ArtisanBuild\BuiltForCloud\Console\AssertionPurpose;
@@ -49,6 +68,7 @@ use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Console\RequestAssertion;
 use ArtisanBuild\BuiltForCloud\Hmac\SigningRootLifecycle;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
+use ArtisanBuild\BuiltForCloud\Jobs\DeliverOwnershipWebhook;
 use ArtisanBuild\BuiltForCloud\Mcp\Effect;
 use ArtisanBuild\BuiltForCloud\Mcp\RequestEffectCeiling;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
@@ -532,26 +552,26 @@ test('the delegated enforcement harness reaches every tool through the canonical
             ],
             'legacy_removal' => [],
             'system_authority' => [
-                'ArtisanBuild\BuiltForCloud\Commands\ConsoleReKeyCommand',
-                'ArtisanBuild\BuiltForCloud\Commands\ConsoleRetireKeyCommand',
-                'ArtisanBuild\BuiltForCloud\Commands\CreateAdminCommand',
-                'ArtisanBuild\BuiltForCloud\Commands\CredentialActivateCommand',
-                'ArtisanBuild\BuiltForCloud\Commands\CredentialListCommand',
-                'ArtisanBuild\BuiltForCloud\Commands\CredentialMintCommand',
-                'ArtisanBuild\BuiltForCloud\Commands\CredentialRevokeCommand',
-                'ArtisanBuild\BuiltForCloud\Commands\CredentialRotateCommand',
-                'ArtisanBuild\BuiltForCloud\Commands\FreshCommand',
-                'ArtisanBuild\BuiltForCloud\Commands\HmacRewrapCommand',
-                'ArtisanBuild\BuiltForCloud\Commands\InstallOperatorCredentialCommand',
-                'ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand',
-                'ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand',
-                'ArtisanBuild\BuiltForCloud\Commands\OwnershipRemintOwnerTokenCommand',
-                'ArtisanBuild\BuiltForCloud\Commands\PruneCredentialAuthorizationsCommand',
-                'ArtisanBuild\BuiltForCloud\Commands\SigningRootEnsureCommand',
-                'ArtisanBuild\BuiltForCloud\Commands\SigningRootProvisionCommand',
-                'ArtisanBuild\BuiltForCloud\Commands\SubjectOffboardCommand',
-                'ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand',
-                'ArtisanBuild\BuiltForCloud\Jobs\DeliverOwnershipWebhook',
+                ConsoleReKeyCommand::class,
+                ConsoleRetireKeyCommand::class,
+                CreateAdminCommand::class,
+                CredentialActivateCommand::class,
+                CredentialListCommand::class,
+                CredentialMintCommand::class,
+                CredentialRevokeCommand::class,
+                CredentialRotateCommand::class,
+                FreshCommand::class,
+                HmacRewrapCommand::class,
+                InstallOperatorCredentialCommand::class,
+                OutboxDrainCommand::class,
+                OwnershipMintClaimCommand::class,
+                OwnershipRemintOwnerTokenCommand::class,
+                PruneCredentialAuthorizationsCommand::class,
+                SigningRootEnsureCommand::class,
+                SigningRootProvisionCommand::class,
+                SubjectOffboardCommand::class,
+                WarnExpiringCredentialsCommand::class,
+                DeliverOwnershipWebhook::class,
                 'Closure@package/src/SystemAuthoritySchedule.php:27',
             ],
             'no_signing_path' => [],
@@ -581,7 +601,7 @@ test('the delegated enforcement harness reaches every tool through the canonical
 
     foreach ($report->families as $family => $result) {
         if ($family !== 'system_authority') {
-            expect($result->violations, $family)->toBe([]);
+            expect($result->violations)->toBe([]);
         }
     }
 
