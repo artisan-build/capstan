@@ -55,6 +55,7 @@ use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\ConsumerConformance;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
+use ArtisanBuild\BuiltForCloud\Testing\FleetConformance;
 use ArtisanBuild\BuiltForCloud\Testing\McpDelegatedEnforcement;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
@@ -490,7 +491,7 @@ test('the delegated enforcement harness reaches every tool through the canonical
         ->and($probe['negative_authorization'])->toBe('passed')
         ->and($probe['violations'])->toBe([]);
 
-    $this->assertBuiltForCloudFleetConformance(new ConsumerConformance(
+    $spec = new ConsumerConformance(
         consumer: 'capstan',
         consumerRoot: base_path(),
         packageRoot: base_path('vendor/artisan-build/built-for-cloud'),
@@ -568,5 +569,39 @@ test('the delegated enforcement harness reaches every tool through the canonical
             ],
             'mcp_delegated' => $sortedExpected,
         ],
-    ));
+    );
+    $report = (new FleetConformance($this))->inspect($spec);
+    $delegated = $report->families['mcp_delegated'];
+
+    expect($delegated->applicability)->toBe('applicable')
+        ->and($delegated->visited)->toBe(28)
+        ->and($delegated->expected)->toBe($sortedExpected)
+        ->and($delegated->discovered)->toBe($sortedExpected)
+        ->and($delegated->violations)->toBe([]);
+
+    foreach ($report->families as $family => $result) {
+        if ($family !== 'system_authority') {
+            expect($result->violations, $family)->toBe([]);
+        }
+    }
+
+    $scheduledCommands = [
+        'postmaster:probe-sweep',
+        'postmaster:retire-dead-spokes --local',
+        'work:failover-sweep',
+        'work:liveness-sweep',
+        'work:orchestration-sweep',
+    ];
+    $artisan = escapeshellarg(PHP_BINARY).' '.escapeshellarg('artisan').' ';
+    $expectedSystemAuthorityViolations = [];
+    foreach ($scheduledCommands as $command) {
+        $expectedSystemAuthorityViolations[] = 'unexpected:'.$artisan.$command;
+        $expectedSystemAuthorityViolations[] = 'uninspectable-schedule:'.$artisan.$command;
+    }
+    sort($expectedSystemAuthorityViolations);
+
+    $systemAuthority = $report->families['system_authority'];
+    expect($report->passed)->toBeFalse()
+        ->and($systemAuthority->applicability)->toBe('applicable')
+        ->and($systemAuthority->violations)->toBe($expectedSystemAuthorityViolations);
 });
