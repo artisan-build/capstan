@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Foundation\Http\Events\RequestHandled;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Sleep;
 use Laravel\Nightwatch\Clock;
 use Laravel\Nightwatch\Contracts\Ingest as NightwatchIngest;
 use Laravel\Nightwatch\Core;
@@ -225,7 +226,7 @@ PHP);
                 break;
             }
 
-            usleep(10_000);
+            Sleep::usleep(10_000);
         } while (microtime(true) < $deadline);
 
         expect($serverReady)->toBeTrue();
