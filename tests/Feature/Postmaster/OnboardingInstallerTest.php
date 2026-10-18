@@ -61,6 +61,34 @@ test('the generated installer is valid shell and protects local credentials and 
         ->not->toContain($existing['token']);
 });
 
+test('a truncated installer fails parsing before it can create local files', function (): void {
+    $snippet = installerSnippet($this);
+    $truncated = (string) preg_replace('/\n\)\n\z/', "\n", $snippet);
+    $directory = sys_get_temp_dir().'/capstan-truncated-'.bin2hex(random_bytes(6));
+    File::makeDirectory($directory, 0700, true);
+    $home = $directory.'/home';
+    File::makeDirectory($home, 0700, true);
+
+    $syntax = new Process(['/bin/sh', '-n']);
+    $syntax->setInput($truncated);
+    $syntax->run();
+
+    $execution = new Process(['/bin/sh', '-c', $truncated], null, [
+        'HOME' => $home,
+        'PATH' => dirname(PHP_BINARY).':/usr/bin:/bin',
+    ]);
+    $execution->run();
+
+    try {
+        expect($truncated)->not->toBe($snippet)
+            ->and($syntax->isSuccessful())->toBeFalse()
+            ->and($execution->isSuccessful())->toBeFalse()
+            ->and(File::exists($home.'/.config/capstan'))->toBeFalse();
+    } finally {
+        File::deleteDirectory($directory);
+    }
+});
+
 test('device polling sleeps for the greatest current returned and Retry-After interval', function (int $current, int $returned, int $retryAfter, int $expected): void {
     $snippet = installerSnippet($this);
     $directory = sys_get_temp_dir().'/capstan-interval-'.bin2hex(random_bytes(6));

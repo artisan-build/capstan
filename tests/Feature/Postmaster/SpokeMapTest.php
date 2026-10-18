@@ -65,6 +65,7 @@ test('the authenticated map page renders registered spoke data', function (): vo
         ->assertSee($spoke->name)
         ->assertSeeHtml('wire:poll.30s')
         ->assertSeeHtml('data-testid="postmaster-onboarding-row"')
+        ->assertSeeHtml('data-testid="postmaster-install-command"')
         ->assertSeeHtml('data-status="green"')
         ->assertSeeHtml('data-inbox-count="2"');
 

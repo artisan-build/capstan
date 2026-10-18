@@ -5,7 +5,9 @@ use App\Http\Controllers\BrandingSettingsController;
 use App\Http\Controllers\PageController;
 use App\Http\Controllers\PageExportController;
 use App\Http\Controllers\PageShareController;
+use App\Http\Controllers\PostmasterInstallController;
 use App\Livewire\Work\Index;
+use App\Postmaster\ProtectInstallCapabilityTelemetry;
 use Illuminate\Support\Facades\Route;
 
 Route::middleware('bfc.auth')->group(function (): void {
@@ -19,6 +21,10 @@ Route::middleware('bfc.auth')->group(function (): void {
         ->whereNumber('version')
         ->name('branding.versions.revert');
 });
+
+Route::get('postmaster/install/{token}', PostmasterInstallController::class)
+    ->middleware([ProtectInstallCapabilityTelemetry::class, 'throttle:15,1'])
+    ->name('postmaster.install');
 
 // The content route lives in routes/render.php on a lean, sessionless stack.
 Route::get('artifacts/{artifact}/share', [ArtifactShareController::class, 'show'])
