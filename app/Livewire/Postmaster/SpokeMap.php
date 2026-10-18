@@ -103,7 +103,7 @@ class SpokeMap extends Component
     private function spokes(): array
     {
         /** @var Collection<int, Spoke> $spokes */
-        $spokes = Spoke::query()->withCount('inboxes')->get();
+        $spokes = Spoke::query()->withCount('inboxes')->orderBy('id')->get();
         $ownerNames = $this->ownerNames($spokes);
         $baseNames = $spokes->mapWithKeys(fn (Spoke $spoke): array => [
             $spoke->id => $this->baseDisplayName($spoke),
@@ -119,22 +119,6 @@ class SpokeMap extends Component
         $staleBefore = now()->subSeconds($staleAfter);
 
         return array_values($spokes
-            ->sort(function (Spoke $first, Spoke $second) use ($baseNames, $duplicateNames, $staleBefore): int {
-                $statusOrder = $this->statusOrder($this->mapStatus($first, $staleBefore))
-                    <=> $this->statusOrder($this->mapStatus($second, $staleBefore));
-
-                if ($statusOrder !== 0) {
-                    return $statusOrder;
-                }
-
-                $nameOrder = strnatcasecmp(
-                    $this->displayName($first, $baseNames, $duplicateNames),
-                    $this->displayName($second, $baseNames, $duplicateNames),
-                );
-
-                return $nameOrder !== 0 ? $nameOrder : $first->id <=> $second->id;
-            })
-            ->values()
             ->map(fn (Spoke $spoke): array => [
                 'id' => $spoke->id,
                 'name' => $this->displayName($spoke, $baseNames, $duplicateNames),
@@ -227,11 +211,6 @@ class SpokeMap extends Component
         abort_unless(hash_equals((string) $user->getKey(), $spoke->actor_id), 403);
 
         return $spoke;
-    }
-
-    private function statusOrder(SpokeMapStatus $status): int
-    {
-        return $status === SpokeMapStatus::Red ? 0 : 1;
     }
 
     private function guardFeature(): void

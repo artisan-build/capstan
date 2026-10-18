@@ -204,7 +204,9 @@ the device code can be exchanged only once after the signed-in member who starte
 at the verification URL. The fixed package profile mints a bound personal `capstan.postmaster.poll` bearer
 credential; the installer never contains an existing durable bearer credential or signing-root secret.
 
-Running the command requires curl 7.76 or newer, `php`, and `crontab`. The installer is POSIX `sh`, is
+Running the command requires curl 7.76 or newer, `php`, and `crontab`. The installer resolves and checks the
+absolute paths to curl and PHP, then records both in the poll script so cron does not need them on its minimal
+`PATH`. The installer is POSIX `sh`, is
 wrapped in one compound command, and does not read the script stream from stdin. A truncated download therefore fails to
 parse before it changes the target computer. The installer opens the verification URL, waits for approval,
 exchanges the one-time device code, and writes the resulting bearer to
@@ -222,8 +224,15 @@ The poll script initially advertises no inboxes. To receive mail, edit
 `["build-agent"]`. The next poll claims those inboxes for the approving user and advertises them on every
 subsequent poll. Each poll also reports the computer name shown on the Postmaster map. You can rename your
 own spoke on the map or clear that name to use the reported computer name again. Existing installations
-must be reinstalled before they report a computer name; they can still be renamed on the map. The poller
-persists a pending probe response beside the credential files when needed
+must be reinstalled before they report a computer name; they can still be renamed on the map. Reinstalling
+with a newly generated one-line command replaces `poll.sh` and the tagged cron entry under the same server id.
+Use this command to check the installed poller with cron's minimal environment:
+
+```sh
+env -i HOME="$HOME" PATH=/usr/bin:/bin sh ~/.config/capstan/*/poll.sh
+```
+
+The poller persists a pending probe response beside the credential files when needed
 and returns that response without dropping the configured inbox list. The package stores hashes of the
 pending device and user codes plus the authorization profile, status, expiry, and initiating actor. A
 successful exchange consumes that authorization and stores the package credential metadata and bearer

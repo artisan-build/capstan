@@ -62,8 +62,8 @@ class OnboardingSnippet
             'CAPSTAN_CRON_NEW="$CAPSTAN_HOME/crontab.with-capstan"',
             'CAPSTAN_TOKEN_HEADERS="$CAPSTAN_HOME/token.headers"',
             '',
-            $this->requireCommand('curl'),
-            $this->requireCommand('php'),
+            $this->resolveExecutable('curl', '--version'),
+            $this->resolveExecutable('php', '-v'),
             $this->requireCommand('crontab'),
             'umask 077',
             'mkdir -p "$CAPSTAN_HOME"',
@@ -82,12 +82,12 @@ class OnboardingSnippet
             'CAPSTAN_INTERVAL='.$device->interval,
             'while [ -z "$CAPSTAN_TOKEN" ] && [ "$CAPSTAN_ATTEMPT" -lt 180 ]; do',
             '    CAPSTAN_ATTEMPT=$((CAPSTAN_ATTEMPT + 1))',
-            '    CAPSTAN_TOKEN_RESPONSE="$(printf \'%s\' "$CAPSTAN_BODY" | curl --silent --show-error --connect-timeout 5 --max-time 15 --dump-header "$CAPSTAN_TOKEN_HEADERS" --request POST --header \'Content-Type: application/json\' --data @- "$CAPSTAN_TOKEN_URL" || true)"',
-            '    CAPSTAN_TOKEN="$(printf \'%s\' "$CAPSTAN_TOKEN_RESPONSE" | php -r \'$body = json_decode(stream_get_contents(STDIN)); if (is_object($body) && isset($body->access_token) && is_string($body->access_token)) { echo $body->access_token; }\')"',
-            '    CAPSTAN_ERROR="$(printf \'%s\' "$CAPSTAN_TOKEN_RESPONSE" | php -r \'$body = json_decode(stream_get_contents(STDIN)); if (is_object($body) && isset($body->error) && is_string($body->error)) { echo $body->error; }\')"',
+            '    CAPSTAN_TOKEN_RESPONSE="$(printf \'%s\' "$CAPSTAN_BODY" | "$CAPSTAN_CURL" --silent --show-error --connect-timeout 5 --max-time 15 --dump-header "$CAPSTAN_TOKEN_HEADERS" --request POST --header \'Content-Type: application/json\' --data @- "$CAPSTAN_TOKEN_URL" || true)"',
+            '    CAPSTAN_TOKEN="$(printf \'%s\' "$CAPSTAN_TOKEN_RESPONSE" | "$CAPSTAN_PHP" -r \'$body = json_decode(stream_get_contents(STDIN)); if (is_object($body) && isset($body->access_token) && is_string($body->access_token)) { echo $body->access_token; }\')"',
+            '    CAPSTAN_ERROR="$(printf \'%s\' "$CAPSTAN_TOKEN_RESPONSE" | "$CAPSTAN_PHP" -r \'$body = json_decode(stream_get_contents(STDIN)); if (is_object($body) && isset($body->error) && is_string($body->error)) { echo $body->error; }\')"',
             '    case "$CAPSTAN_ERROR" in access_denied|expired_token|invalid_grant|invalid_request) printf \'%s: %s\n\' '.$this->quote(__('Authorization failed')).' "$CAPSTAN_ERROR" >&2; exit 1 ;; esac',
-            '    CAPSTAN_RETURNED_INTERVAL="$(printf \'%s\' "$CAPSTAN_TOKEN_RESPONSE" | php -r \'$body = json_decode(stream_get_contents(STDIN)); if (is_object($body) && isset($body->interval) && is_int($body->interval)) { echo $body->interval; }\')"',
-            '    CAPSTAN_RETRY_AFTER="$(php -r \'$retry = 0; foreach (file($argv[1], FILE_IGNORE_NEW_LINES) ?: [] as $line) { if (preg_match("/\\ARetry-After:[[:space:]]*([0-9]+)[[:space:]]*\\z/i", $line, $match) === 1) { $retry = max($retry, (int) $match[1]); } } echo $retry;\' "$CAPSTAN_TOKEN_HEADERS")"',
+            '    CAPSTAN_RETURNED_INTERVAL="$(printf \'%s\' "$CAPSTAN_TOKEN_RESPONSE" | "$CAPSTAN_PHP" -r \'$body = json_decode(stream_get_contents(STDIN)); if (is_object($body) && isset($body->interval) && is_int($body->interval)) { echo $body->interval; }\')"',
+            '    CAPSTAN_RETRY_AFTER="$("$CAPSTAN_PHP" -r \'$retry = 0; foreach (file($argv[1], FILE_IGNORE_NEW_LINES) ?: [] as $line) { if (preg_match("/\\ARetry-After:[[:space:]]*([0-9]+)[[:space:]]*\\z/i", $line, $match) === 1) { $retry = max($retry, (int) $match[1]); } } echo $retry;\' "$CAPSTAN_TOKEN_HEADERS")"',
             '    [ -z "$CAPSTAN_RETURNED_INTERVAL" ] || [ "$CAPSTAN_RETURNED_INTERVAL" -le "$CAPSTAN_INTERVAL" ] || CAPSTAN_INTERVAL="$CAPSTAN_RETURNED_INTERVAL"',
             '    [ "$CAPSTAN_RETRY_AFTER" -le "$CAPSTAN_INTERVAL" ] || CAPSTAN_INTERVAL="$CAPSTAN_RETRY_AFTER"',
             '    [ -n "$CAPSTAN_TOKEN" ] || sleep "$CAPSTAN_INTERVAL"',
@@ -100,7 +100,9 @@ class OnboardingSnippet
             'rm -f "$CAPSTAN_TOKEN_HEADERS"',
             'unset CAPSTAN_TOKEN CAPSTAN_TOKEN_RESPONSE CAPSTAN_DEVICE_CODE CAPSTAN_BODY',
             '',
-            "printf '%s\\n' ".implode(' ', array_map($this->quote(...), $pollScriptLines)).' > "$CAPSTAN_POLL_SCRIPT"',
+            'CAPSTAN_PHP_LITERAL="$("$CAPSTAN_PHP" -r \'echo escapeshellarg($argv[1]);\' "$CAPSTAN_PHP")"',
+            'CAPSTAN_CURL_LITERAL="$("$CAPSTAN_PHP" -r \'echo escapeshellarg($argv[1]);\' "$CAPSTAN_CURL")"',
+            "printf '%s\\n' ".implode(' ', array_map($this->pollScriptArgument(...), $pollScriptLines)).' > "$CAPSTAN_POLL_SCRIPT"',
             'chmod 700 "$CAPSTAN_POLL_SCRIPT"',
             '[ -e "$CAPSTAN_INBOX_FILE" ] || printf \'[]\n\' > "$CAPSTAN_INBOX_FILE"',
             'chmod 600 "$CAPSTAN_INBOX_FILE"',
@@ -165,6 +167,8 @@ PHP;
             'set -eu',
             'CAPSTAN_SERVER_ID='.$this->quote($serverId),
             'CAPSTAN_POLL_URL='.$this->quote($pollUrl),
+            'CAPSTAN_PHP=',
+            'CAPSTAN_CURL=',
             'CAPSTAN_HOME="$HOME/.config/capstan/$CAPSTAN_SERVER_ID"',
             'CAPSTAN_TOKEN_FILE="$CAPSTAN_HOME/token"',
             'CAPSTAN_ACTOR_FILE="$CAPSTAN_HOME/actor-id"',
@@ -174,11 +178,20 @@ PHP;
             '    Darwin) CAPSTAN_DEVICE_NAME="$(scutil --get ComputerName 2>/dev/null || true)" ;;',
             '    *) CAPSTAN_DEVICE_NAME="$(hostname -s 2>/dev/null || hostname 2>/dev/null || true)" ;;',
             'esac',
-            'CAPSTAN_PAYLOAD="$(php -r '.$this->quote($payloadBuilder).' "$CAPSTAN_INBOX_FILE" "$CAPSTAN_PENDING_FILE" "$CAPSTAN_DEVICE_NAME")"',
-            'CAPSTAN_RESPONSE="$(printf \'header = "Authorization: Bearer %s"\nheader = "X-Capstan-Actor-ID: %s"\n\' "$(cat "$CAPSTAN_TOKEN_FILE")" "$(cat "$CAPSTAN_ACTOR_FILE")" | curl --config - --fail --silent --show-error --connect-timeout 5 --max-time 15 --request POST --header \'Content-Type: application/json\' --data "$CAPSTAN_PAYLOAD" "$CAPSTAN_POLL_URL")"',
+            'CAPSTAN_PAYLOAD="$("$CAPSTAN_PHP" -r '.$this->quote($payloadBuilder).' "$CAPSTAN_INBOX_FILE" "$CAPSTAN_PENDING_FILE" "$CAPSTAN_DEVICE_NAME")"',
+            'CAPSTAN_RESPONSE="$(printf \'header = "Authorization: Bearer %s"\nheader = "X-Capstan-Actor-ID: %s"\n\' "$(cat "$CAPSTAN_TOKEN_FILE")" "$(cat "$CAPSTAN_ACTOR_FILE")" | "$CAPSTAN_CURL" --config - --fail --silent --show-error --connect-timeout 5 --max-time 15 --request POST --header \'Content-Type: application/json\' --data "$CAPSTAN_PAYLOAD" "$CAPSTAN_POLL_URL")"',
             'rm -f "$CAPSTAN_PENDING_FILE"',
-            'printf \'%s\' "$CAPSTAN_RESPONSE" | php -r '.$this->quote($probeParser).' "$CAPSTAN_PENDING_FILE"',
+            'printf \'%s\' "$CAPSTAN_RESPONSE" | "$CAPSTAN_PHP" -r '.$this->quote($probeParser).' "$CAPSTAN_PENDING_FILE"',
         ];
+    }
+
+    private function pollScriptArgument(string $line): string
+    {
+        return match ($line) {
+            'CAPSTAN_PHP=' => '"CAPSTAN_PHP=$CAPSTAN_PHP_LITERAL"',
+            'CAPSTAN_CURL=' => '"CAPSTAN_CURL=$CAPSTAN_CURL_LITERAL"',
+            default => $this->quote($line),
+        };
     }
 
     /** @param array<string, scalar> $parameters */
@@ -202,6 +215,28 @@ PHP;
     {
         return 'command -v '.$command.' >/dev/null 2>&1 || { printf \'%s\n\' '.
             $this->quote(__(':command is required.', ['command' => $command])).' >&2; exit 1; }';
+    }
+
+    private function resolveExecutable(string $command, string $versionFlag): string
+    {
+        $variable = 'CAPSTAN_'.strtoupper($command);
+
+        return implode("\n", [
+            $variable.'="$(command -v '.$command.' 2>/dev/null || true)"',
+            '[ -n "$'.$variable.'" ] || { printf \'%s\n\' '.
+                $this->quote(__(':command is required.', ['command' => $command])).' >&2; exit 1; }',
+            'case "$'.$variable.'" in',
+            '    /*) ;;',
+            '    */*) CAPSTAN_EXECUTABLE_DIRECTORY="$(CDPATH= cd "${'.$variable.'%/*}" 2>/dev/null && pwd -P)" || CAPSTAN_EXECUTABLE_DIRECTORY=\'\'; '.
+                'if [ -n "$CAPSTAN_EXECUTABLE_DIRECTORY" ]; then '.$variable.'="$CAPSTAN_EXECUTABLE_DIRECTORY/${'.$variable.'##*/}"; else '.$variable.'=\'\'; fi ;;',
+            '    *) '.$variable.'=\'\' ;;',
+            'esac',
+            'unset CAPSTAN_EXECUTABLE_DIRECTORY',
+            '[ -f "$'.$variable.'" ] && [ -x "$'.$variable.'" ] || { printf \'%s\n\' '.
+                $this->quote(__(':command must resolve to an executable file.', ['command' => $command])).' >&2; exit 1; }',
+            '"$'.$variable.'" '.$versionFlag.' >/dev/null 2>&1 || { printf \'%s\n\' '.
+                $this->quote(__(':command could not be executed.', ['command' => $command])).' >&2; exit 1; }',
+        ]);
     }
 
     private function quote(string $value): string
