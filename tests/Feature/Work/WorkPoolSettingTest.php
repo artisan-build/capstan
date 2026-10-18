@@ -95,9 +95,10 @@ test('an Owner and an Admin turn pooled work on and off from the Work page and e
     expect($team->pool_work)->toBeFalse();
 
     Livewire::actingAs($user)->test(Index::class)
-        ->assertSeeHtml('data-pool-work="off"')
+        ->assertSeeHtml('data-testid="work-pool-setting-off"')
         ->call('setPoolWork', true)->assertHasNoErrors()
-        ->assertSeeHtml('data-pool-work="on"');
+        ->assertSeeHtml('data-testid="work-pool-setting-on"')
+        ->assertDontSeeHtml('data-testid="work-pool-setting-off"');
     expect($team->fresh()->pool_work)->toBeTrue();
 
     Date::setTestNow('2026-10-18 09:05:00');
@@ -122,7 +123,7 @@ test('a Member sees the pooled work control disabled and a forged page call is r
     $dom = new DOMDocument;
     @$dom->loadHTML($html);
     $xpath = new DOMXPath($dom);
-    $section = $xpath->query('//*[@data-testid="work-pool-setting"]');
+    $section = $xpath->query('//*[@data-testid="work-pool-setting-off"]');
     expect($section->length)->toBe(1)
         ->and($section->item(0)->textContent)->toContain($team->name);
     $toggle = $xpath->query('.//*[@data-testid="work-pool-setting-toggle"]', $section->item(0));
@@ -144,7 +145,7 @@ test('managers get an operable toggle that names the team it changes', function 
     $dom = new DOMDocument;
     @$dom->loadHTML($html);
     $xpath = new DOMXPath($dom);
-    $section = $xpath->query('//*[@data-testid="work-pool-setting"]')->item(0);
+    $section = $xpath->query('//*[@data-testid="work-pool-setting-off"]')->item(0);
     expect($section->textContent)->toContain($team->name);
     $toggle = $xpath->query('.//*[@data-testid="work-pool-setting-toggle"]', $section)->item(0);
     expect($toggle->hasAttribute('disabled'))->toBeFalse()

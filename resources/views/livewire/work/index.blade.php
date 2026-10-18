@@ -1,7 +1,7 @@
 <div data-testid="work-board" class="space-y-6">
     <flux:heading size="xl">{{ __('Work') }}</flux:heading>
     <flux:text>{{ __('Latest 25 tasks, up to 25 items per task.') }}</flux:text>
-    <section data-testid="work-pool-setting" data-pool-work="{{ $team->pool_work ? 'on' : 'off' }}" class="space-y-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-700">
+    <section data-testid="work-pool-setting-{{ $team->pool_work ? 'on' : 'off' }}" class="space-y-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-700">
         <flux:heading size="lg">{{ __('Pooled work') }}</flux:heading>
         <flux:text>{{ __('Changes apply to the :team team.', ['team' => $team->name]) }}</flux:text>
         <flux:text>{{ __('When pooled work is on, new tasks can be claimed by any of this team\'s machines. When it is off, a new task stays with the person who created it, unless they address it to someone else.') }}</flux:text>
