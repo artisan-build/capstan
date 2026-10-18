@@ -10,7 +10,6 @@ use App\Support\ServerIdentity;
 use ArtisanBuild\BuiltForCloud\Contracts\IdentityContext;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\RateLimiter;
 use Laravel\Pennant\Feature;
@@ -37,7 +36,7 @@ beforeEach(function (): void {
 function onboardingSnippetFor(object $test, User $user): string
 {
     $test->actingAs($user);
-    $request = Request::create('/postmaster', 'GET');
+    $request = request();
     $request->setUserResolver(static fn (): User => $user);
     $request->setLaravelSession(resolve('session')->driver());
 
