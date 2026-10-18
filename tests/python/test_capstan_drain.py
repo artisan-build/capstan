@@ -20,6 +20,10 @@ assert SPEC and SPEC.loader
 drain = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = drain
 SPEC.loader.exec_module(drain)
+STUB_SPEC = importlib.util.spec_from_file_location("stub_worker", ROOT / "drain" / "harness" / "stub_worker.py")
+assert STUB_SPEC and STUB_SPEC.loader
+stub_worker = importlib.util.module_from_spec(STUB_SPEC)
+STUB_SPEC.loader.exec_module(stub_worker)
 
 ITEM_ID = "0199f000-0000-7000-8000-000000000001"
 TASK_ID = "0199f000-0000-7000-8000-000000000002"
@@ -426,11 +430,12 @@ class ApiTransportTests(DrainTestCase):
     def test_requests_carry_an_explicit_user_agent_on_the_wire(self) -> None:
         received_headers: list[dict[str, str]] = []
 
-        class ClaimHandler(http.server.BaseHTTPRequestHandler):
+        class WorkHandler(http.server.BaseHTTPRequestHandler):
             def do_POST(self) -> None:
                 received_headers.append(dict(self.headers))
-                body = b'{"items":[]}'
-                self.send_response(200)
+                milestone = self.path.startswith("/milestone")
+                body = b'{}' if milestone else b'{"items":[]}'
+                self.send_response(201 if milestone else 200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
@@ -439,22 +444,24 @@ class ApiTransportTests(DrainTestCase):
             def log_message(self, *_: object) -> None:
                 pass
 
-        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), ClaimHandler)
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), WorkHandler)
         server_thread = threading.Thread(target=server.serve_forever, daemon=True)
         server_thread.start()
         try:
             self.write_config(capstan_url=f"http://127.0.0.1:{server.server_port}")
             client = drain.ApiClient(drain.load_config(self.config_path), "secret-bearer")
             self.assertEqual(client.claim(0, ["builder"], ["php"]), [])
+            stub_worker.post(f"http://127.0.0.1:{server.server_port}/milestone?signature=stub", "started")
         finally:
             server.shutdown()
             server.server_close()
             server_thread.join()
 
-        self.assertEqual(len(received_headers), 1)
-        user_agent = received_headers[0].get("User-Agent")
-        self.assertTrue(user_agent)
-        self.assertNotIn("Python-urllib", user_agent)
+        self.assertEqual(len(received_headers), 2)
+        for headers in received_headers:
+            user_agent = headers.get("User-Agent")
+            self.assertTrue(user_agent)
+            self.assertNotIn("Python-urllib", user_agent)
 
     def test_capstan_url_requires_https_except_for_local_loopback_http(self) -> None:
         accepted = (
