@@ -6,9 +6,11 @@ use App\Models\Inbox;
 use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkItem;
+use App\Models\WorkOrchestratorSeat;
 use App\Models\WorkTask;
 use App\Work\WorkItemStateService;
 use App\Work\WorkOrchestrationService;
+use App\Work\WorkSeatService;
 use App\Work\WorkSweepService;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\User;
@@ -156,6 +158,61 @@ test('orchestrator claim and renew return usable signed context and action links
     ])->assertOk()->assertJsonPath('results.0.status', 'renewed');
     expect(array_keys($renew->json('results.0.item.links')))->toBe(['brief', 'milestone', 'steers', 'orchestration', 'orchestrate']);
     $this->getJson($renew->json('results.0.item.links.orchestration'))->assertOk();
+});
+
+test('an orchestrator claim returns the holder stored session ref and a turn cannot end acted without turn_done', function (): void {
+    // AC19 clauses: "each returns A's stored session_ref", and "a turn without turn_done is not marked acted".
+    // Both hold in production and neither was asserted at the HTTP boundary: nulling the response field in
+    // WorkDrainController::claimItem, or dropping the turn_done guard in WorkWorkerService::milestone, left
+    // the whole Work suite green.
+    Date::setTestNow('2026-10-17 10:00:00');
+    $team = workDrainTeam();
+    $task = workDrainTask($team);
+    $task->briefRevisions()->create(['sequence' => 1, 'content' => 'Turn brief', 'author_actor' => 'creator']);
+    $user = capstanUser();
+    $issued = workDrainCredential($user);
+    $engine = resolve(WorkOrchestrationService::class);
+
+    // Take a first turn so the drain's credential-backed spoke exists and holds the seat.
+    $engine->event($task, 'session-ref-first', 'test_event', ['safe' => true]);
+    $first = $this->withHeaders($issued['headers'])
+        ->postJson(route('api.work.claim', $team), workDrainClaimPayload(1, ['orchestrator']))->assertOk();
+    $firstTurn = WorkItem::query()->findOrFail($first->json('items.0.id'));
+    $spoke = Spoke::query()->where('actor_id', (string) $user->getKey())->sole();
+    $seat = WorkOrchestratorSeat::query()->where('work_task_id', $task->id)->sole();
+    $engine->turnDone($firstTurn, $firstTurn->fence, (int) $seat->fence, 'First state', CarbonImmutable::now());
+
+    // Host A stores an opaque reference on the seat it already holds.
+    $ref = 'opaque://Session/Exact ? Case=YES '.Str::random(12);
+    resolve(WorkSeatService::class)->take($task, (string) $user->getKey(), $spoke->id, (int) $seat->fresh()->fence, $ref, false, CarbonImmutable::now());
+
+    // The next claim for that parent hands the reference back, with the seat fence it belongs to.
+    $engine->event($task, 'session-ref-second', 'test_event', ['safe' => true]);
+    $claim = $this->withHeaders($issued['headers'])
+        ->postJson(route('api.work.claim', $team), workDrainClaimPayload(1, ['orchestrator']))->assertOk();
+    expect($claim->json('items.0.session_ref'))->toBe($ref)
+        ->and($claim->json('items.0.seat_fence'))->toBe((int) $seat->fresh()->fence);
+
+    // Drive the turn to routed, so the only thing left that can refuse a done milestone is the
+    // turn_done guard. Without this the generic "Illegal transition" guard answers 422 first and the
+    // assertion below passes whether or not the turn_done guard exists.
+    foreach (['delivered', 'routed'] as $state) {
+        $this->withHeaders($issued['headers'])->postJson(route('api.work.transition', $team), [
+            'item_id' => $claim->json('items.0.id'),
+            'fence' => $claim->json('items.0.fence'),
+            'state' => $state,
+        ])->assertOk();
+    }
+    expect(WorkItem::query()->findOrFail($claim->json('items.0.id'))->state)->toBe(WorkItemState::Routed);
+
+    // A done milestone on a routed orchestrator turn is still refused: only turn_done may end one.
+    $this->postJson($claim->json('items.0.links.milestone'), ['kind' => 'done', 'payload' => (object) []])
+        ->assertStatus(422);
+
+    $turn = WorkItem::query()->findOrFail($claim->json('items.0.id'));
+    expect($turn->state)->toBe(WorkItemState::Routed)
+        ->and($turn->state)->not->toBe(WorkItemState::Acted)
+        ->and($turn->milestones()->where('kind', 'done')->count())->toBe(0);
 });
 
 test('expired claim links lose their fence after sweep and reclaim while replacement links succeed', function (): void {
