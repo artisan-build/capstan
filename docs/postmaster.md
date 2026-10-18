@@ -199,8 +199,8 @@ the device code can be exchanged only once after the signed-in member who starte
 at the verification URL. The fixed package profile mints a bound personal `capstan.postmaster.poll` bearer
 credential; the installer never contains an existing durable bearer credential or signing-root secret.
 
-Running the command requires `curl`, `php`, and `crontab`. The installer is POSIX `sh`, is wrapped in one
-compound command, and does not read the script stream from stdin. A truncated download therefore fails to
+Running the command requires curl 7.76 or newer, `php`, and `crontab`. The installer is POSIX `sh`, is
+wrapped in one compound command, and does not read the script stream from stdin. A truncated download therefore fails to
 parse before it changes the target computer. The installer opens the verification URL, waits for approval,
 exchanges the one-time device code, and writes the resulting bearer to
 `~/.config/capstan/{server-id}/token` with mode 600. It separately writes the non-secret package actor id
