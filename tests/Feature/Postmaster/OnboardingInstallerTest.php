@@ -140,6 +140,9 @@ test('the generated installer pins relative executable paths before cron runs fr
     $absoluteTools = (string) realpath($tools);
     File::makeDirectory($cronDirectory, 0700, true);
     File::makeDirectory($home, 0700, true);
+    $existingInstall = $home.'/.config/capstan/'.INSTALLER_SERVER_ID;
+    File::makeDirectory($existingInstall, 0700, true);
+    File::put($existingInstall.'/token', 'existing-secret-bearer');
     symlink(PHP_BINARY, $tools.'/php');
 
     File::put($bin.'/uname', "#!/bin/sh\nprintf '%s\\n' Darwin\n");
@@ -204,6 +207,9 @@ SH));
 
         expect($process->isSuccessful())->toBeTrue($process->getErrorOutput())
             ->and(File::get($install.'/token'))->toBe('approved-test-bearer')
+            ->and(File::exists($install.'/token.before-reinstall'))->toBeFalse()
+            ->and($process->getOutput())->not->toContain('existing-secret-bearer')
+            ->and($process->getErrorOutput())->not->toContain('existing-secret-bearer')
             ->and(File::get($install.'/actor-id'))->toBe((string) $user->getKey())
             ->and(fileperms($install) & 0777)->toBe(0700)
             ->and(fileperms($install.'/token') & 0777)->toBe(0600)
@@ -211,6 +217,7 @@ SH));
             ->and(fileperms($install.'/poll.sh') & 0777)->toBe(0700)
             ->and(File::get($install.'/poll.sh'))->toContain('CAPSTAN_PHP='.escapeshellarg($absoluteTools.'/php'))
             ->and(File::get($install.'/poll.sh'))->toContain('CAPSTAN_CURL='.escapeshellarg($absoluteTools.'/curl'))
+            ->and(File::get($install.'/poll.sh'))->not->toContain('existing-secret-bearer')
             ->and(File::get($crontab))->toContain('# capstan-postmaster:'.INSTALLER_SERVER_ID)
             ->and($initialPayload['presence'])->toBe([
                 'ready_inboxes' => [],
@@ -225,6 +232,56 @@ SH));
                 'probe_id' => '01ARZ3NDEKTSV4RRFFQ69G5FAA',
                 'digest' => hash('sha256', 'installer-nonce'),
             ]);
+    } finally {
+        File::deleteDirectory($directory);
+    }
+});
+
+test('a failed reinstall removes the old-token aside without printing or overwriting the old token', function (): void {
+    $snippet = installerSnippet($this);
+    $directory = sys_get_temp_dir().'/capstan-failed-reinstall-'.bin2hex(random_bytes(6));
+    $bin = $directory.'/bin';
+    $home = $directory.'/home';
+    $install = $home.'/.config/capstan/'.INSTALLER_SERVER_ID;
+    File::makeDirectory($bin, 0700, true);
+    File::makeDirectory($install, 0700, true);
+    $oldToken = 'old-secret-that-must-not-print';
+    File::put($install.'/token', $oldToken);
+    File::put($bin.'/uname', "#!/bin/sh\nprintf '%s\\n' Darwin\n");
+    File::put($bin.'/open', "#!/bin/sh\nexit 0\n");
+    File::put($bin.'/crontab', "#!/bin/sh\nexit 0\n");
+    File::put($bin.'/curl', <<<'SH'
+#!/bin/sh
+set -eu
+if [ "${1:-}" = '--version' ]; then
+    printf '%s\n' 'curl test shim'
+    exit 0
+fi
+previous=''
+for argument in "$@"; do
+    if [ "$previous" = '--dump-header' ]; then printf 'HTTP/1.1 400 Bad Request\r\n\r\n' > "$argument"; fi
+    previous="$argument"
+done
+cat >/dev/null || true
+printf '%s' '{"error":"invalid_grant"}'
+SH);
+    foreach (['uname', 'open', 'crontab', 'curl'] as $command) {
+        chmod($bin.'/'.$command, 0700);
+    }
+
+    $process = new Process(['/bin/sh', '-c', $snippet], $directory, [
+        'HOME' => $home,
+        'PATH' => $bin.':'.dirname(PHP_BINARY).':/usr/bin:/bin',
+    ]);
+
+    try {
+        $process->run();
+
+        expect($process->isSuccessful())->toBeFalse()
+            ->and(File::get($install.'/token'))->toBe($oldToken)
+            ->and(File::exists($install.'/token.before-reinstall'))->toBeFalse()
+            ->and($process->getOutput())->not->toContain($oldToken)
+            ->and($process->getErrorOutput())->not->toContain($oldToken);
     } finally {
         File::deleteDirectory($directory);
     }

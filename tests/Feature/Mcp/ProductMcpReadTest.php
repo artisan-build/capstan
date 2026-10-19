@@ -261,6 +261,34 @@ test('lists only actor owned spokes and routed actor owned inboxes without crede
         ->and(strlen($response->getContent()))->toBeLessThan(1_048_576);
 });
 
+test('spoke listing hides retired rows by default and includes their retirement timestamp on request', function (): void {
+    $owner = capstanUser();
+    $token = capstanMcpReadToken($owner);
+    $active = Spoke::query()->create([
+        'actor_id' => (string) $owner->id,
+        'credential_id' => (string) Str::uuid(),
+        'name' => 'Active spoke',
+    ]);
+    $retired = Spoke::query()->create([
+        'actor_id' => (string) $owner->id,
+        'credential_id' => (string) Str::uuid(),
+        'name' => 'Retired spoke',
+        'retired_at' => now(),
+        'retired_by' => (string) $owner->id,
+    ]);
+
+    $default = capstanMcpReadStructured(capstanMcpReadCall('postmaster_spokes', ['limit' => 25], $token));
+    $withRetired = capstanMcpReadStructured(capstanMcpReadCall('postmaster_spokes', [
+        'limit' => 25,
+        'include_retired' => true,
+    ], $token));
+
+    expect(data_get($default, 'items.*.id'))->toBe([$active->id])
+        ->and(collect($withRetired['items'])->pluck('id')->all())->toBe([$active->id, $retired->id])
+        ->and(data_get($withRetired, 'items.0.retired_at'))->toBeNull()
+        ->and(data_get($withRetired, 'items.1.retired_at'))->toBe($retired->retired_at?->toJSON());
+});
+
 test('spoke tool uses device fallback and disambiguates duplicate display names', function (): void {
     $owner = capstanUser(['name' => '', 'email' => 'tool-owner@example.test']);
     $token = capstanMcpReadToken($owner);

@@ -7,10 +7,12 @@ use App\Enums\SpokeMapStatus;
 use App\Features\Postmaster;
 use App\Models\Spoke;
 use App\Postmaster\PendingInstallLinks;
+use App\Postmaster\RetireSpoke;
 use ArtisanBuild\BuiltForCloud\Contracts\IdentityContext;
 use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
+use DomainException;
 use Illuminate\Contracts\View\View;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\RateLimiter;
@@ -87,6 +89,18 @@ class SpokeMap extends Component
         $this->reset('renamingSpokeId', 'spokeName');
     }
 
+    public function retireSpoke(int $spokeId, RetireSpoke $retire): void
+    {
+        $this->guardFeature();
+        $spoke = $this->ownedSpoke($spokeId);
+
+        try {
+            $retire->handle($spoke->id, $spoke->actor_id, CarbonImmutable::now());
+        } catch (DomainException $exception) {
+            $this->addError('retireSpoke', $exception->getMessage());
+        }
+    }
+
     /**
      * @return list<array{
      *     id: int,
@@ -103,7 +117,7 @@ class SpokeMap extends Component
     private function spokes(): array
     {
         /** @var Collection<int, Spoke> $spokes */
-        $spokes = Spoke::query()->withCount('inboxes')->orderBy('id')->get();
+        $spokes = Spoke::query()->whereNull('retired_at')->withCount('inboxes')->orderBy('id')->get();
         $ownerNames = $this->ownerNames($spokes);
         $baseNames = $spokes->mapWithKeys(fn (Spoke $spoke): array => [
             $spoke->id => $this->baseDisplayName($spoke),
@@ -207,7 +221,7 @@ class SpokeMap extends Component
         $user = request()->user();
         abort_unless($user instanceof User, 401);
 
-        $spoke = Spoke::query()->findOrFail($spokeId);
+        $spoke = Spoke::query()->whereNull('retired_at')->findOrFail($spokeId);
         abort_unless(hash_equals((string) $user->getKey(), $spoke->actor_id), 403);
 
         return $spoke;

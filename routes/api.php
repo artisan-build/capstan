@@ -3,6 +3,7 @@
 use App\Auth\CapstanCredentialDeclaration;
 use App\Http\Controllers\Api\ArtifactController;
 use App\Http\Controllers\Api\PollController;
+use App\Http\Controllers\Api\ReplacePostmasterSpokeController;
 use App\Http\Controllers\Api\WorkDrainController;
 use App\Http\Controllers\Api\WorkOrchestrationWorkerController;
 use App\Http\Controllers\Api\WorkWorkerController;
@@ -22,6 +23,11 @@ Route::prefix('v1')->group(function (): void {
         ->middleware('capstan.bound_credential:'.CapstanCredentialDeclaration::POSTMASTER_POLL)
         ->middleware('throttle:api')
         ->name('api.postmaster.poll');
+
+    Route::post('postmaster/replace', ReplacePostmasterSpokeController::class)
+        ->middleware('capstan.bound_credential:'.CapstanCredentialDeclaration::POSTMASTER_POLL)
+        ->middleware('throttle:api')
+        ->name('api.postmaster.replace');
 
     Route::prefix('work/{team}')
         ->middleware('capstan.bound_credential:'.CapstanCredentialDeclaration::WORK_DRAIN)

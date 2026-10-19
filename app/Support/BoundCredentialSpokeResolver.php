@@ -5,6 +5,7 @@ namespace App\Support;
 use App\Models\Spoke;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
+use RuntimeException;
 
 final class BoundCredentialSpokeResolver
 {
@@ -24,6 +25,10 @@ final class BoundCredentialSpokeResolver
             ->first();
 
         if ($existing !== null) {
+            if ($existing->retired_at !== null) {
+                throw new RuntimeException('This Postmaster spoke has been retired.');
+            }
+
             $this->refreshDeviceName($existing, $deviceName, $now);
 
             return $existing;
@@ -49,6 +54,10 @@ final class BoundCredentialSpokeResolver
             ->where('credential_backed', $credentialBacked)
             ->lockForUpdate()
             ->firstOrFail();
+
+        if ($spoke->retired_at !== null) {
+            throw new RuntimeException('This Postmaster spoke has been retired.');
+        }
 
         $this->refreshDeviceName($spoke, $deviceName, $now);
 

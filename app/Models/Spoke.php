@@ -19,6 +19,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string|null $last_cursor
  * @property SpokeLiveness $probe_status
  * @property CarbonImmutable|null $probe_failed_at
+ * @property CarbonImmutable|null $retired_at
+ * @property string|null $retired_by
  * @property CarbonImmutable $created_at
  * @property CarbonImmutable $updated_at
  * @property-read int|null $inboxes_count
@@ -38,6 +40,8 @@ class Spoke extends Model
         'last_cursor',
         'probe_status',
         'probe_failed_at',
+        'retired_at',
+        'retired_by',
     ];
 
     /** @return array<string, string> */
@@ -49,6 +53,7 @@ class Spoke extends Model
             'work_heartbeat_notified_at' => 'datetime',
             'probe_status' => SpokeLiveness::class,
             'probe_failed_at' => 'datetime',
+            'retired_at' => 'datetime',
         ];
     }
 

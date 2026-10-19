@@ -3,6 +3,7 @@
 namespace App\Postmaster;
 
 use App\Models\Spoke;
+use App\Models\WorkItem;
 use ArtisanBuild\BuiltForCloud\SystemAuthorityContext;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
@@ -20,6 +21,7 @@ final readonly class RetireDeadSpokes
 
         return DB::transaction(function (): int {
             $ids = Spoke::query()
+                ->whereNull('retired_at')
                 ->where('credential_backed', true)
                 ->where(function (Builder $query): void {
                     $query->whereNotExists(function ($credentials): void {
@@ -43,7 +45,26 @@ final readonly class RetireDeadSpokes
                 return 0;
             }
 
-            return Spoke::query()->whereKey($ids)->delete();
+            $retired = 0;
+
+            foreach ($ids as $id) {
+                $spoke = Spoke::query()->whereKey($id)->whereNull('retired_at')->lockForUpdate()->first();
+
+                if ($spoke === null || WorkItem::query()
+                    ->where('claimant_spoke_id', $spoke->id)
+                    ->whereIn('state', ['claimed', 'delivered', 'routed'])
+                    ->where('lease_until', '>', now())
+                    ->whereHas('workTask', fn ($query) => $query->whereNull('cancelled_at'))
+                    ->exists()) {
+                    continue;
+                }
+
+                $spoke->inboxes()->detach();
+                $spoke->forceFill(['retired_at' => now(), 'retired_by' => null])->save();
+                $retired++;
+            }
+
+            return $retired;
         });
     }
 }

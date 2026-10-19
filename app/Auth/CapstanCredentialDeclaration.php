@@ -39,7 +39,7 @@ final readonly class CapstanCredentialDeclaration implements CredentialDeclarati
 
     public function authorize(Credential $credential, ?string $ability, Request $request): bool
     {
-        if (! $request->is('api/v1/artifacts', 'api/v1/poll', 'api/v1/work/*')) {
+        if (! $request->is('api/v1/artifacts', 'api/v1/poll', 'api/v1/postmaster/replace', 'api/v1/work/*')) {
             return true;
         }
 

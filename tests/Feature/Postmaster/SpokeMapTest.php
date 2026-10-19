@@ -1,10 +1,15 @@
 <?php
 
+use App\Auth\CapstanCredentialDeclaration;
 use App\Enums\SpokeLiveness;
 use App\Enums\SpokeMapStatus;
 use App\Livewire\Postmaster\SpokeMap;
 use App\Models\Inbox;
 use App\Models\Spoke;
+use App\Models\Team;
+use App\Models\WorkItem;
+use App\Models\WorkMilestone;
+use App\Models\WorkTask;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Carbon\CarbonInterface;
@@ -149,6 +154,85 @@ test('a tampered rename call cannot change another users spoke', function (): vo
         ->assertForbidden();
 
     expect($spoke->refresh()->name)->toBe('Original name');
+});
+
+test('a tampered retirement is forbidden through Livewire and the HTTP route', function (): void {
+    $owner = capstanUser();
+    $other = capstanUser();
+    $spoke = createMapSpoke($owner, 'Owned spoke', now(), SpokeLiveness::Green);
+
+    Livewire::actingAs($other)
+        ->test(SpokeMap::class)
+        ->call('retireSpoke', $spoke->id)
+        ->assertForbidden();
+
+    $this->actingAsVersioned($other)
+        ->post(route('postmaster.spokes.retire', $spoke))
+        ->assertForbidden();
+
+    expect($spoke->refresh()->retired_at)->toBeNull();
+});
+
+test('retirement refuses a live Work lease then hides the spoke revokes its credential and preserves history', function (): void {
+    $owner = capstanUser();
+    $issued = capstanBoundBearer($owner, CapstanCredentialDeclaration::POSTMASTER_POLL);
+    $spoke = Spoke::query()->create([
+        'actor_id' => (string) $owner->id,
+        'credential_id' => $issued['credential']->id,
+        'last_polled_at' => now(),
+        'probe_status' => SpokeLiveness::Green,
+    ]);
+    $inbox = Inbox::query()->create(['actor_id' => (string) $owner->id, 'local_part' => 'retire-history']);
+    $spoke->inboxes()->attach($inbox);
+    $task = WorkTask::query()->create([
+        'team_id' => Team::query()->where('is_default', true)->sole()->id,
+        'title' => 'Retirement history task',
+        'failover' => true,
+        'required_capabilities' => [],
+        'timebox_minutes' => 30,
+        'creator_actor' => (string) $owner->id,
+    ]);
+    $item = WorkItem::query()->create([
+        'work_task_id' => $task->id,
+        'role' => 'builder',
+        'state' => 'claimed',
+        'claimant_spoke_id' => $spoke->id,
+        'claimant_actor' => (string) $owner->id,
+        'lease_until' => now()->addMinute(),
+        'claimed_at' => now(),
+        'fence' => 1,
+    ]);
+    $milestone = WorkMilestone::query()->create([
+        'work_item_id' => $item->id,
+        'fence' => 1,
+        'kind' => 'note',
+        'payload' => ['summary' => 'History remains readable'],
+        'created_at' => now(),
+    ]);
+
+    Livewire::actingAs($owner)
+        ->test(SpokeMap::class)
+        ->call('retireSpoke', $spoke->id)
+        ->assertHasErrors('retireSpoke')
+        ->assertSee('live Work claim');
+    expect($spoke->refresh()->retired_at)->toBeNull()
+        ->and($issued['credential']->refresh()->revoked_at)->toBeNull();
+
+    $item->forceFill(['lease_until' => now()->subSecond()])->save();
+    Livewire::actingAs($owner)
+        ->test(SpokeMap::class)
+        ->call('retireSpoke', $spoke->id)
+        ->assertHasNoErrors()
+        ->assertDontSee('Retirement history task');
+
+    expect($spoke->refresh()->retired_at)->not->toBeNull()
+        ->and($spoke->retired_by)->toBe((string) $owner->id)
+        ->and($issued['credential']->refresh()->revoked_at)->not->toBeNull()
+        ->and(DB::table('spoke_inboxes')->where('spoke_id', $spoke->id)->exists())->toBeFalse()
+        ->and(Spoke::query()->find($spoke->id))->not->toBeNull()
+        ->and(WorkItem::query()->find($item->id)?->claimant_spoke_id)->toBe($spoke->id)
+        ->and(WorkMilestone::query()->find($milestone->id)?->payload)->toBe(['summary' => 'History remains readable'])
+        ->and(Livewire::actingAs($owner)->test(SpokeMap::class)->viewData('spokes'))->toBeEmpty();
 });
 
 test('device names are escaped in the map', function (): void {

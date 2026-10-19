@@ -803,7 +803,8 @@ test('the system-authority sweep retires a revoked credential spoke and routing 
         ->expectsOutput('Retired 1 dead Postmaster spoke(s).')
         ->assertSuccessful();
 
-    expect(Spoke::query()->count())->toBe(0)
+    expect(Spoke::query()->count())->toBe(1)
+        ->and(Spoke::query()->sole()->retired_at)->not->toBeNull()
         ->and(DB::table('spoke_inboxes')->count())->toBe(0)
         ->and(Inbox::query()->where('local_part', 'alice')->value('actor_id'))->toBe((string) $user->id);
 });
