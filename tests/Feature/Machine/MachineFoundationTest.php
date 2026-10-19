@@ -335,7 +335,7 @@ test('usage bounds accept exact maxima and reject domains cardinality grammar an
         ['source' => 'none', 'source_version' => str_repeat('x', 33), 'availability' => 'unavailable'],
         ['source' => 'none', 'source_version' => null, 'availability' => 'unknown'],
     ];
-    foreach ($invalidReports as $index => $attributes) {
+    foreach ($invalidReports as $attributes) {
         $other = Spoke::query()->create(['actor_id' => $machine['actor'], 'credential_id' => (string) Str::uuid7()]);
         expect(fn () => MachineUsageReport::query()->create([
             ...$attributes,
