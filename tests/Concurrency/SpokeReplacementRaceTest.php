@@ -155,7 +155,8 @@ test('two real replacement processes leave one live credential on the original s
         DB::purge('spoke_replace_race');
         $winnerCredential = $spoke->fresh()?->credential_id;
         $newCredentialIds = array_map(fn (array $issued): string => $issued['credential']->id, $new);
-        expect(collect($results)->pluck('conflict')->sort()->values()->all())->toBe([false, true])
+        expect(collect($results)->pluck('driver')->unique()->values()->all())->toBe([$database['connection']['driver']])
+            ->and(collect($results)->pluck('conflict')->sort()->values()->all())->toBe([false, true])
             ->and($spoke->fresh()?->id)->toBe($spoke->id)
             ->and($winnerCredential)->toBeIn($newCredentialIds)
             ->and(Credential::query()->whereIn('id', $newCredentialIds)->whereNull('revoked_at')->count())->toBe(1)

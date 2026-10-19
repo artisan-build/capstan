@@ -22,8 +22,10 @@ if ($argc !== 3) {
 try {
     $app = require dirname(__DIR__, 2).'/bootstrap/app.php';
     $app->make(Kernel::class)->bootstrap();
-    DB::statement('PRAGMA busy_timeout = 15000');
-    DB::statement('PRAGMA journal_mode = WAL');
+    if (DB::getDriverName() === 'sqlite') {
+        DB::statement('PRAGMA busy_timeout = 15000');
+        DB::statement('PRAGMA journal_mode = WAL');
+    }
     $actorId = (string) getenv('REPLACEMENT_ACTOR_ID');
     $request = Request::create('/api/v1/postmaster/replace', 'POST', server: [
         'HTTP_AUTHORIZATION' => 'Bearer '.(string) getenv('REPLACEMENT_OLD_TOKEN'),
@@ -64,6 +66,7 @@ try {
     );
     fwrite(STDOUT, json_encode([
         'worker' => (int) $worker,
+        'driver' => DB::getDriverName(),
         'conflict' => $result['conflict'],
         'spoke_id' => $result['spoke']?->id,
     ], JSON_THROW_ON_ERROR));
