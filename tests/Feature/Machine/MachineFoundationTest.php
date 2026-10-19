@@ -353,7 +353,7 @@ test('usage bounds accept exact maxima and reject domains cardinality grammar an
         ['provider' => str_repeat('x', 65), 'plan' => null, 'status' => 'ok'],
         ['provider' => 'codex', 'plan' => str_repeat('x', 33), 'status' => 'ok'],
         ['provider' => 'codex', 'plan' => null, 'status' => 'bogus'],
-    ] as $index => $attributes) {
+    ] as $attributes) {
         expect(fn () => MachineUsageProvider::query()->create([
             ...$attributes,
             'machine_usage_report_id' => $otherReport->id,
@@ -391,7 +391,7 @@ test('window values and nullable duration identity are enforced at the model and
         ['slot' => 'balance-duration', 'kind' => 'balance', 'window_seconds' => 1, 'remaining_percent' => 1],
         ['slot' => 'consumption-null', 'kind' => 'consumption', 'window_seconds' => null, 'remaining_percent' => 1],
         ['slot' => 'kind', 'kind' => 'unknown', 'window_seconds' => null, 'remaining_percent' => 1],
-    ] as $index => $attributes) {
+    ] as $attributes) {
         expect(fn () => MachineUsageWindow::query()->create([
             ...$attributes,
             'machine_usage_provider_id' => $provider->id,

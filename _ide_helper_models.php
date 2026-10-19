@@ -211,6 +211,7 @@ namespace App\Models{
  * @property int|null $window_seconds
  * @property string $remaining_percent
  * @property CarbonImmutable|null $resets_at
+ * @property string $window_identity
  * @property-read MachineUsageProvider $provider
  * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineUsageWindow newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineUsageWindow newQuery()
@@ -381,6 +382,7 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke workEligible()
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
