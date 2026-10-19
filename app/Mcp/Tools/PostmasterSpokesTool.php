@@ -47,12 +47,13 @@ final class PostmasterSpokesTool extends CapstanTool
             'limit' => $schema->integer()->min(1)->max(self::MAX_LIMIT)->default(10),
             'cursor' => $schema->string()->max(2048),
             'status' => $schema->string()->enum(SpokeMapStatus::class),
+            'include_retired' => $schema->boolean()->default(false),
         ];
     }
 
     public function handle(Request $request, OwnerSubjectResolver $owners, SignedCursor $cursors): Response|ResponseFactory
     {
-        $this->requireExactArguments($request, ['limit', 'cursor', 'status']);
+        $this->requireExactArguments($request, ['limit', 'cursor', 'status', 'include_retired']);
 
         if (! Feature::active(Postmaster::class)) {
             return Response::error('Postmaster is unavailable.');
@@ -62,14 +63,16 @@ final class PostmasterSpokesTool extends CapstanTool
             'limit' => ['sometimes', 'required', 'integer', 'min:1', 'max:'.self::MAX_LIMIT],
             'cursor' => ['sometimes', 'required', 'string', 'max:2048'],
             'status' => ['sometimes', 'required', Rule::enum(SpokeMapStatus::class)],
+            'include_retired' => ['sometimes', 'required', 'boolean'],
         ]);
         $owner = $owners->resolve();
         $ownerName = $this->ownerName($owner->actorId);
         $limit = (int) ($validated['limit'] ?? 10);
         $status = isset($validated['status']) ? SpokeMapStatus::from($validated['status']) : null;
+        $includeRetired = (bool) ($validated['include_retired'] ?? false);
         $actorBinding = $owner->type.':'.$owner->ref;
         $staleAfter = max(60, (int) config('capstan.postmaster.map.stale_after_seconds', 300));
-        $queryBinding = hash('sha256', 'postmaster_spokes:v2:'.$staleAfter.':'.$limit.':'.($status === null ? '*' : $status->value));
+        $queryBinding = hash('sha256', 'postmaster_spokes:v3:'.$staleAfter.':'.$limit.':'.($status === null ? '*' : $status->value).':'.($includeRetired ? 'retired' : 'active'));
         $after = isset($validated['cursor'])
             ? $cursors->decode($validated['cursor'], $actorBinding, $queryBinding)
             : null;
@@ -83,6 +86,7 @@ final class PostmasterSpokesTool extends CapstanTool
         /** @var Collection<int, Spoke> $nameRows */
         $nameRows = Spoke::query()
             ->where('actor_id', $owner->actorId)
+            ->unless($includeRetired, fn ($query) => $query->whereNull('retired_at'))
             ->get(['id', 'actor_id', 'name', 'device_name']);
         $baseNames = $nameRows->mapWithKeys(fn (Spoke $spoke): array => [
             $spoke->id => $this->baseDisplayName($spoke),
@@ -93,6 +97,7 @@ final class PostmasterSpokesTool extends CapstanTool
             ->all();
         $query = Spoke::query()
             ->where('actor_id', $owner->actorId)
+            ->unless($includeRetired, fn ($query) => $query->whereNull('retired_at'))
             ->when($lastId !== null, fn ($query) => $query->where('id', '>', $lastId));
 
         if ($status === SpokeMapStatus::Red) {
@@ -135,6 +140,10 @@ final class PostmasterSpokesTool extends CapstanTool
                 'probe_status' => $spoke->probe_status->value,
                 'status' => $this->mapStatus($spoke, $staleBefore)->value,
             ];
+
+            if ($includeRetired) {
+                $item['retired_at'] = $spoke->retired_at?->toJSON();
+            }
 
             if (! ToolResponse::fits(['items' => [...$items, $item], 'next_cursor' => str_repeat('x', 2048)])) {
                 break;

@@ -5,6 +5,7 @@ namespace App\Work;
 use App\Enums\WorkItemState;
 use App\Features\Work;
 use App\Http\ApiErrorException;
+use App\Models\Spoke;
 use App\Models\WorkBriefRevision;
 use App\Models\WorkEscalation;
 use App\Models\WorkItem;
@@ -38,6 +39,10 @@ final readonly class WorkOrchestrationCapability
     {
         return $this->authorised($context, $now, function (WorkTask $parent) use ($underTaskId, $attributes, $brief, $context): WorkTask {
             $under = $this->target($parent, $underTaskId, allowParent: true);
+            if (isset($attributes['device_spoke_id']) && ! Spoke::query()->active()
+                ->whereKey($attributes['device_spoke_id'])->lockForUpdate()->exists()) {
+                throw $this->forbidden('Work host is unavailable.');
+            }
             $child = WorkTask::query()->create([
                 ...array_intersect_key($attributes, array_flip(['title', 'user_actor_address', 'device_spoke_id', 'failover', 'required_capabilities', 'timebox_minutes', 'workflow_ref'])),
                 'team_id' => $parent->team_id,
@@ -254,6 +259,14 @@ final readonly class WorkOrchestrationCapability
         }
 
         return DB::transaction(function () use ($context, $now, $write): mixed {
+            $spoke = Spoke::query()->active()
+                ->whereKey($context->spokeId)
+                ->where('actor_id', $context->actorId)
+                ->lockForUpdate()
+                ->first();
+            if (! $spoke instanceof Spoke) {
+                throw $this->forbidden('Work host is unavailable.');
+            }
             $parent = WorkTask::query()->whereKey($context->parentTaskId)->first();
             if (! $parent instanceof WorkTask) {
                 throw $this->forbidden();

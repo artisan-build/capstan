@@ -495,6 +495,11 @@ test('signed child creation enforces canonical intent and team failover defaults
     $inactive = capstanUser(['status' => 'inactive']);
     $spoke = Spoke::query()->create(['actor_id' => (string) $active->id, 'credential_id' => (string) Str::uuid7()]);
     $orphan = Spoke::query()->create(['actor_id' => '999999999', 'credential_id' => (string) Str::uuid7()]);
+    $retired = Spoke::query()->create([
+        'actor_id' => (string) $active->id,
+        'credential_id' => (string) Str::uuid7(),
+        'retired_at' => now(),
+    ]);
     $post = fn (array $input, string $key) => $this->postJson($link, [
         'action' => 'create_child', 'input' => array_replace(['under_task_id' => $parent->id, 'title' => 'Child', 'brief' => 'Brief'], $input),
         'idempotency_key' => $key,
@@ -508,6 +513,7 @@ test('signed child creation enforces canonical intent and team failover defaults
     $refuse(['device_spoke_id' => $spoke->id], 'signed-pin-no-failover');
     $refuse(['device_spoke_id' => 999999999, 'failover' => true], 'signed-missing-spoke');
     $refuse(['device_spoke_id' => $orphan->id, 'failover' => true], 'signed-invalid-spoke');
+    $refuse(['device_spoke_id' => $retired->id, 'failover' => true], 'signed-retired-spoke');
     $refuse(['user_actor_address' => 'missing'], 'signed-invalid-actor');
     $refuse(['user_actor_address' => '999999999'], 'signed-missing-actor');
     $refuse(['user_actor_address' => (string) $inactive->id], 'signed-inactive-actor');

@@ -6,6 +6,7 @@ use App\Http\Controllers\PageController;
 use App\Http\Controllers\PageExportController;
 use App\Http\Controllers\PageShareController;
 use App\Http\Controllers\PostmasterInstallController;
+use App\Http\Controllers\RetirePostmasterSpokeController;
 use App\Livewire\Work\Index;
 use App\Postmaster\ProtectInstallCapabilityTelemetry;
 use Illuminate\Support\Facades\Route;
@@ -13,6 +14,9 @@ use Illuminate\Support\Facades\Route;
 Route::middleware('bfc.auth')->group(function (): void {
     Route::livewire('work', Index::class)->name('work.index');
     Route::livewire('postmaster', 'postmaster.spoke-map')->name('postmaster.map');
+    Route::post('postmaster/spokes/{spoke}/retire', RetirePostmasterSpokeController::class)
+        ->whereNumber('spoke')
+        ->name('postmaster.spokes.retire');
     Route::get('branding', [BrandingSettingsController::class, 'show'])->name('branding.show');
     Route::patch('branding/draft', [BrandingSettingsController::class, 'update'])->name('branding.draft.update');
     Route::post('branding/assets', [BrandingSettingsController::class, 'upload'])->name('branding.assets.store');

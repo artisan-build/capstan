@@ -4,6 +4,8 @@ namespace App\Models;
 
 use App\Enums\SpokeLiveness;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Attributes\Scope;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -19,6 +21,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string|null $last_cursor
  * @property SpokeLiveness $probe_status
  * @property CarbonImmutable|null $probe_failed_at
+ * @property CarbonImmutable|null $retired_at
+ * @property string|null $retired_by
  * @property CarbonImmutable $created_at
  * @property CarbonImmutable $updated_at
  * @property-read int|null $inboxes_count
@@ -38,6 +42,8 @@ class Spoke extends Model
         'last_cursor',
         'probe_status',
         'probe_failed_at',
+        'retired_at',
+        'retired_by',
     ];
 
     /** @return array<string, string> */
@@ -49,7 +55,15 @@ class Spoke extends Model
             'work_heartbeat_notified_at' => 'datetime',
             'probe_status' => SpokeLiveness::class,
             'probe_failed_at' => 'datetime',
+            'retired_at' => 'datetime',
         ];
+    }
+
+    /** @param  Builder<static>  $query */
+    #[Scope]
+    protected function active(Builder $query): void
+    {
+        $query->whereNull('retired_at');
     }
 
     /**

@@ -57,6 +57,9 @@
             <flux:text class="text-zinc-500 dark:text-zinc-400">{{ __('No spokes have registered yet.') }}</flux:text>
         </div>
     @else
+        @error('retireSpoke')
+            <flux:text class="text-sm text-red-600 dark:text-red-400">{{ $message }}</flux:text>
+        @enderror
         <div class="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900">
             <div class="divide-y divide-zinc-200 dark:divide-zinc-700">
                 @foreach ($spokes as $spoke)
@@ -113,6 +116,16 @@
                                             wire:click="beginRenaming({{ $spoke['id'] }})"
                                         >
                                             {{ __('Rename') }}
+                                        </flux:button>
+                                        <flux:button
+                                            class="mt-2"
+                                            type="button"
+                                            size="sm"
+                                            variant="danger"
+                                            wire:click="retireSpoke({{ $spoke['id'] }})"
+                                            wire:confirm="{{ __('Retire this spoke? It will stop polling and disappear from the map. Its history will be kept.') }}"
+                                        >
+                                            {{ __('Retire') }}
                                         </flux:button>
                                     @endif
                                 @endif

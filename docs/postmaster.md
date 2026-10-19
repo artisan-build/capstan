@@ -162,6 +162,14 @@ The authenticated Postmaster map lists the registered CLI installations and thei
 Every active Owner, Admin, and Member sees the same installation-wide operational map. Spoke actor ids
 remain attribution and routing metadata, not a human read ACL.
 
+A user may retire a spoke they own after confirming the action. Retirement is refused while the spoke has
+an unexpired Work lease. A retired spoke is removed from the map and routing, its credential is revoked, and
+it cannot claim more Work. The spoke row and all message and Work history remain stored. Retirement cannot
+be reversed from the product.
+
+The `postmaster_spokes` MCP tool also omits retired spokes by default. Pass `include_retired: true` to include
+them; each returned item then has a nullable `retired_at` timestamp.
+
 Displayed liveness combines polling recency with the independent probe outcome:
 
 - A green spoke polled within the staleness window and its probe state is `green`.
@@ -218,6 +226,14 @@ Before changing cron it saves the readable prior crontab to
 `crontab.before-capstan`; an unexpected read error aborts without rewriting cron. The device exchange
 body and poll headers are supplied to `curl` through stdin/config input rather than exposed in the
 process argument list.
+
+If the server-specific token file already exists, the installer keeps a mode-protected temporary copy while
+the new device authorization completes. It then presents the old and new credentials together to the server.
+When both authenticate as the same user and the old credential belongs to an active spoke, the server moves
+that spoke to the new credential and revokes the old one in one transaction. The spoke id, name, routing
+history, and Work history stay attached to the same row. Missing, invalid, revoked, foreign-user, and retired
+old credentials register a new spoke instead. The temporary copy is removed on success, failure, and signals;
+its value is never written to the poll script or command output.
 
 The poll script initially advertises no inboxes. To receive mail, edit
 `~/.config/capstan/{server-id}/inboxes.json` and replace `[]` with a JSON list of local parts, for example

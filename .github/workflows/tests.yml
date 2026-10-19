@@ -56,6 +56,9 @@ jobs:
       - name: Run Work claim process race
         run: php artisan test tests/Concurrency/WorkClaimRaceTest.php
 
+      - name: Run Postmaster replacement process race
+        run: php artisan test tests/Concurrency/SpokeReplacementRaceTest.php
+
       - name: Run Rector
         run: composer rector:check
 
@@ -128,6 +131,16 @@ jobs:
 
       - name: Run Work claim process race
         run: php artisan test tests/Concurrency/WorkClaimRaceTest.php
+        env:
+          DB_CONNECTION: pgsql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_DATABASE: testing
+          DB_USERNAME: postgres
+          DB_PASSWORD: postgres
+
+      - name: Run Postmaster replacement process race
+        run: php artisan test tests/Concurrency/SpokeReplacementRaceTest.php
         env:
           DB_CONNECTION: pgsql
           DB_HOST: 127.0.0.1

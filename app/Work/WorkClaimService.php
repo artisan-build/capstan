@@ -3,6 +3,7 @@
 namespace App\Work;
 
 use App\Enums\WorkItemState;
+use App\Models\Spoke;
 use App\Models\WorkItem;
 use App\Models\WorkItemTransition;
 use App\Models\WorkOrchestratorSeat;
@@ -36,7 +37,7 @@ final readonly class WorkClaimService
         CarbonImmutable $now,
         int $leaseSeconds,
     ): array {
-        if ($capacity === 0) {
+        if ($capacity === 0 || ! $this->activeSpokeExists($actorId, $spokeId)) {
             return [];
         }
 
@@ -79,7 +80,8 @@ final readonly class WorkClaimService
                 }
             }
 
-            if ($won === 0 && $this->candidates($teamId, $actorId, $spokeId, $roles, $capabilities, 1, $now) === []) {
+            if ($won === 0 && (! $this->activeSpokeExists($actorId, $spokeId)
+                || $this->candidates($teamId, $actorId, $spokeId, $roles, $capabilities, 1, $now) === [])) {
                 break;
             }
         }
@@ -216,6 +218,9 @@ final readonly class WorkClaimService
         beginning:
         try {
             return DB::transaction(function () use ($candidate, $teamId, $actorId, $spokeId, $now, $leaseSeconds): ?WorkItem {
+                if (! Spoke::query()->active()->whereKey($spokeId)->where('actor_id', $actorId)->lockForUpdate()->exists()) {
+                    return null;
+                }
                 $seat = null;
                 if ($candidate->role === WorkItem::ROLE_ORCHESTRATOR) {
                     $this->locks->tasks($candidate->work_task_id);
@@ -306,5 +311,11 @@ final readonly class WorkClaimService
     {
         return DB::getDriverName() === 'sqlite'
             && str_contains(strtolower($exception->getMessage()), 'database is locked');
+    }
+
+    /** @phpstan-impure */
+    private function activeSpokeExists(string $actorId, int $spokeId): bool
+    {
+        return Spoke::query()->active()->whereKey($spokeId)->where('actor_id', $actorId)->exists();
     }
 }

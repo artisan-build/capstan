@@ -6,8 +6,10 @@ use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkItem;
 use App\Models\WorkTask;
+use App\Postmaster\RetireSpoke;
 use App\Work\WorkWorkerLinks;
 use App\Work\WorkWorkerService;
+use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Str;
 use Laravel\Pennant\Feature;
@@ -105,6 +107,51 @@ test('worker claim rejection applies to all endpoints', function (string $change
         }
     }
 })->with([['fence', 409], ['state', 409], ['owner', 409], ['item-cancelled', 410], ['task-cancelled', 410]]);
+
+test('retired spoke refuses every signed worker route during link grace without side effects', function (): void {
+    $item = workerLinkItem();
+    $item->claimantSpoke()->update(['credential_backed' => false]);
+    $revision = $item->workTask->briefRevisions()->create([
+        'sequence' => 1,
+        'content' => 'Must stay unread',
+        'author_actor' => 'creator',
+    ]);
+    $steer = $item->workTask->steers()->create([
+        'work_item_id' => $item->id,
+        'text' => 'Must stay unread',
+        'author_actor' => 'creator',
+    ]);
+    $links = resolve(WorkWorkerLinks::class)->forItem($item);
+    $leaseUntil = $item->lease_until;
+
+    Date::setTestNow(now()->addMinutes(5)->addSeconds(30));
+    resolve(RetireSpoke::class)->handle(
+        $item->claimant_spoke_id,
+        $item->claimant_actor,
+        CarbonImmutable::instance(now()),
+    );
+
+    $this->getJson($links['brief'])->assertConflict()->assertSeeText('claim lost');
+    $this->getJson($links['steers'])->assertConflict()->assertSeeText('claim lost');
+    foreach (WorkMilestoneKind::cases() as $kind) {
+        $this->postJson($links['milestone'], [
+            'kind' => $kind->value,
+            'payload' => ['summary' => 'Must not persist'],
+        ])->assertConflict()->assertSeeText('claim lost');
+    }
+
+    $unchanged = $item->refresh();
+    expect($unchanged->state)->toBe(WorkItemState::Routed)
+        ->and($unchanged->fetched_brief_revision_id)->toBeNull()
+        ->and($unchanged->last_progress)->toBeNull()
+        ->and($unchanged->attempts)->toBe(0)
+        ->and($unchanged->claimant_spoke_id)->not->toBeNull()
+        ->and($unchanged->lease_until?->equalTo($leaseUntil))->toBeTrue()
+        ->and($unchanged->milestones()->count())->toBe(0)
+        ->and($unchanged->transitions()->count())->toBe(0)
+        ->and($revision->fresh()->id)->toBe($revision->id)
+        ->and($steer->fresh()->read_at)->toBeNull();
+});
 
 test('milestone rejects invalid strict objects without writes', function (array $payload): void {
     $item = workerLinkItem();

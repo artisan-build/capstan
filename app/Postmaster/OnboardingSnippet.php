@@ -25,6 +25,7 @@ class OnboardingSnippet
         $serverName = (string) config('app.name', 'Capstan');
         $serverId = $this->identity->id();
         $pollUrl = $this->installUrl('api.postmaster.poll');
+        $replaceUrl = $this->installUrl('api.postmaster.replace');
         $tokenUrl = rtrim($this->baseUrl(), '/').'/bfc/device/token';
         $device = ($this->startDeviceAuthorization)(
             $request,
@@ -45,12 +46,14 @@ class OnboardingSnippet
             'CAPSTAN_SERVER_ID='.$this->quote($serverId),
             'CAPSTAN_ACTOR_ID='.$this->quote($actorId),
             'CAPSTAN_POLL_URL='.$this->quote($pollUrl),
+            'CAPSTAN_REPLACE_URL='.$this->quote($replaceUrl),
             'CAPSTAN_TOKEN_URL='.$this->quote($tokenUrl),
             'CAPSTAN_VERIFY_URL='.$this->quote($device->verificationUri),
             'CAPSTAN_USER_CODE='.$this->quote($userCode),
             'CAPSTAN_DEVICE_CODE='.$this->quote($deviceCode),
             'CAPSTAN_HOME="$HOME/.config/capstan/$CAPSTAN_SERVER_ID"',
             'CAPSTAN_TOKEN_FILE="$CAPSTAN_HOME/token"',
+            'CAPSTAN_OLD_TOKEN_FILE="$CAPSTAN_HOME/token.before-reinstall"',
             'CAPSTAN_ACTOR_FILE="$CAPSTAN_HOME/actor-id"',
             'CAPSTAN_POLL_SCRIPT="$CAPSTAN_HOME/poll.sh"',
             'CAPSTAN_INBOX_FILE="$CAPSTAN_HOME/inboxes.json"',
@@ -68,6 +71,10 @@ class OnboardingSnippet
             'umask 077',
             'mkdir -p "$CAPSTAN_HOME"',
             'chmod 700 "$CAPSTAN_HOME"',
+            'trap \'rm -f "$CAPSTAN_OLD_TOKEN_FILE" "$CAPSTAN_TOKEN_HEADERS"\' EXIT',
+            'trap \'exit 1\' HUP INT TERM',
+            'rm -f "$CAPSTAN_OLD_TOKEN_FILE"',
+            '[ ! -f "$CAPSTAN_TOKEN_FILE" ] || cp "$CAPSTAN_TOKEN_FILE" "$CAPSTAN_OLD_TOKEN_FILE"',
             'printf \'%s\n%s\n%s %s\n\' '.
                 $this->quote(__('Authorize :name in your browser:', ['name' => $serverName])).
                 ' "$CAPSTAN_VERIFY_URL" '.$this->quote(__('Code:')).' "$CAPSTAN_USER_CODE"',
@@ -93,6 +100,9 @@ class OnboardingSnippet
             '    [ -n "$CAPSTAN_TOKEN" ] || sleep "$CAPSTAN_INTERVAL"',
             'done',
             '[ -n "$CAPSTAN_TOKEN" ] || { printf \'%s\n\' '.$this->quote(__('Authorization expired. Generate a new onboarding snippet and try again.')).' >&2; exit 1; }',
+            'if [ -f "$CAPSTAN_OLD_TOKEN_FILE" ]; then',
+            '    printf \'header = "Authorization: Bearer %s"\nheader = "X-Capstan-Actor-ID: %s"\nheader = "X-Capstan-Previous-Credential: %s"\n\' "$CAPSTAN_TOKEN" "$CAPSTAN_ACTOR_ID" "$(cat "$CAPSTAN_OLD_TOKEN_FILE")" | "$CAPSTAN_CURL" --config - --fail --silent --show-error --connect-timeout 5 --max-time 15 --request POST "$CAPSTAN_REPLACE_URL" >/dev/null',
+            'fi',
             'printf \'%s\' "$CAPSTAN_TOKEN" > "$CAPSTAN_TOKEN_FILE"',
             'chmod 600 "$CAPSTAN_TOKEN_FILE"',
             'printf \'%s\' "$CAPSTAN_ACTOR_ID" > "$CAPSTAN_ACTOR_FILE"',

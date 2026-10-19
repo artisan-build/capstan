@@ -4,7 +4,6 @@ namespace App\Work;
 
 use App\Enums\WorkItemState;
 use App\Http\ApiErrorException;
-use App\Models\Spoke;
 use App\Models\WorkItem;
 use App\Support\BoundCredentialSpokeResolver;
 use Carbon\CarbonImmutable;
@@ -38,25 +37,22 @@ final readonly class WorkDrainService
         array $capabilities,
         CarbonImmutable $now,
     ): array {
-        $spoke = DB::transaction(fn (): Spoke => $this->spokes->resolve($actorId, $credentialId, $now));
+        return DB::transaction(function () use ($teamId, $actorId, $credentialId, $capacity, $roles, $capabilities, $now): array {
+            $spoke = $this->spokes->resolve($actorId, $credentialId, $now);
+            $items = $this->claims->claim(
+                $teamId,
+                $actorId,
+                $spoke->id,
+                $roles,
+                $capabilities,
+                $capacity,
+                $now,
+                $this->leaseSeconds(),
+            );
+            $this->spokes->heartbeat($spoke, $now);
 
-        $items = $this->claims->claim(
-            $teamId,
-            $actorId,
-            $spoke->id,
-            $roles,
-            $capabilities,
-            $capacity,
-            $now,
-            $this->leaseSeconds(),
-        );
-
-        DB::transaction(function () use ($spoke, $now): void {
-            $locked = Spoke::query()->whereKey($spoke->id)->lockForUpdate()->firstOrFail();
-            $this->spokes->heartbeat($locked, $now);
+            return $items;
         });
-
-        return $items;
     }
 
     public function transition(

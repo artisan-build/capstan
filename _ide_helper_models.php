@@ -320,6 +320,8 @@ namespace App\Models{
  * @property string|null $last_cursor
  * @property SpokeLiveness $probe_status
  * @property CarbonImmutable|null $probe_failed_at
+ * @property CarbonImmutable|null $retired_at
+ * @property string|null $retired_by
  * @property CarbonImmutable $created_at
  * @property CarbonImmutable $updated_at
  * @property-read int|null $inboxes_count
@@ -327,6 +329,7 @@ namespace App\Models{
  * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\Inbox> $inboxes
  * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\SpokeProbe> $probes
  * @property-read int|null $probes_count
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke active()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke query()
