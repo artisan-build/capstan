@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\SpokeLiveness;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -55,6 +56,12 @@ class Spoke extends Model
             'probe_failed_at' => 'datetime',
             'retired_at' => 'datetime',
         ];
+    }
+
+    /** @param  Builder<static>  $query */
+    public function scopeActive(Builder $query): void
+    {
+        $query->whereNull('retired_at');
     }
 
     /**

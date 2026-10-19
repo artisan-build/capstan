@@ -8,6 +8,9 @@ use App\Http\Controllers\Api\PollController;
 use App\Models\Envelope;
 use App\Models\Inbox;
 use App\Models\Spoke;
+use App\Models\Team;
+use App\Models\WorkOrchestratorSeat;
+use App\Models\WorkTask;
 use ArtisanBuild\BuiltForCloud\ClientIdentity;
 use ArtisanBuild\BuiltForCloud\Hmac\SigningRootLifecycle;
 use ArtisanBuild\BuiltForCloud\User;
@@ -787,6 +790,24 @@ test('the system-authority sweep retires a revoked credential spoke and routing 
         ->and(DB::table('spoke_inboxes')->count())->toBe(1);
 
     $issued['credential']->forceFill(['revoked_at' => now()])->save();
+    $spoke = Spoke::query()->sole();
+    $task = WorkTask::query()->create([
+        'team_id' => Team::default()->id,
+        'title' => 'Dead credential seat guard',
+        'failover' => true,
+        'required_capabilities' => [],
+        'timebox_minutes' => 30,
+        'creator_actor' => (string) $user->id,
+    ]);
+    $seat = WorkOrchestratorSeat::query()->create([
+        'work_task_id' => $task->id,
+        'holder_actor' => (string) $user->id,
+        'holder_spoke_id' => $spoke->id,
+        'session_ref' => 'dead-credential-seat',
+        'interactive' => true,
+        'lease_until' => now()->addMinute(),
+        'fence' => 1,
+    ]);
 
     $this->withToken($token)->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
@@ -799,6 +820,13 @@ test('the system-authority sweep retires a revoked credential spoke and routing 
     expect(Spoke::query()->count())->toBe(1)
         ->and(DB::table('spoke_inboxes')->count())->toBe(1);
 
+    $this->artisan('postmaster:retire-dead-spokes', ['--local' => true])
+        ->expectsOutput('Retired 0 dead Postmaster spoke(s).')
+        ->assertSuccessful();
+    expect($spoke->refresh()->retired_at)->toBeNull()
+        ->and(DB::table('spoke_inboxes')->count())->toBe(1);
+
+    $seat->forceFill(['lease_until' => now()->subSecond()])->save();
     $this->artisan('postmaster:retire-dead-spokes', ['--local' => true])
         ->expectsOutput('Retired 1 dead Postmaster spoke(s).')
         ->assertSuccessful();

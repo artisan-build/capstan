@@ -153,6 +153,12 @@ test('device pins require explicit failover and unpinned work follows team defau
     $user = capstanUser(['role' => 'admin']);
     $token = workMcpToken($user);
     $spoke = Spoke::query()->create(['actor_id' => (string) $user->id, 'credential_id' => (string) Str::uuid7()]);
+    $retired = Spoke::query()->create([
+        'actor_id' => (string) $user->id,
+        'credential_id' => (string) Str::uuid7(),
+        'retired_at' => now(),
+        'retired_by' => (string) $user->id,
+    ]);
     foreach ([true, false] as $default) {
         $team = workMcpTeam(['default_failover' => $default]);
         expect(workMcpCreate($team, $token)['task']['failover'])->toBe($default);
@@ -166,6 +172,12 @@ test('device pins require explicit failover and unpinned work follows team defau
             $task = workMcpCreate($team, $token, ['device_spoke_id' => $spoke->id, 'failover' => $failover])['task'];
             expect($task['device_spoke_id'])->toBe($spoke->id)->and($task['failover'])->toBe($failover);
         }
+        $before = WorkTask::query()->count();
+        workMcpCall('create_task', [
+            'team_id' => $team->id, 'idempotency_key' => Str::random(), 'title' => 'Retired pin',
+            'brief' => 'Retired pin brief', 'device_spoke_id' => $retired->id, 'failover' => true,
+        ], $token)->assertOk()->assertJsonPath('result.isError', true);
+        expect(WorkTask::query()->count())->toBe($before);
     }
 });
 
@@ -434,6 +446,54 @@ test('interactive MCP seats renew for one credential exclude drains expose bound
     $this->withHeaders($headers)->postJson(route('api.work.claim', $team), [
         'capacity' => 1, 'roles' => ['orchestrator'], 'capabilities' => [],
     ])->assertOk()->assertJsonCount(1, 'items');
+});
+
+test('retired explicit spokes cannot take renew release or exercise orchestration authority', function (): void {
+    $user = capstanUser(['role' => 'owner']);
+    $token = workMcpToken($user);
+    $team = workMcpTeam(['pool_work' => true]);
+    $parent = WorkTask::query()->findOrFail(workMcpCreate($team, $token)['task']['id']);
+    $retired = Spoke::query()->create([
+        'actor_id' => (string) $user->id,
+        'credential_id' => (string) Str::uuid7(),
+        'credential_backed' => false,
+        'retired_at' => now(),
+        'retired_by' => (string) $user->id,
+    ]);
+
+    expect(workMcpResult('take_seat', [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'spoke_id' => $retired->id,
+        'session_ref' => 'retired', 'idempotency_key' => 'retired-take',
+    ], $token))->toBe(['outcome' => 'refused', 'reason' => 'spoke_unavailable']);
+    expect(WorkOrchestratorSeat::query()->count())->toBe(0);
+
+    $seat = WorkOrchestratorSeat::query()->create([
+        'work_task_id' => $parent->id,
+        'holder_actor' => (string) $user->id,
+        'holder_spoke_id' => $retired->id,
+        'session_ref' => 'retired',
+        'interactive' => true,
+        'lease_until' => now()->addMinute(),
+        'fence' => 1,
+    ]);
+    $lease = $seat->lease_until;
+    expect(workMcpResult('take_seat', [
+        'team_id' => $team->id, 'task_id' => $parent->id, 'spoke_id' => $retired->id,
+        'session_ref' => 'retired-renew', 'idempotency_key' => 'retired-renew',
+    ], $token))->toBe(['outcome' => 'refused', 'reason' => 'spoke_unavailable'])
+        ->and(workMcpResult('release_seat', [
+            'team_id' => $team->id, 'task_id' => $parent->id, 'spoke_id' => $retired->id,
+            'seat_fence' => 1, 'idempotency_key' => 'retired-release',
+        ], $token))->toBe(['outcome' => 'refused', 'reason' => 'spoke_unavailable'])
+        ->and(workMcpResult('orchestrate', [
+            'team_id' => $team->id, 'task_id' => $parent->id, 'spoke_id' => $retired->id,
+            'seat_fence' => 1, 'session_ref' => 'retired', 'action' => 'finish',
+            'input' => ['state' => 'acted', 'content' => 'Must not run'],
+            'idempotency_key' => 'retired-orchestrate',
+        ], $token))->toBe(['outcome' => 'refused', 'reason' => 'spoke_unavailable']);
+    expect($seat->refresh()->lease_until?->equalTo($lease))->toBeTrue()
+        ->and($seat->session_ref)->toBe('retired')
+        ->and($seat->holder_spoke_id)->toBe($retired->id);
 });
 
 test('cold interactive takes clamp default cursors after a completed turn without accepting invalid cursors', function (): void {
@@ -731,6 +791,11 @@ test('MCP child orchestration enforces canonical intent and team defaults before
     $inactive = capstanUser(['status' => 'inactive']);
     $spoke = Spoke::query()->create(['actor_id' => (string) $active->id, 'credential_id' => (string) Str::uuid7()]);
     $orphan = Spoke::query()->create(['actor_id' => '999999999', 'credential_id' => (string) Str::uuid7()]);
+    $retired = Spoke::query()->create([
+        'actor_id' => (string) $active->id,
+        'credential_id' => (string) Str::uuid7(),
+        'retired_at' => now(),
+    ]);
     $call = fn (array $extra, string $key) => workMcpCall('orchestrate', $base + [
         'input' => array_replace(['under_task_id' => $parent->id, 'title' => 'Child', 'brief' => 'Brief'], $extra),
         'idempotency_key' => $key,
@@ -746,6 +811,7 @@ test('MCP child orchestration enforces canonical intent and team defaults before
     $refuse(['device_spoke_id' => $spoke->id], 'mcp-pin-no-failover');
     $refuse(['device_spoke_id' => 999999999, 'failover' => true], 'mcp-missing-spoke');
     $refuse(['device_spoke_id' => $orphan->id, 'failover' => true], 'mcp-invalid-spoke');
+    $refuse(['device_spoke_id' => $retired->id, 'failover' => true], 'mcp-retired-spoke');
     $refuse(['user_actor_address' => 'missing'], 'mcp-invalid-actor');
     $refuse(['user_actor_address' => '999999999'], 'mcp-missing-actor');
     $refuse(['user_actor_address' => (string) $inactive->id], 'mcp-inactive-actor');

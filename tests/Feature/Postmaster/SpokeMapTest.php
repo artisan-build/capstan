@@ -9,6 +9,7 @@ use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkItem;
 use App\Models\WorkMilestone;
+use App\Models\WorkOrchestratorSeat;
 use App\Models\WorkTask;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
@@ -214,7 +215,7 @@ test('retirement refuses a live Work lease then hides the spoke revokes its cred
         ->test(SpokeMap::class)
         ->call('retireSpoke', $spoke->id)
         ->assertHasErrors('retireSpoke')
-        ->assertSee('live Work claim');
+        ->assertSee('live Work lease');
     expect($spoke->refresh()->retired_at)->toBeNull()
         ->and($issued['credential']->refresh()->revoked_at)->toBeNull();
 
@@ -233,6 +234,47 @@ test('retirement refuses a live Work lease then hides the spoke revokes its cred
         ->and(WorkItem::query()->find($item->id)?->claimant_spoke_id)->toBe($spoke->id)
         ->and(WorkMilestone::query()->find($milestone->id)?->payload)->toBe(['summary' => 'History remains readable'])
         ->and(Livewire::actingAs($owner)->test(SpokeMap::class)->viewData('spokes'))->toBeEmpty();
+});
+
+test('retirement refuses an interactive seat lease with no active Work item', function (): void {
+    $owner = capstanUser();
+    $issued = capstanBoundBearer($owner, CapstanCredentialDeclaration::POSTMASTER_POLL);
+    $spoke = Spoke::query()->create([
+        'actor_id' => (string) $owner->id,
+        'credential_id' => $issued['credential']->id,
+    ]);
+    $task = WorkTask::query()->create([
+        'team_id' => Team::query()->where('is_default', true)->sole()->id,
+        'title' => 'Interactive seat retirement guard',
+        'failover' => true,
+        'required_capabilities' => [],
+        'timebox_minutes' => 30,
+        'creator_actor' => (string) $owner->id,
+    ]);
+    $seat = WorkOrchestratorSeat::query()->create([
+        'work_task_id' => $task->id,
+        'holder_actor' => (string) $owner->id,
+        'holder_spoke_id' => $spoke->id,
+        'session_ref' => 'interactive-seat',
+        'interactive' => true,
+        'lease_until' => now()->addMinute(),
+        'fence' => 1,
+    ]);
+
+    Livewire::actingAs($owner)
+        ->test(SpokeMap::class)
+        ->call('retireSpoke', $spoke->id)
+        ->assertHasErrors('retireSpoke')
+        ->assertSee('live Work lease');
+    expect($spoke->refresh()->retired_at)->toBeNull()
+        ->and($issued['credential']->refresh()->revoked_at)->toBeNull()
+        ->and($seat->fresh()?->active_item_id)->toBeNull();
+
+    $seat->forceFill(['lease_until' => now()->subSecond()])->save();
+    Livewire::actingAs($owner)->test(SpokeMap::class)
+        ->call('retireSpoke', $spoke->id)
+        ->assertHasNoErrors();
+    expect($spoke->refresh()->retired_at)->not->toBeNull();
 });
 
 test('device names are escaped in the map', function (): void {

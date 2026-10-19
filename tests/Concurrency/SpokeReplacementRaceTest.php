@@ -12,32 +12,95 @@ use Tests\TestCase;
 
 uses(TestCase::class);
 
+/** @return array{connection: array<string, mixed>, database: string, sqlitePath: string|null, original: string} */
+function provisionSpokeReplacementRaceDatabase(): array
+{
+    $original = DB::getDefaultConnection();
+    /** @var array<string, mixed> $base */
+    $base = config("database.connections.$original");
+    $driver = $base['driver'] ?? null;
+    expect($driver)->toBeIn(['sqlite', 'pgsql']);
+    $name = 'capstan_spoke_replace_'.Str::lower(Str::random(12));
+    $sqlitePath = null;
+
+    if ($driver === 'sqlite') {
+        $sqlitePath = storage_path("framework/testing/$name.sqlite");
+        touch($sqlitePath);
+        $database = $sqlitePath;
+        $connection = array_replace($base, [
+            'database' => $database,
+            'busy_timeout' => 15_000,
+            'journal_mode' => 'WAL',
+            'synchronous' => 'NORMAL',
+        ]);
+    } else {
+        expect($base['host'] ?? null)->toBeIn(['127.0.0.1', 'localhost']);
+        $database = $name;
+        DB::connection($original)->statement('CREATE DATABASE "'.$database.'"');
+        $connection = array_replace($base, ['database' => $database]);
+    }
+
+    config(['database.connections.spoke_replace_race' => $connection]);
+    DB::setDefaultConnection('spoke_replace_race');
+    DB::purge('spoke_replace_race');
+    Artisan::call('migrate:fresh', ['--database' => 'spoke_replace_race', '--force' => true]);
+
+    return compact('connection', 'database', 'sqlitePath', 'original');
+}
+
+/** @param array{connection: array<string, mixed>, database: string, sqlitePath: string|null, original: string} $database */
+function cleanupSpokeReplacementRaceDatabase(array $database): void
+{
+    DB::purge('spoke_replace_race');
+    DB::setDefaultConnection($database['original']);
+
+    if ($database['sqlitePath'] !== null) {
+        foreach ([$database['sqlitePath'], $database['sqlitePath'].'-shm', $database['sqlitePath'].'-wal'] as $file) {
+            if (is_file($file)) {
+                unlink($file);
+            }
+        }
+
+        return;
+    }
+
+    $admin = DB::connection($database['original']);
+    $admin->statement('SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ? AND pid <> pg_backend_pid()', [$database['database']]);
+    $admin->statement('DROP DATABASE "'.$database['database'].'"');
+}
+
+/** @param array<string, mixed> $connection @return array<string, string> */
+function spokeReplacementRaceEnvironment(array $connection): array
+{
+    $environment = [
+        'APP_ENV' => 'testing',
+        'DB_CONNECTION' => (string) $connection['driver'],
+        'DB_DATABASE' => (string) $connection['database'],
+        'DB_URL' => '',
+    ];
+    foreach (['host' => 'DB_HOST', 'port' => 'DB_PORT', 'username' => 'DB_USERNAME', 'password' => 'DB_PASSWORD'] as $key => $name) {
+        if (isset($connection[$key])) {
+            $environment[$name] = (string) $connection[$key];
+        }
+    }
+
+    return $environment;
+}
+
 test('two real replacement processes leave one live credential on the original spoke', function (): void {
     expect(app()->environment('testing'))->toBeTrue();
-    $original = DB::getDefaultConnection();
-    $database = storage_path('framework/testing/capstan_spoke_replace_'.Str::lower(Str::random(12)).'.sqlite');
+    $database = provisionSpokeReplacementRaceDatabase();
     $barrier = storage_path('framework/testing/spoke-replace-barrier-'.Str::lower(Str::random(12)));
-    touch($database);
     mkdir($barrier, 0777, true);
     $appKey = 'base64:'.base64_encode(str_repeat('c', 32));
     $serverId = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
-    $connection = array_replace(config('database.connections.sqlite'), [
-        'database' => $database,
-        'busy_timeout' => 15_000,
-        'journal_mode' => 'WAL',
-        'synchronous' => 'NORMAL',
-    ]);
     $processes = [];
 
     try {
         config([
             'app.key' => $appKey,
             'capstan.postmaster.server_id' => $serverId,
-            'database.connections.spoke_replace_race' => $connection,
         ]);
-        DB::setDefaultConnection('spoke_replace_race');
-        DB::purge('spoke_replace_race');
-        Artisan::call('migrate:fresh', ['--database' => 'spoke_replace_race', '--force' => true]);
         $user = capstanUser();
         $old = capstanBoundBearer($user, CapstanCredentialDeclaration::POSTMASTER_POLL);
         $new = [
@@ -48,13 +111,9 @@ test('two real replacement processes leave one live credential on the original s
             'actor_id' => (string) $user->id,
             'credential_id' => $old['credential']->id,
         ]);
-        $baseEnvironment = [
-            'APP_ENV' => 'testing',
+        $baseEnvironment = [...spokeReplacementRaceEnvironment($database['connection']),
             'APP_KEY' => $appKey,
             'CAPSTAN_SERVER_ID' => $serverId,
-            'DB_CONNECTION' => 'sqlite',
-            'DB_DATABASE' => $database,
-            'DB_URL' => '',
             'REPLACEMENT_ACTOR_ID' => (string) $user->id,
             'REPLACEMENT_OLD_TOKEN' => $old['token'],
         ];
@@ -108,18 +167,12 @@ test('two real replacement processes leave one live credential on the original s
                 $process->stop(1);
             }
         }
-        DB::purge('spoke_replace_race');
-        DB::setDefaultConnection($original);
+        cleanupSpokeReplacementRaceDatabase($database);
         foreach (glob($barrier.'/*') ?: [] as $file) {
             unlink($file);
         }
         if (is_dir($barrier)) {
             rmdir($barrier);
-        }
-        foreach ([$database, $database.'-shm', $database.'-wal'] as $file) {
-            if (is_file($file)) {
-                unlink($file);
-            }
         }
     }
 });

@@ -4,12 +4,14 @@ namespace App\Postmaster;
 
 use App\Models\Spoke;
 use App\Models\WorkItem;
+use App\Models\WorkOrchestratorSeat;
 use ArtisanBuild\BuiltForCloud\Actions\RevokeCredential;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use Carbon\CarbonImmutable;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 final readonly class RetireSpoke
 {
@@ -28,19 +30,27 @@ final readonly class RetireSpoke
                 return $spoke;
             }
 
-            $hasLiveClaim = WorkItem::query()
+            $hasLiveAuthority = WorkItem::query()
                 ->where('claimant_spoke_id', $spoke->id)
                 ->whereIn('state', ['claimed', 'delivered', 'routed'])
                 ->where('lease_until', '>', $now)
                 ->whereHas('workTask', fn ($query) => $query->whereNull('cancelled_at'))
-                ->exists();
+                ->exists()
+                || WorkOrchestratorSeat::query()
+                    ->where('holder_spoke_id', $spoke->id)
+                    ->whereNotNull('holder_actor')
+                    ->whereNull('stopped_at')
+                    ->where('lease_until', '>', $now)
+                    ->exists();
 
-            if ($hasLiveClaim) {
-                throw new DomainException('Release or wait for this spoke’s live Work claim before retiring it.');
+            if ($hasLiveAuthority) {
+                throw new DomainException('Release or wait for this spoke’s live Work lease before retiring it.');
             }
 
             if ($spoke->credential_backed) {
                 ($this->revokeCredential)($spoke->credential_id, AuditActor::boundUser($actorId));
+            } else {
+                $spoke->credential_id = (string) Str::uuid7();
             }
 
             $spoke->inboxes()->detach();

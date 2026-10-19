@@ -2,10 +2,11 @@
 
 namespace App\Support;
 
+use App\Http\ApiErrorException;
 use App\Models\Spoke;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
-use RuntimeException;
+use Illuminate\Support\Str;
 
 final class BoundCredentialSpokeResolver
 {
@@ -18,6 +19,7 @@ final class BoundCredentialSpokeResolver
     ): Spoke {
         $deviceName = $this->sanitizeDeviceName($deviceName);
         $existing = Spoke::query()
+            ->active()
             ->where('credential_id', $credentialId)
             ->where('actor_id', $actorId)
             ->where('credential_backed', $credentialBacked)
@@ -25,13 +27,27 @@ final class BoundCredentialSpokeResolver
             ->first();
 
         if ($existing !== null) {
-            if ($existing->retired_at !== null) {
-                throw new RuntimeException('This Postmaster spoke has been retired.');
-            }
-
             $this->refreshDeviceName($existing, $deviceName, $now);
 
             return $existing;
+        }
+
+        $retired = Spoke::query()
+            ->where('credential_id', $credentialId)
+            ->where('actor_id', $actorId)
+            ->where('credential_backed', $credentialBacked)
+            ->whereNotNull('retired_at')
+            ->lockForUpdate()
+            ->first();
+
+        if ($retired !== null) {
+            if ($credentialBacked) {
+                throw new ApiErrorException(403, 'spoke_retired', 'This Postmaster spoke has been retired.');
+            }
+
+            // Synthetic delegated identities are reusable. Tombstone the retired
+            // generation's synthetic key so the same principal can mint a fresh spoke.
+            $retired->forceFill(['credential_id' => (string) Str::uuid7(), 'updated_at' => $now])->save();
         }
 
         $attributes = [
@@ -49,15 +65,12 @@ final class BoundCredentialSpokeResolver
         DB::table('spokes')->insertOrIgnore($attributes);
 
         $spoke = Spoke::query()
+            ->active()
             ->where('credential_id', $credentialId)
             ->where('actor_id', $actorId)
             ->where('credential_backed', $credentialBacked)
             ->lockForUpdate()
             ->firstOrFail();
-
-        if ($spoke->retired_at !== null) {
-            throw new RuntimeException('This Postmaster spoke has been retired.');
-        }
 
         $this->refreshDeviceName($spoke, $deviceName, $now);
 

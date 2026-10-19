@@ -4,6 +4,7 @@ namespace App\Work;
 
 use App\Enums\WorkItemState;
 use App\Features\Work;
+use App\Models\Spoke;
 use App\Models\WorkItem;
 use App\Models\WorkOrchestratorSeat;
 use App\Models\WorkTask;
@@ -23,6 +24,7 @@ final readonly class WorkSeatService
         }
 
         return DB::transaction(function () use ($parent, $actor, $spoke, $expectedFence, $sessionRef, $interactive, $now, $leaseSeconds): WorkOrchestratorSeat {
+            $this->activeSpoke($actor, $spoke);
             $this->locks->tasks($parent->id);
             $seat = $this->locks->seat($parent);
             if ($seat->fence !== $expectedFence || $parent->fresh()->cancelled_at !== null) {
@@ -53,6 +55,7 @@ final readonly class WorkSeatService
         }
 
         return DB::transaction(function () use ($parent, $actor, $spoke, $fence, $sessionRef, $now, $leaseSeconds): WorkOrchestratorSeat {
+            $this->activeSpoke($actor, $spoke);
             $this->locks->tasks($parent->id);
             $seat = $this->owned($parent, $actor, $spoke, $fence);
             $seat->fill(['session_ref' => $sessionRef, 'lease_until' => $now->addSeconds(max(1, $leaseSeconds)), 'waiting_at' => null, 'notified_at' => null])->save();
@@ -68,6 +71,7 @@ final readonly class WorkSeatService
         }
 
         return DB::transaction(function () use ($parent, $actor, $spoke, $fence, $now): WorkOrchestratorSeat {
+            $this->activeSpoke($actor, $spoke);
             $this->locks->tasks($parent->id);
             $seat = $this->owned($parent, $actor, $spoke, $fence);
             $this->recover($seat, $now);
@@ -86,6 +90,7 @@ final readonly class WorkSeatService
         }
 
         return DB::transaction(function () use ($parent, $actor, $spoke, $fence, $now): WorkOrchestratorSeat {
+            $this->activeSpoke($actor, $spoke);
             $this->locks->tasks($parent->id);
             $seat = $this->owned($parent, $actor, $spoke, $fence);
             $this->recover($seat, $now);
@@ -216,6 +221,20 @@ final readonly class WorkSeatService
         }
 
         return $seat;
+    }
+
+    private function activeSpoke(string $actor, int $spoke): Spoke
+    {
+        $active = Spoke::query()->active()
+            ->whereKey($spoke)
+            ->where('actor_id', $actor)
+            ->lockForUpdate()
+            ->first();
+        if (! $active instanceof Spoke) {
+            throw new DomainException('Work host is unavailable.');
+        }
+
+        return $active;
     }
 
     /** Invalidate the old item fence before allowing any replacement host to hold the seat. */

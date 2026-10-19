@@ -531,6 +531,94 @@ test('transition and renew lose atomically when another process reclaims the fen
     }
 });
 
+test('retirement and interactive seat acquisition serialize on the active spoke', function (): void {
+    $database = provisionWorkRaceDatabase();
+    $barrier = storage_path('framework/testing/retirement-seat-barrier-'.Str::lower(Str::random(16)));
+    mkdir($barrier, 0777, true);
+    $processes = [];
+
+    try {
+        $teamId = DB::table('teams')->where('is_default', true)->value('id');
+        $actor = 'retirement-seat-actor';
+        $spoke = DB::table('spokes')->insertGetId([
+            'actor_id' => $actor,
+            'credential_id' => (string) Str::uuid7(),
+            'credential_backed' => false,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        $task = (string) Str::uuid7();
+        DB::table('work_tasks')->insert([
+            'id' => $task,
+            'team_id' => $teamId,
+            'title' => 'Retirement seat race',
+            'failover' => true,
+            'required_capabilities' => '[]',
+            'timebox_minutes' => 30,
+            'creator_actor' => $actor,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        foreach (['seat', 'retire'] as $mode) {
+            $process = new Process([
+                PHP_BINARY,
+                base_path('tests/Support/spoke-retirement-seat-worker.php'),
+                $mode,
+                $barrier,
+                $actor,
+                (string) $spoke,
+                $task,
+            ], base_path(), workRaceProcessEnvironment($database['connection']), null, 90);
+            $process->start();
+            $processes[] = $process;
+        }
+
+        $deadline = microtime(true) + 30;
+        while (count(glob($barrier.'/ready-*') ?: []) !== 2) {
+            foreach ($processes as $process) {
+                if ($process->isTerminated()) {
+                    throw new RuntimeException('Retirement race worker failed before release: '.$process->getErrorOutput());
+                }
+            }
+            if (microtime(true) >= $deadline) {
+                throw new RuntimeException('Retirement race workers did not reach the barrier.');
+            }
+            Sleep::usleep(10_000);
+        }
+        touch($barrier.'/release');
+        $results = [];
+        foreach ($processes as $process) {
+            expect($process->wait())->toBe(0, $process->getErrorOutput());
+            $results[] = json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+        }
+
+        DB::purge('work_race');
+        $isRetired = DB::table('spokes')->where('id', $spoke)->whereNotNull('retired_at')->exists();
+        $hasLiveSeat = DB::table('work_orchestrator_seats')
+            ->where('holder_spoke_id', $spoke)
+            ->where('lease_until', '>', CarbonImmutable::parse('2026-10-19 12:00:00 UTC'))
+            ->exists();
+        expect(collect($results)->pluck('status')->filter(fn (string $status): bool => $status === 'refused'))->toHaveCount(1)
+            ->and($isRetired)->toBe(! $hasLiveSeat)
+            ->and($isRetired || $hasLiveSeat)->toBeTrue()
+            ->and(DB::table('work_orchestrator_seats')->whereNotNull('active_item_id')->count())->toBe(0);
+    } finally {
+        foreach ($processes as $process) {
+            if ($process->isRunning()) {
+                $process->stop(1);
+            }
+        }
+        foreach (glob($barrier.'/*') ?: [] as $file) {
+            unlink($file);
+        }
+        if (is_dir($barrier)) {
+            rmdir($barrier);
+        }
+        cleanupWorkRaceDatabase($database);
+    }
+});
+
 test('orchestration parent slot serializes competing drains and concurrent circuit breaker projections', function (): void {
     $database = provisionWorkRaceDatabase();
     config(['capstan.features.work' => true]);

@@ -4,6 +4,7 @@ namespace App\Work;
 
 use App\Enums\WorkItemState;
 use App\Http\ApiErrorException;
+use App\Models\Spoke;
 use App\Models\WorkItem;
 use App\Models\WorkSteer;
 use App\Models\WorkTask;
@@ -25,6 +26,10 @@ final readonly class WorkToolService
     {
         return DB::transaction(function () use ($tool, $input, $actor): array {
             if ($tool === 'create_task') {
+                if (isset($input['device_spoke_id']) && ! Spoke::query()->active()
+                    ->whereKey($input['device_spoke_id'])->lockForUpdate()->exists()) {
+                    throw new ApiErrorException(409, 'spoke_unavailable', 'Work host is unavailable.');
+                }
                 $task = WorkTask::query()->create([
                     ...array_intersect_key($input, array_flip(['team_id', 'title', 'user_actor_address', 'device_spoke_id', 'failover', 'required_capabilities', 'timebox_minutes'])),
                     'creator_actor' => $actor,
