@@ -14,19 +14,32 @@ final readonly class AuthenticateBoundCredential
 {
     private const string ATTRIBUTE = self::class;
 
+    private const string PURPOSE_ATTRIBUTE = self::class.'.purpose';
+
     public function __construct(
         private BoundBearerCredentialAuthenticator $credentials,
     ) {}
 
-    public function handle(Request $request, Closure $next, string $appPurpose): Response
+    public function handle(Request $request, Closure $next, string ...$appPurposes): Response
     {
-        $credential = $this->credentials->authenticate($request, $appPurpose);
+        $credential = null;
+        $authenticatedPurpose = null;
 
-        if ($credential === null || $credential->userId === null) {
+        foreach ($appPurposes as $appPurpose) {
+            $credential = $this->credentials->authenticate($request, $appPurpose);
+
+            if ($credential !== null) {
+                $authenticatedPurpose = $appPurpose;
+                break;
+            }
+        }
+
+        if ($credential === null || $credential->userId === null || $authenticatedPurpose === null) {
             return ApiError::response(401, 'unauthenticated', 'Unauthenticated.');
         }
 
         $request->attributes->set(self::ATTRIBUTE, $credential);
+        $request->attributes->set(self::PURPOSE_ATTRIBUTE, $authenticatedPurpose);
 
         return $next($request);
     }
@@ -51,5 +64,16 @@ final readonly class AuthenticateBoundCredential
         }
 
         return $actorId;
+    }
+
+    public static function appPurpose(Request $request): string
+    {
+        $appPurpose = $request->attributes->get(self::PURPOSE_ATTRIBUTE);
+
+        if (! is_string($appPurpose) || $appPurpose === '') {
+            throw new LogicException('The request does not contain an authenticated app purpose.');
+        }
+
+        return $appPurpose;
     }
 }

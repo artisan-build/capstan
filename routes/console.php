@@ -1,5 +1,6 @@
 <?php
 
+use App\Postmaster\MarkInactiveMachines;
 use App\Work\WorkOrchestrationService;
 use App\Work\WorkSeatService;
 use App\Work\WorkSweepService;
@@ -14,6 +15,11 @@ Artisan::command('inspire', function (): void {
 
 Schedule::command('postmaster:probe-sweep')->everyMinute()->withoutOverlapping(5);
 Schedule::command('postmaster:retire-dead-spokes --local')->everyMinute()->withoutOverlapping(5);
+
+Artisan::command('postmaster:mark-inactive-machines', function (MarkInactiveMachines $mark): void {
+    $mark(CarbonImmutable::now());
+});
+Schedule::command('postmaster:mark-inactive-machines')->everyMinute()->withoutOverlapping(5);
 
 Artisan::command('work:liveness-sweep', function (WorkSweepService $sweeps): void {
     $sweeps->liveness(CarbonImmutable::now());

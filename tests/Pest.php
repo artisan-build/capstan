@@ -84,6 +84,7 @@ function capstanBoundBearer(
     $request = Request::create(
         match ($appPurpose) {
             CapstanCredentialDeclaration::ARTIFACT_INGEST => '/api/v1/artifacts',
+            CapstanCredentialDeclaration::MACHINE => '/api/v1/machine',
             CapstanCredentialDeclaration::POSTMASTER_POLL => '/api/v1/poll',
             CapstanCredentialDeclaration::WORK_DRAIN => '/api/v1/work/1/claim',
         },

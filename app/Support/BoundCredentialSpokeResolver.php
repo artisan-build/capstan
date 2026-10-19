@@ -27,6 +27,17 @@ final class BoundCredentialSpokeResolver
             ->first();
 
         if ($existing !== null) {
+            if ($existing->orphaned_at !== null) {
+                throw new ApiErrorException(403, 'spoke_orphaned', 'This machine must be reactivated before it can connect.');
+            }
+
+            if ($existing->inactive_at !== null) {
+                $existing->forceFill([
+                    'inactive_at' => null,
+                    'updated_at' => $now,
+                ])->save();
+            }
+
             $this->refreshDeviceName($existing, $deviceName, $now);
 
             return $existing;
@@ -81,6 +92,7 @@ final class BoundCredentialSpokeResolver
     {
         Spoke::query()->whereKey($spoke->id)->update([
             'last_polled_at' => $now,
+            'inactive_at' => null,
             'work_heartbeat_notified_at' => null,
         ]);
         $spoke->refresh();

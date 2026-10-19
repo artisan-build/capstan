@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
  * @property int $id
@@ -16,7 +17,10 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string $credential_id
  * @property bool $credential_backed
  * @property string|null $name
+ * @property string|null $device_name
  * @property CarbonImmutable|null $last_polled_at
+ * @property CarbonImmutable|null $inactive_at
+ * @property CarbonImmutable|null $orphaned_at
  * @property CarbonImmutable|null $work_heartbeat_notified_at
  * @property string|null $last_cursor
  * @property SpokeLiveness $probe_status
@@ -37,7 +41,10 @@ class Spoke extends Model
         'credential_id',
         'credential_backed',
         'name',
+        'device_name',
         'last_polled_at',
+        'inactive_at',
+        'orphaned_at',
         'work_heartbeat_notified_at',
         'last_cursor',
         'probe_status',
@@ -52,6 +59,8 @@ class Spoke extends Model
         return [
             'credential_backed' => 'boolean',
             'last_polled_at' => 'datetime',
+            'inactive_at' => 'datetime',
+            'orphaned_at' => 'datetime',
             'work_heartbeat_notified_at' => 'datetime',
             'probe_status' => SpokeLiveness::class,
             'probe_failed_at' => 'datetime',
@@ -80,5 +89,29 @@ class Spoke extends Model
     public function probes(): HasMany
     {
         return $this->hasMany(SpokeProbe::class);
+    }
+
+    /** @return HasOne<MachineUsageReport, $this> */
+    public function usageReport(): HasOne
+    {
+        return $this->hasOne(MachineUsageReport::class);
+    }
+
+    /** @return HasMany<MachineTeamWorkSetting, $this> */
+    public function workSettings(): HasMany
+    {
+        return $this->hasMany(MachineTeamWorkSetting::class);
+    }
+
+    /** @return HasMany<MachineWorkSettingChange, $this> */
+    public function workSettingChanges(): HasMany
+    {
+        return $this->hasMany(MachineWorkSettingChange::class);
+    }
+
+    /** @return HasMany<MachineWorkPresence, $this> */
+    public function workPresence(): HasMany
+    {
+        return $this->hasMany(MachineWorkPresence::class);
     }
 }

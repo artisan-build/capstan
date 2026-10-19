@@ -2,12 +2,21 @@
 
 namespace App\Postmaster;
 
+use App\Auth\CapstanCredentialDeclaration;
+use App\Models\MachineTeamWorkSetting;
 use App\Models\Spoke;
+use App\Models\WorkItem;
+use App\Models\WorkOrchestratorSeat;
 use App\Support\BoundCredentialSpokeResolver;
 use ArtisanBuild\BuiltForCloud\Actions\RevokeCredential;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\BoundBearerCredential;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialProtocolBinding;
+use ArtisanBuild\BuiltForCloud\OffboardedSubject;
+use ArtisanBuild\BuiltForCloud\RolePolicy;
+use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
@@ -29,8 +38,10 @@ final readonly class ReplaceSpokeCredential
         string $newCredentialId,
         ?BoundBearerCredential $authenticatedOldCredential,
         CarbonImmutable $now,
+        ?string $previousToken = null,
+        string $currentAppPurpose = CapstanCredentialDeclaration::POSTMASTER_POLL,
     ): array {
-        return $this->retrySqliteBusy(fn (): array => DB::transaction(function () use ($actorId, $newCredentialId, $authenticatedOldCredential, $now): array {
+        return $this->retrySqliteBusy(fn (): array => DB::transaction(function () use ($actorId, $newCredentialId, $authenticatedOldCredential, $now, $previousToken, $currentAppPurpose): array {
             $alreadyBound = Spoke::query()
                 ->where('credential_id', $newCredentialId)
                 ->where('actor_id', $actorId)
@@ -49,6 +60,18 @@ final readonly class ReplaceSpokeCredential
                 || $authenticatedOldCredential->userId === null
                 || ! hash_equals($actorId, $authenticatedOldCredential->userId)
                 || hash_equals($newCredentialId, $authenticatedOldCredential->id)) {
+                $transferred = $this->transferOrphaned(
+                    $actorId,
+                    $newCredentialId,
+                    $previousToken,
+                    $currentAppPurpose,
+                    $now,
+                );
+
+                if ($transferred !== null) {
+                    return $transferred;
+                }
+
                 return $this->fresh($actorId, $newCredentialId, $now);
             }
 
@@ -95,6 +118,95 @@ final readonly class ReplaceSpokeCredential
             'replaced' => false,
             'conflict' => false,
         ];
+    }
+
+    /** @return array{spoke: Spoke, replaced: true, conflict: false}|null */
+    private function transferOrphaned(
+        string $actorId,
+        string $newCredentialId,
+        ?string $previousToken,
+        string $currentAppPurpose,
+        CarbonImmutable $now,
+    ): ?array {
+        if ($currentAppPurpose !== CapstanCredentialDeclaration::MACHINE
+            || $previousToken === null
+            || $previousToken === ''
+            || strlen($previousToken) > 4096
+            || preg_match('/[\x00-\x1F\x7F]/', $previousToken) === 1) {
+            return null;
+        }
+
+        $oldCredential = Credential::query()
+            ->where('secret_hash', hash('sha256', $previousToken))
+            ->where('kind', CredentialKind::Bearer->value)
+            ->lockForUpdate()
+            ->first();
+
+        if ($oldCredential === null
+            || ! CredentialProtocolBinding::query()
+                ->whereKey($oldCredential->id)
+                ->whereIn('app_purpose', [
+                    CapstanCredentialDeclaration::MACHINE,
+                    CapstanCredentialDeclaration::POSTMASTER_POLL,
+                ])->exists()) {
+            return null;
+        }
+
+        $spoke = Spoke::query()
+            ->where('credential_id', $oldCredential->id)
+            ->lockForUpdate()
+            ->first();
+
+        if ($spoke === null
+            || $spoke->orphaned_at === null
+            || $spoke->retired_at !== null
+            || ! MachineTeamWorkSetting::query()->where('spoke_id', $spoke->id)->exists()
+            || ! $this->activeApprover($actorId)
+            || $this->hasLiveAuthority($spoke, $now)) {
+            return null;
+        }
+
+        $spoke->forceFill([
+            'actor_id' => $actorId,
+            'credential_id' => $newCredentialId,
+            'orphaned_at' => null,
+            'updated_at' => $now,
+        ])->save();
+        ($this->revokeCredential)($oldCredential->id, AuditActor::boundUser($actorId));
+
+        return ['spoke' => $spoke->refresh(), 'replaced' => true, 'conflict' => false];
+    }
+
+    private function activeApprover(string $actorId): bool
+    {
+        $user = User::query()->find($actorId);
+
+        return $user instanceof User
+            && $user->status === 'active'
+            && RolePolicy::canUseProduct($user->role)
+            && ! OffboardedSubject::query()
+                ->where('user_id', $actorId)
+                ->orWhere(function ($query) use ($actorId): void {
+                    $query->where('subject_ref', 'capstan-user:'.$actorId)
+                        ->where('user_id', OffboardedSubject::SUBJECT_ROW);
+                })
+                ->exists();
+    }
+
+    private function hasLiveAuthority(Spoke $spoke, CarbonImmutable $now): bool
+    {
+        return WorkItem::query()
+            ->where('claimant_spoke_id', $spoke->id)
+            ->whereIn('state', ['claimed', 'delivered', 'routed'])
+            ->where('lease_until', '>', $now)
+            ->whereHas('workTask', fn ($query) => $query->whereNull('cancelled_at'))
+            ->exists()
+            || WorkOrchestratorSeat::query()
+                ->where('holder_spoke_id', $spoke->id)
+                ->whereNotNull('holder_actor')
+                ->whereNull('stopped_at')
+                ->where('lease_until', '>', $now)
+                ->exists();
     }
 
     /**
