@@ -34,6 +34,7 @@ return [
         'session_guard' => null,
         'app_purposes' => [
             CapstanCredentialDeclaration::ARTIFACT_INGEST => CredentialPurpose::Consumption->value,
+            CapstanCredentialDeclaration::MACHINE => CredentialPurpose::Mcp->value,
             CapstanCredentialDeclaration::POSTMASTER_POLL => CredentialPurpose::Mcp->value,
             CapstanCredentialDeclaration::WORK_DRAIN => CredentialPurpose::Mcp->value,
         ],
@@ -48,6 +49,7 @@ return [
         'managed_transitions' => true,
         'credential_purposes' => [
             CapstanCredentialDeclaration::ARTIFACT_INGEST,
+            CapstanCredentialDeclaration::MACHINE,
             CapstanCredentialDeclaration::POSTMASTER_POLL,
             CapstanCredentialDeclaration::WORK_DRAIN,
         ],

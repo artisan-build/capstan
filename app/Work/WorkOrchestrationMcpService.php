@@ -148,7 +148,7 @@ final readonly class WorkOrchestrationMcpService
         if ($spokeId === null) {
             return $this->spokes->resolve($actor, $credentialId, $now, $credentialBacked);
         }
-        $spoke = Spoke::query()->active()->whereKey($spokeId)->where('actor_id', $actor)->lockForUpdate()->first();
+        $spoke = Spoke::query()->workEligible()->whereKey($spokeId)->where('actor_id', $actor)->lockForUpdate()->first();
         if (! $spoke instanceof Spoke) {
             throw $this->refused('spoke_unavailable');
         }

@@ -2,6 +2,7 @@
 
 namespace App\Auth;
 
+use App\Models\Spoke;
 use App\Support\ServerIdentity;
 use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
@@ -16,6 +17,7 @@ use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\User;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 
 final readonly class CapstanCredentialDeclaration implements CredentialDeclaration, DeclaresCredentialAuthorizationProfiles, DeclaresSelfServiceMintPolicy
@@ -23,6 +25,8 @@ final readonly class CapstanCredentialDeclaration implements CredentialDeclarati
     public const string ACTOR_HEADER = 'X-Capstan-Actor-ID';
 
     public const string ARTIFACT_INGEST = 'capstan.artifact.ingest';
+
+    public const string MACHINE = 'capstan.machine';
 
     public const string POSTMASTER_POLL = 'capstan.postmaster.poll';
 
@@ -51,8 +55,21 @@ final readonly class CapstanCredentialDeclaration implements CredentialDeclarati
 
         $user = User::query()->find($actorId);
 
-        return $user instanceof User
-            && DomainIdentityContext::forUser($user, InstallationAuthority::current())->canUseProduct();
+        if (! $user instanceof User
+            || ! DomainIdentityContext::forUser($user, InstallationAuthority::current())->canUseProduct()) {
+            return false;
+        }
+
+        if ($request->is('api/v1/poll', 'api/v1/postmaster/replace', 'api/v1/work/*')) {
+            return ! Spoke::query()
+                ->where('credential_id', $credential->id)
+                ->where(function (Builder $query): void {
+                    $query->whereNotNull('retired_at')->orWhereNotNull('orphaned_at');
+                })
+                ->exists();
+        }
+
+        return true;
     }
 
     public function credentialAuthorizationProfiles(Request $request): array
@@ -62,6 +79,7 @@ final readonly class CapstanCredentialDeclaration implements CredentialDeclarati
 
         return [
             $this->profile(self::ARTIFACT_INGEST, $subject, $installation, '/api/v1/artifacts'),
+            $this->profile(self::MACHINE, $subject, $installation, '/api/v1/machine'),
             $this->profile(self::POSTMASTER_POLL, $subject, $installation, '/api/v1/poll'),
             $this->profile(self::WORK_DRAIN, $subject, $installation, '/api/v1/work'),
         ];

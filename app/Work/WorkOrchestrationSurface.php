@@ -131,7 +131,7 @@ final readonly class WorkOrchestrationSurface
                 throw $this->invalid();
             }
             if (isset($validated['device_spoke_id'])) {
-                $spoke = Spoke::query()->active()->whereKey($validated['device_spoke_id'])->first();
+                $spoke = Spoke::query()->workEligible()->whereKey($validated['device_spoke_id'])->first();
                 if (! $spoke instanceof Spoke || ! User::query()->whereKey($spoke->actor_id)->exists()) {
                     throw $this->invalid();
                 }

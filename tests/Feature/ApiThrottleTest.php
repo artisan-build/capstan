@@ -12,10 +12,12 @@ use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Route;
 use Laravel\Pennant\Feature;
 
-test('product api routes authenticate their fixed purpose before sharing the api throttle', function (): void {
+test('product api routes authenticate their endpoint purposes before applying the api throttle', function (): void {
     $routes = [
         '/api/v1/artifacts' => CapstanCredentialDeclaration::ARTIFACT_INGEST,
-        '/api/v1/poll' => CapstanCredentialDeclaration::POSTMASTER_POLL,
+        '/api/v1/poll' => CapstanCredentialDeclaration::MACHINE.','.CapstanCredentialDeclaration::POSTMASTER_POLL,
+        '/api/v1/postmaster/replace' => CapstanCredentialDeclaration::MACHINE.','.CapstanCredentialDeclaration::POSTMASTER_POLL,
+        '/api/v1/work/1/claim' => CapstanCredentialDeclaration::MACHINE.','.CapstanCredentialDeclaration::WORK_DRAIN,
     ];
 
     foreach ($routes as $uri => $appPurpose) {
@@ -30,7 +32,7 @@ test('product api routes authenticate their fixed purpose before sharing the api
     }
 });
 
-test('subject mismatch cannot consume the shared actor api throttle', function (): void {
+test('subject mismatch cannot consume a credential api throttle and credentials have independent budgets', function (): void {
     config([
         'app.url' => 'https://app.capstan.test',
         'capstan.features.artifacts' => true,
@@ -40,7 +42,7 @@ test('subject mismatch cannot consume the shared actor api throttle', function (
     $actor = capstanUser();
     $other = capstanUser();
     $artifact = capstanBoundBearer($actor, CapstanCredentialDeclaration::ARTIFACT_INGEST);
-    $poll = capstanBoundBearer($actor, CapstanCredentialDeclaration::POSTMASTER_POLL);
+    $secondArtifact = capstanBoundBearer($actor, CapstanCredentialDeclaration::ARTIFACT_INGEST);
     $artifactHeaders = [
         'Authorization' => 'Bearer '.$artifact['token'],
         CapstanCredentialDeclaration::ACTOR_HEADER => (string) $actor->getKey(),
@@ -72,19 +74,18 @@ test('subject mismatch cannot consume the shared actor api throttle', function (
         ->and($usedArtifactCredential->client_identity)->toBe('capstan-throttle-test/1.0');
 
     $this->withHeaders([
-        'Authorization' => 'Bearer '.$poll['token'],
+        'Authorization' => 'Bearer '.$secondArtifact['token'],
         CapstanCredentialDeclaration::ACTOR_HEADER => (string) $actor->getKey(),
         ClientIdentity::HEADER => 'capstan-throttle-test/1.0',
-    ])->postJson('/api/v1/poll', [
-        'presence' => ['ready_inboxes' => ['throttled']],
-    ])->assertTooManyRequests()
+    ])->postJson('/api/v1/artifacts', [])
+        ->assertUnprocessable()
+        ->assertJsonPath('error.code', 'validation_failed')
         ->assertHeader('X-RateLimit-Limit', '60')
-        ->assertHeader('X-RateLimit-Remaining', '0')
-        ->assertHeader('Retry-After');
+        ->assertHeader('X-RateLimit-Remaining', '59');
 
-    $usedPollCredential = $poll['credential']->refresh();
-    expect($usedPollCredential->last_used_at)->not->toBeNull()
-        ->and($usedPollCredential->client_identity)->toBe('capstan-throttle-test/1.0')
+    $usedSecondCredential = $secondArtifact['credential']->refresh();
+    expect($usedSecondCredential->last_used_at)->not->toBeNull()
+        ->and($usedSecondCredential->client_identity)->toBe('capstan-throttle-test/1.0')
         ->and(Artifact::query()->count())->toBe(0)
         ->and(Spoke::query()->count())->toBe(0)
         ->and(Inbox::query()->count())->toBe(0);

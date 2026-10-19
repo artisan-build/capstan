@@ -612,6 +612,7 @@ test('the delegated enforcement harness reaches every tool through the canonical
     }
 
     $scheduledCommands = [
+        'postmaster:mark-inactive-machines',
         'postmaster:probe-sweep',
         'postmaster:retire-dead-spokes --local',
         'work:failover-sweep',

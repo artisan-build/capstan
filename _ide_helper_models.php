@@ -21,24 +21,12 @@ namespace App\Models{
  * @property int $size_bytes
  * @property string $content_hash
  * @property string $storage_key
- * @property \Carbon\CarbonImmutable|null $created_at
- * @property \Carbon\CarbonImmutable|null $updated_at
  * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\Team> $teams
  * @property-read int|null $teams_count
  * @method static \Database\Factories\ArtifactFactory factory($count = null, $state = [])
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact whereActorId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact whereContentHash($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact whereContentType($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact whereExpiresAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact whereSizeBytes($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact whereStorageKey($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact whereUpdatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Artifact whereVisibility($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -54,20 +42,9 @@ namespace App\Models{
  * @property string $content_hash
  * @property string $storage_key
  * @property string $created_by_user_id
- * @property \Carbon\CarbonImmutable|null $created_at
- * @property \Carbon\CarbonImmutable|null $updated_at
  * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandAsset newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandAsset newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandAsset query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandAsset whereContentHash($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandAsset whereContentType($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandAsset whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandAsset whereCreatedByUserId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandAsset whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandAsset whereKind($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandAsset whereSizeBytes($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandAsset whereStorageKey($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandAsset whereUpdatedAt($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -80,19 +57,11 @@ namespace App\Models{
  * @property string|null $current_version_id
  * @property int $current_version_number
  * @property array<string, mixed>|null $draft
- * @property \Carbon\CarbonImmutable|null $created_at
- * @property \Carbon\CarbonImmutable|null $updated_at
  * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\BrandVersion> $versions
  * @property-read int|null $versions_count
  * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandKit newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandKit newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandKit query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandKit whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandKit whereCurrentVersionId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandKit whereCurrentVersionNumber($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandKit whereDraft($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandKit whereInstallationKey($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandKit whereUpdatedAt($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -106,18 +75,9 @@ namespace App\Models{
  * @property int $version_number
  * @property array<string, mixed> $configuration
  * @property string $applied_by_user_id
- * @property \Carbon\CarbonImmutable|null $created_at
- * @property \Carbon\CarbonImmutable|null $updated_at
  * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandVersion newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandVersion newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandVersion query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandVersion whereAppliedByUserId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandVersion whereBrandKitKey($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandVersion whereConfiguration($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandVersion whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandVersion whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandVersion whereUpdatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|BrandVersion whereVersionNumber($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -147,24 +107,6 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereAckedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereBody($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereDeliveredAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereFromAddress($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereMessageId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereReceivedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereRefs($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereSignature($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereSigningKeyId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereStatus($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereToAddress($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereToLocalPart($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereToServerId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereType($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereUpdatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Envelope whereVersion($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -187,15 +129,147 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Inbox newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Inbox newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Inbox query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Inbox whereActorId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Inbox whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Inbox whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Inbox whereLocalPart($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Inbox whereUpdatedAt($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
 	class IdeHelperInbox {}
+}
+
+namespace App\Models{
+/**
+ * @property int $id
+ * @property int $spoke_id
+ * @property int $team_id
+ * @property bool $enabled
+ * @property list<string> $roles
+ * @property list<string> $capabilities
+ * @property array<string, string> $role_providers
+ * @property int $concurrency_ceiling
+ * @property string $updated_by_actor
+ * @property-read Spoke $spoke
+ * @property-read Team $team
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineTeamWorkSetting newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineTeamWorkSetting newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineTeamWorkSetting query()
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperMachineTeamWorkSetting {}
+}
+
+namespace App\Models{
+/**
+ * @property int $id
+ * @property int $machine_usage_report_id
+ * @property string $provider
+ * @property string|null $plan
+ * @property CarbonImmutable $fetched_at
+ * @property bool|null $source_stale
+ * @property CarbonImmutable|null $expires_at
+ * @property string $status
+ * @property-read MachineUsageReport $report
+ * @property-read Collection<int, MachineUsageWindow> $windows
+ * @property-read int|null $windows_count
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineUsageProvider newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineUsageProvider newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineUsageProvider query()
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperMachineUsageProvider {}
+}
+
+namespace App\Models{
+/**
+ * @property int $id
+ * @property int $spoke_id
+ * @property string $source
+ * @property string|null $source_version
+ * @property string $availability
+ * @property CarbonImmutable|null $collected_at
+ * @property CarbonImmutable $last_attempt_at
+ * @property CarbonImmutable|null $last_success_received_at
+ * @property string|null $failure_code
+ * @property-read Spoke $spoke
+ * @property-read Collection<int, MachineUsageProvider> $providers
+ * @property-read int|null $providers_count
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineUsageReport newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineUsageReport newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineUsageReport query()
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperMachineUsageReport {}
+}
+
+namespace App\Models{
+/**
+ * @property int $id
+ * @property int $machine_usage_provider_id
+ * @property string $slot
+ * @property string $kind
+ * @property int|null $window_seconds
+ * @property string $remaining_percent
+ * @property CarbonImmutable|null $resets_at
+ * @property string $window_identity
+ * @property-read MachineUsageProvider $provider
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineUsageWindow newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineUsageWindow newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineUsageWindow query()
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperMachineUsageWindow {}
+}
+
+namespace App\Models{
+/**
+ * @property int $id
+ * @property int $spoke_id
+ * @property int $team_id
+ * @property list<string> $roles
+ * @property list<string> $capabilities
+ * @property array<string, string> $role_providers
+ * @property int $current_claimed_item_count
+ * @property int $concurrency_ceiling
+ * @property CarbonImmutable $observed_at
+ * @property-read Spoke $spoke
+ * @property-read Team $team
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineWorkPresence newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineWorkPresence newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineWorkPresence query()
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperMachineWorkPresence {}
+}
+
+namespace App\Models{
+/**
+ * @property string $id
+ * @property int $spoke_id
+ * @property int $team_id
+ * @property bool|null $old_enabled
+ * @property list<string>|null $old_roles
+ * @property list<string>|null $old_capabilities
+ * @property array<string, string>|null $old_role_providers
+ * @property int|null $old_concurrency_ceiling
+ * @property bool $new_enabled
+ * @property list<string> $new_roles
+ * @property list<string> $new_capabilities
+ * @property array<string, string> $new_role_providers
+ * @property int $new_concurrency_ceiling
+ * @property string $updated_by_actor
+ * @property CarbonImmutable $occurred_at
+ * @property-read Spoke $spoke
+ * @property-read Team $team
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineWorkSettingChange newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineWorkSettingChange newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineWorkSettingChange query()
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperMachineWorkSettingChange {}
 }
 
 namespace App\Models{
@@ -218,16 +292,6 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Page newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Page newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Page query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Page whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Page whereDescription($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Page whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Page whereLatestVersionId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Page whereLayout($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Page whereOwnerUserId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Page whereRefreshRecipe($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Page whereTitle($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Page whereUpdatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Page whereVersionCount($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -252,16 +316,6 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|PageShare newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|PageShare newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|PageShare query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageShare whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageShare whereCreatedByUserId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageShare whereExpiresAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageShare whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageShare whereInternalRecipientUserId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageShare whereKind($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageShare wherePageId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageShare whereRecipientEmail($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageShare whereRevokedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageShare whereUpdatedAt($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -288,20 +342,6 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|PageVersion newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|PageVersion newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|PageVersion query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageVersion whereContentHash($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageVersion whereContentType($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageVersion whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageVersion whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageVersion whereLayout($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageVersion wherePageId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageVersion wherePublisherSource($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageVersion wherePublisherTool($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageVersion wherePublisherUserId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageVersion whereRefreshRecipe($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageVersion whereSizeBytes($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageVersion whereStorageKey($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageVersion whereUpdatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|PageVersion whereVersionNumber($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -315,7 +355,10 @@ namespace App\Models{
  * @property string $credential_id
  * @property bool $credential_backed
  * @property string|null $name
+ * @property string|null $device_name
  * @property CarbonImmutable|null $last_polled_at
+ * @property CarbonImmutable|null $inactive_at
+ * @property CarbonImmutable|null $orphaned_at
  * @property CarbonImmutable|null $work_heartbeat_notified_at
  * @property string|null $last_cursor
  * @property SpokeLiveness $probe_status
@@ -325,27 +368,21 @@ namespace App\Models{
  * @property CarbonImmutable $created_at
  * @property CarbonImmutable $updated_at
  * @property-read int|null $inboxes_count
- * @property string|null $device_name
  * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\Inbox> $inboxes
  * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\SpokeProbe> $probes
  * @property-read int|null $probes_count
+ * @property-read \App\Models\MachineUsageReport|null $usageReport
+ * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\MachineWorkPresence> $workPresence
+ * @property-read int|null $work_presence_count
+ * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\MachineWorkSettingChange> $workSettingChanges
+ * @property-read int|null $work_setting_changes_count
+ * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\MachineTeamWorkSetting> $workSettings
+ * @property-read int|null $work_settings_count
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke active()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereActorId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereCredentialBacked($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereCredentialId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereDeviceName($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereLastCursor($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereLastPolledAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereName($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereProbeFailedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereProbeStatus($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereUpdatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke whereWorkHeartbeatNotifiedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Spoke workEligible()
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -364,20 +401,10 @@ namespace App\Models{
  * @property CarbonImmutable|null $responded_at
  * @property CarbonImmutable $created_at
  * @property CarbonImmutable $updated_at
- * @property-read \App\Models\Spoke $spoke
+ * @property-read \App\Models\Spoke|null $spoke
  * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe whereExpiresAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe whereIssuedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe whereNonce($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe whereProbeId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe whereRespondedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe whereSpokeId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe whereStatus($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|SpokeProbe whereUpdatedAt($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -386,14 +413,6 @@ namespace App\Models{
 
 namespace App\Models{
 /**
- * @property int $id
- * @property string $name
- * @property string $slug
- * @property bool $is_default
- * @property \Carbon\CarbonImmutable|null $created_at
- * @property \Carbon\CarbonImmutable|null $updated_at
- * @property bool $pool_work
- * @property bool $default_failover
  * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\Artifact> $artifacts
  * @property-read int|null $artifacts_count
  * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\WorkTask> $workTasks
@@ -401,14 +420,6 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Team newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Team newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Team query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereDefaultFailover($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereIsDefault($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereName($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Team wherePoolWork($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereSlug($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereUpdatedAt($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -428,13 +439,6 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|TeamWorkPolicyChange newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|TeamWorkPolicyChange newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|TeamWorkPolicyChange query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|TeamWorkPolicyChange whereActor($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|TeamWorkPolicyChange whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|TeamWorkPolicyChange whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|TeamWorkPolicyChange whereNewPoolWork($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|TeamWorkPolicyChange whereOldPoolWork($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|TeamWorkPolicyChange whereSurface($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|TeamWorkPolicyChange whereTeamId($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -454,13 +458,6 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkBriefRevision newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkBriefRevision newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkBriefRevision query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkBriefRevision whereAuthorActor($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkBriefRevision whereContent($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkBriefRevision whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkBriefRevision whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkBriefRevision whereSequence($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkBriefRevision whereUpdatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkBriefRevision whereWorkTaskId($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -480,26 +477,11 @@ namespace App\Models{
  * @property string|null $answered_by
  * @property CarbonImmutable|null $answered_at
  * @property CarbonImmutable|null $notified_at
- * @property \Carbon\CarbonImmutable|null $created_at
- * @property \Carbon\CarbonImmutable|null $updated_at
- * @property-read \App\Models\WorkItem $workItem
- * @property-read \App\Models\WorkTask $workTask
+ * @property-read \App\Models\WorkItem|null $workItem
+ * @property-read \App\Models\WorkTask|null $workTask
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereAddressedActor($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereAnswer($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereAnsweredAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereAnsweredBy($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereMetadata($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereNotifiedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereQuestion($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereRequestKey($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereUpdatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereWorkItemId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEscalation whereWorkTaskId($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -539,27 +521,6 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereAddressedActor($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereAttempts($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereClaimantActor($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereClaimantSpokeId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereClaimedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereFence($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereFetchedBriefRevisionId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereLastProgress($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereLeaseUntil($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereRole($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereSeatFence($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereStalledAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereState($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereTurnCursor($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereTurnUpperBound($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereUpdatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereWaitingOnHostAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereWaitingOnHostNotifiedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereWorkTaskId($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -582,16 +543,6 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition whereActorId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition whereActorKind($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition whereFence($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition whereFromState($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition whereOccurredAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition whereToState($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition whereUpdatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItemTransition whereWorkItemId($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -610,12 +561,6 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkMilestone newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkMilestone newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkMilestone query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkMilestone whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkMilestone whereFence($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkMilestone whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkMilestone whereKind($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkMilestone wherePayload($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkMilestone whereWorkItemId($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -630,19 +575,9 @@ namespace App\Models{
  * @property string $decision
  * @property string $rationale
  * @property array<string, mixed> $evidence
- * @property \Carbon\CarbonImmutable|null $created_at
- * @property \Carbon\CarbonImmutable|null $updated_at
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision whereDecision($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision whereEvidence($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision whereRationale($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision whereTriggeringEventId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision whereUpdatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationDecision whereWorkTaskId($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -659,21 +594,9 @@ namespace App\Models{
  * @property array<string, mixed> $evidence
  * @property string|null $author_task_id
  * @property bool $wakes
- * @property \Carbon\CarbonImmutable|null $created_at
- * @property \Carbon\CarbonImmutable|null $updated_at
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent whereAuthorTaskId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent whereEvidence($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent whereKind($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent whereSequence($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent whereSourceKey($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent whereUpdatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent whereWakes($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestrationEvent whereWorkTaskId($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -700,31 +623,9 @@ namespace App\Models{
  * @property int $turns_started
  * @property int $children_created
  * @property CarbonImmutable|null $stopped_at
- * @property \Carbon\CarbonImmutable|null $created_at
- * @property \Carbon\CarbonImmutable|null $updated_at
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereActiveItemId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereChildrenCreated($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereCompletedCursor($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereEventSequence($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereFailover($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereFence($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereHolderActor($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereHolderSpokeId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereInteractive($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereLeaseUntil($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereNotifiedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereSessionRef($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereStoppedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereTurnsCompleted($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereTurnsStarted($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereUpdatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereWaitingAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkOrchestratorSeat whereWorkTaskId($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -739,19 +640,9 @@ namespace App\Models{
  * @property int $sequence
  * @property int $through_cursor
  * @property string $content
- * @property \Carbon\CarbonImmutable|null $created_at
- * @property \Carbon\CarbonImmutable|null $updated_at
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision whereContent($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision whereSequence($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision whereThroughCursor($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision whereUpdatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision whereWorkItemId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkStateRevision whereWorkTaskId($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -773,14 +664,6 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkSteer newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkSteer newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkSteer query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkSteer whereAuthorActor($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkSteer whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkSteer whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkSteer whereReadAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkSteer whereText($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkSteer whereUpdatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkSteer whereWorkItemId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkSteer whereWorkTaskId($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -820,20 +703,6 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereCancelledAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereCreatorActor($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereDeviceSpokeId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereFailover($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereParentTaskId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereRequiredCapabilities($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereTeamId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereTimeboxMinutes($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereTitle($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereUpdatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereUserActorAddress($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereWorkflowRef($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -848,19 +717,9 @@ namespace App\Models{
  * @property CarbonImmutable $due_at
  * @property CarbonImmutable|null $fired_at
  * @property string $reason
- * @property \Carbon\CarbonImmutable|null $created_at
- * @property \Carbon\CarbonImmutable|null $updated_at
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake whereDueAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake whereFiredAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake whereReason($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake whereRequestKey($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake whereUpdatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkWake whereWorkTaskId($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]

@@ -23,10 +23,10 @@ function workStateItem(array $attributes = []): WorkItem
     return $task->items()->create(array_replace(['role' => 'builder'], $attributes));
 }
 
-function workStateSpoke(): Spoke
+function workStateSpoke(?string $actorId = null): Spoke
 {
     return Spoke::query()->create([
-        'actor_id' => 'state-spoke-'.Str::random(8),
+        'actor_id' => $actorId ?? 'state-spoke-'.Str::random(8),
         'credential_id' => (string) Str::uuid7(),
         'name' => 'State service spoke',
     ]);
@@ -35,7 +35,7 @@ function workStateSpoke(): Spoke
 test('the normal transition graph appends exactly one matching event per change', function (): void {
     $service = resolve(WorkItemStateService::class);
     $item = workStateItem();
-    $spoke = workStateSpoke();
+    $spoke = workStateSpoke('worker@test');
     $at = CarbonImmutable::parse('2026-10-17 12:00:00 UTC');
 
     $item = $service->claim(
@@ -212,7 +212,7 @@ test('expired leases requeue once while live leases remain untouched', function 
 
 test('guarded drain writes reject item and task cancellation at the update predicate', function (string $cancellation): void {
     $service = resolve(WorkItemStateService::class);
-    $spoke = workStateSpoke();
+    $spoke = workStateSpoke('worker@test');
     $at = CarbonImmutable::parse('2026-10-17 17:00:00 UTC');
     $item = $service->claim(
         workStateItem(),

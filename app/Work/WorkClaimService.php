@@ -218,7 +218,7 @@ final readonly class WorkClaimService
         beginning:
         try {
             return DB::transaction(function () use ($candidate, $teamId, $actorId, $spokeId, $now, $leaseSeconds): ?WorkItem {
-                if (! Spoke::query()->active()->whereKey($spokeId)->where('actor_id', $actorId)->lockForUpdate()->exists()) {
+                if (! Spoke::query()->workEligible()->whereKey($spokeId)->where('actor_id', $actorId)->lockForUpdate()->exists()) {
                     return null;
                 }
                 $seat = null;
@@ -316,6 +316,6 @@ final readonly class WorkClaimService
     /** @phpstan-impure */
     private function activeSpokeExists(string $actorId, int $spokeId): bool
     {
-        return Spoke::query()->active()->whereKey($spokeId)->where('actor_id', $actorId)->exists();
+        return Spoke::query()->workEligible()->whereKey($spokeId)->where('actor_id', $actorId)->exists();
     }
 }

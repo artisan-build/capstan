@@ -1,8 +1,13 @@
 <?php
 
 use App\Auth\CapstanCredentialDeclaration;
+use App\Models\MachineTeamWorkSetting;
 use App\Models\Spoke;
+use App\Models\Team;
+use ArtisanBuild\BuiltForCloud\Actions\OffboardSubject;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\OffboardOptions;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Sleep;
@@ -87,6 +92,54 @@ function spokeReplacementRaceEnvironment(array $connection): array
     return $environment;
 }
 
+/** @param list<array<string, string>> $workerEnvironments
+ * @return list<array<string, mixed>>
+ */
+function runSpokeReplacementWorkers(string $barrier, array $baseEnvironment, array $workerEnvironments): array
+{
+    $processes = [];
+    foreach ($workerEnvironments as $index => $environment) {
+        $process = new Process([
+            PHP_BINARY,
+            base_path('tests/Support/spoke-replacement-worker.php'),
+            (string) $index,
+            $barrier,
+        ], base_path(), [...$baseEnvironment, ...$environment], null, 90);
+        $process->start();
+        $processes[] = $process;
+    }
+
+    try {
+        $deadline = microtime(true) + 30;
+        while (count(glob($barrier.'/ready-*') ?: []) !== count($processes)) {
+            foreach ($processes as $process) {
+                if ($process->isTerminated()) {
+                    throw new RuntimeException('Replacement worker failed before release: '.$process->getErrorOutput());
+                }
+            }
+            if (microtime(true) >= $deadline) {
+                throw new RuntimeException('Replacement workers did not reach the barrier.');
+            }
+            Sleep::usleep(10_000);
+        }
+
+        touch($barrier.'/release');
+        $results = [];
+        foreach ($processes as $process) {
+            expect($process->wait())->toBe(0, $process->getErrorOutput());
+            $results[] = json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+        }
+
+        return $results;
+    } finally {
+        foreach ($processes as $process) {
+            if ($process->isRunning()) {
+                $process->stop(1);
+            }
+        }
+    }
+}
+
 test('two real replacement processes leave one live credential on the original spoke', function (): void {
     expect(app()->environment('testing'))->toBeTrue();
     $database = provisionSpokeReplacementRaceDatabase();
@@ -168,6 +221,136 @@ test('two real replacement processes leave one live credential on the original s
                 $process->stop(1);
             }
         }
+        cleanupSpokeReplacementRaceDatabase($database);
+        foreach (glob($barrier.'/*') ?: [] as $file) {
+            unlink($file);
+        }
+        if (is_dir($barrier)) {
+            rmdir($barrier);
+        }
+    }
+});
+
+test('two teammates racing one offboarded proof produce one preserved-row winner and one fresh row', function (): void {
+    expect(app()->environment('testing'))->toBeTrue();
+    $database = provisionSpokeReplacementRaceDatabase();
+    $barrier = storage_path('framework/testing/spoke-orphan-replace-barrier-'.Str::lower(Str::random(12)));
+    mkdir($barrier, 0777, true);
+    $appKey = 'base64:'.base64_encode(str_repeat('o', 32));
+    $serverId = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
+
+    try {
+        config(['app.key' => $appKey, 'capstan.postmaster.server_id' => $serverId]);
+        $oldOwner = capstanUser();
+        $teammates = [capstanUser(), capstanUser()];
+        $old = capstanBoundBearer($oldOwner, CapstanCredentialDeclaration::MACHINE);
+        $new = array_map(fn ($user): array => capstanBoundBearer($user, CapstanCredentialDeclaration::MACHINE), $teammates);
+        $spoke = Spoke::query()->create([
+            'actor_id' => (string) $oldOwner->id,
+            'credential_id' => $old['credential']->id,
+        ]);
+        MachineTeamWorkSetting::query()->create([
+            'spoke_id' => $spoke->id, 'team_id' => Team::default()->id, 'enabled' => true,
+            'roles' => ['builder'], 'capabilities' => [], 'role_providers' => [],
+            'concurrency_ceiling' => 1, 'updated_by_actor' => (string) $oldOwner->id,
+        ]);
+        resolve(OffboardSubject::class)(new OffboardOptions(SubjectType::UserPrincipal, 'capstan-user:'.$oldOwner->id));
+        Artisan::call('postmaster:retire-dead-spokes', ['--local' => true]);
+        expect($spoke->fresh()?->orphaned_at)->not->toBeNull();
+
+        $baseEnvironment = [
+            ...spokeReplacementRaceEnvironment($database['connection']),
+            'APP_KEY' => $appKey,
+            'CAPSTAN_SERVER_ID' => $serverId,
+            'REPLACEMENT_MODE' => 'orphan',
+            'REPLACEMENT_OLD_TOKEN' => $old['token'],
+        ];
+        $workers = [];
+        foreach ($teammates as $index => $teammate) {
+            $workers[] = [
+                'REPLACEMENT_ACTOR_ID' => (string) $teammate->id,
+                'REPLACEMENT_NEW_CREDENTIAL_ID' => $new[$index]['credential']->id,
+            ];
+        }
+        $results = runSpokeReplacementWorkers($barrier, $baseEnvironment, $workers);
+
+        DB::purge('spoke_replace_race');
+        $preserved = $spoke->fresh();
+        $newIds = array_column(array_column($new, 'credential'), 'id');
+        expect(collect($results)->pluck('replaced')->sort()->values()->all())->toBe([false, true])
+            ->and(collect($results)->pluck('conflict')->unique()->values()->all())->toBe([false])
+            ->and($preserved?->id)->toBe($spoke->id)
+            ->and($preserved?->actor_id)->toBeIn(array_map(fn ($user): string => (string) $user->id, $teammates))
+            ->and($preserved?->credential_id)->toBeIn($newIds)
+            ->and($preserved?->orphaned_at)->toBeNull()
+            ->and($preserved?->retired_at)->toBeNull()
+            ->and(Spoke::query()->count())->toBe(2)
+            ->and(Spoke::query()->whereIn('credential_id', $newIds)->count())->toBe(2)
+            ->and($old['credential']->fresh()?->revoked_at)->not->toBeNull();
+    } finally {
+        cleanupSpokeReplacementRaceDatabase($database);
+        foreach (glob($barrier.'/*') ?: [] as $file) {
+            unlink($file);
+        }
+        if (is_dir($barrier)) {
+            rmdir($barrier);
+        }
+    }
+});
+
+test('an explicit revoke racing orphan proof never transfers the preserved row', function (): void {
+    expect(app()->environment('testing'))->toBeTrue();
+    $database = provisionSpokeReplacementRaceDatabase();
+    $barrier = storage_path('framework/testing/spoke-revoke-transfer-barrier-'.Str::lower(Str::random(12)));
+    mkdir($barrier, 0777, true);
+    $appKey = 'base64:'.base64_encode(str_repeat('v', 32));
+    $serverId = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
+
+    try {
+        config(['app.key' => $appKey, 'capstan.postmaster.server_id' => $serverId]);
+        $oldOwner = capstanUser();
+        $newOwner = capstanUser();
+        $old = capstanBoundBearer($oldOwner, CapstanCredentialDeclaration::MACHINE);
+        $new = capstanBoundBearer($newOwner, CapstanCredentialDeclaration::MACHINE);
+        $spoke = Spoke::query()->create([
+            'actor_id' => (string) $oldOwner->id,
+            'credential_id' => $old['credential']->id,
+            'orphaned_at' => now(),
+        ]);
+        MachineTeamWorkSetting::query()->create([
+            'spoke_id' => $spoke->id, 'team_id' => Team::default()->id, 'enabled' => true,
+            'roles' => ['builder'], 'capabilities' => [], 'role_providers' => [],
+            'concurrency_ceiling' => 1, 'updated_by_actor' => (string) $oldOwner->id,
+        ]);
+
+        $baseEnvironment = [
+            ...spokeReplacementRaceEnvironment($database['connection']),
+            'APP_KEY' => $appKey,
+            'CAPSTAN_SERVER_ID' => $serverId,
+            'REPLACEMENT_OLD_TOKEN' => $old['token'],
+            'REPLACEMENT_OLD_CREDENTIAL_ID' => $old['credential']->id,
+        ];
+        $results = runSpokeReplacementWorkers($barrier, $baseEnvironment, [[
+            'REPLACEMENT_MODE' => 'orphan',
+            'REPLACEMENT_ACTOR_ID' => (string) $newOwner->id,
+            'REPLACEMENT_NEW_CREDENTIAL_ID' => $new['credential']->id,
+        ], [
+            'REPLACEMENT_MODE' => 'revoke',
+            'REPLACEMENT_ACTOR_ID' => (string) $oldOwner->id,
+        ]]);
+
+        DB::purge('spoke_replace_race');
+        $unchanged = $spoke->fresh();
+        $transfer = collect($results)->firstWhere('replaced', false);
+        expect($transfer)->toBeArray()
+            ->and($unchanged?->id)->toBe($spoke->id)
+            ->and($unchanged?->actor_id)->toBe((string) $oldOwner->id)
+            ->and($unchanged?->credential_id)->toBe($old['credential']->id)
+            ->and($unchanged?->orphaned_at)->not->toBeNull()
+            ->and($unchanged?->retired_at)->toBeNull()
+            ->and(Spoke::query()->where('credential_id', $new['credential']->id)->count())->toBe(1)
+            ->and($old['credential']->fresh()?->revoked_at)->not->toBeNull();
+    } finally {
         cleanupSpokeReplacementRaceDatabase($database);
         foreach (glob($barrier.'/*') ?: [] as $file) {
             unlink($file);

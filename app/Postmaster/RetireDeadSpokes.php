@@ -5,7 +5,11 @@ namespace App\Postmaster;
 use App\Models\Spoke;
 use App\Models\WorkItem;
 use App\Models\WorkOrchestratorSeat;
+use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\OffboardedSubject;
+use ArtisanBuild\BuiltForCloud\RolePolicy;
 use ArtisanBuild\BuiltForCloud\SystemAuthorityContext;
+use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
@@ -25,21 +29,6 @@ final readonly class RetireDeadSpokes
             $ids = Spoke::query()
                 ->whereNull('retired_at')
                 ->where('credential_backed', true)
-                ->where(function (Builder $query): void {
-                    $query->whereNotExists(function ($credentials): void {
-                        $credentials->selectRaw('1')
-                            ->from('credentials')
-                            ->whereColumn('credentials.id', 'spokes.credential_id');
-                    })->orWhereExists(function ($credentials): void {
-                        $credentials->selectRaw('1')
-                            ->from('credentials')
-                            ->whereColumn('credentials.id', 'spokes.credential_id')
-                            ->where(function ($dead): void {
-                                $dead->whereNotNull('credentials.revoked_at')
-                                    ->orWhere('credentials.expires_at', '<=', now());
-                            });
-                    });
-                })
                 ->lockForUpdate()
                 ->pluck('id');
 
@@ -52,7 +41,25 @@ final readonly class RetireDeadSpokes
             foreach ($ids as $id) {
                 $spoke = Spoke::query()->whereKey($id)->whereNull('retired_at')->lockForUpdate()->first();
 
-                if ($spoke === null || $this->hasLiveAuthority($spoke, now())) {
+                if ($spoke === null) {
+                    continue;
+                }
+
+                if ($spoke->orphaned_at !== null || $this->ownerIsUnavailable($spoke)) {
+                    if ($spoke->orphaned_at === null) {
+                        $spoke->inboxes()->detach();
+                        $spoke->forceFill(['orphaned_at' => now()])->save();
+                    }
+
+                    continue;
+                }
+
+                $credential = Credential::query()->whereKey($spoke->credential_id)->first();
+                $dead = $credential === null
+                    || $credential->revoked_at !== null
+                    || ($credential->expires_at !== null && ! $credential->expires_at->isAfter(now()));
+
+                if (! $dead || $this->hasLiveAuthority($spoke, now())) {
                     continue;
                 }
 
@@ -79,5 +86,24 @@ final readonly class RetireDeadSpokes
                 ->whereNull('stopped_at')
                 ->where('lease_until', '>', $now)
                 ->exists();
+    }
+
+    private function ownerIsUnavailable(Spoke $spoke): bool
+    {
+        $owner = User::query()->find($spoke->actor_id);
+
+        if (! $owner instanceof User
+            || $owner->status !== 'active'
+            || ! RolePolicy::canUseProduct($owner->role)) {
+            return true;
+        }
+
+        return OffboardedSubject::query()
+            ->where('user_id', $spoke->actor_id)
+            ->orWhere(function (Builder $query) use ($spoke): void {
+                $query->where('subject_ref', 'capstan-user:'.$spoke->actor_id)
+                    ->where('user_id', OffboardedSubject::SUBJECT_ROW);
+            })
+            ->exists();
     }
 }

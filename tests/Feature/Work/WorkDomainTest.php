@@ -28,10 +28,10 @@ function workDomainTask(array $attributes = []): WorkTask
     ], $attributes));
 }
 
-function workDomainSpoke(): Spoke
+function workDomainSpoke(?string $actorId = null): Spoke
 {
     return Spoke::query()->create([
-        'actor_id' => 'spoke-actor-'.Str::random(8),
+        'actor_id' => $actorId ?? 'spoke-actor-'.Str::random(8),
         'credential_id' => (string) Str::uuid7(),
         'name' => 'Test-created Work spoke',
     ]);
@@ -41,7 +41,7 @@ test('all work records use uuid version 7 primary keys', function (): void {
     $task = workDomainTask();
     $brief = resolve(BriefRevisionService::class)->append($task, 'Test-created brief', 'author@test');
     $item = $task->items()->create(['role' => 'builder']);
-    $spoke = workDomainSpoke();
+    $spoke = workDomainSpoke('actor@test');
     $claimedAt = CarbonImmutable::now();
     $item = resolve(WorkItemStateService::class)->claim(
         $item,

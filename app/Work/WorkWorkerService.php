@@ -17,11 +17,18 @@ use Symfony\Component\HttpKernel\Exception\HttpException;
 final class WorkWorkerService
 {
     /** @return Builder<WorkItem> */
-    public function activeQuery(): Builder
+    public function recoveryQuery(): Builder
     {
         return WorkItem::query()->whereIn('state', ['claimed', 'delivered', 'routed'])
             ->whereNotNull('claimant_spoke_id')->whereNotNull('claimant_actor')
             ->whereHas('workTask', fn ($query) => $query->whereNull('cancelled_at'));
+    }
+
+    /** @return Builder<WorkItem> */
+    public function activeQuery(): Builder
+    {
+        return $this->recoveryQuery()
+            ->whereIn('claimant_spoke_id', Spoke::query()->workEligible()->select('id'));
     }
 
     /**
@@ -39,7 +46,7 @@ final class WorkWorkerService
             $item = WorkItem::query()->with('workTask')->find($id);
             abort_if($item === null, 409, 'claim lost');
             abort_if($item->state === WorkItemState::Cancelled || $item->workTask->cancelled_at !== null, 410, 'cancelled');
-            $spokeLocked = Spoke::query()->active()
+            $spokeLocked = Spoke::query()->workEligible()
                 ->whereKey($item->claimant_spoke_id)
                 ->where('actor_id', $item->claimant_actor)
                 ->update(['updated_at' => DB::raw('updated_at')]);
