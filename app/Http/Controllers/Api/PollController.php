@@ -9,6 +9,9 @@ use App\Http\ApiError;
 use App\Http\ApiErrorException;
 use App\Http\Controllers\Controller;
 use App\Http\Middleware\AuthenticateBoundCredential;
+use App\Machine\ApplyPendingMachineProfile;
+use App\Machine\IngestMachineUsage;
+use App\Machine\MachineUsagePayload;
 use App\Models\Envelope;
 use App\Models\Inbox;
 use App\Models\Spoke;
@@ -55,6 +58,9 @@ class PollController extends Controller
         MessageSender $sender,
         MessageAcknowledger $acknowledger,
         BoundCredentialSpokeResolver $spokes,
+        ApplyPendingMachineProfile $pendingProfiles,
+        MachineUsagePayload $usagePayload,
+        IngestMachineUsage $usageIngest,
     ): JsonResponse {
         $credential = AuthenticateBoundCredential::credential($request);
         $actorId = AuthenticateBoundCredential::actorId($request);
@@ -67,6 +73,17 @@ class PollController extends Controller
 
         if (! $payload instanceof stdClass || json_last_error() !== JSON_ERROR_NONE) {
             return $this->validationError(['body' => ['The request body must be a JSON object.']]);
+        }
+
+        $hasUsage = property_exists($payload, 'usage');
+        $usage = null;
+        $usageInvalid = false;
+        if ($hasUsage) {
+            try {
+                $usage = $usagePayload->parse($payload->usage);
+            } catch (InvalidArgumentException) {
+                $usageInvalid = true;
+            }
         }
 
         $validation = $this->validatePayload($payload);
@@ -93,10 +110,11 @@ class PollController extends Controller
         $serverId = $identity->id();
 
         try {
-            /** @var array{payload: array{inbound: list<array<string, mixed>>, cursor: string|null, probe_challenge?: array{probe_id: string, nonce: string, algorithm: string}}, failure: array{Spoke, SpokeProbe}|null} $result */
-            $result = DB::transaction(function () use ($credential, $actorId, $validation, $envelopes, $serverId, $probeManager, $sender, $acknowledger, $spokes): array {
+            /** @var array{payload: array{inbound: list<array<string, mixed>>, cursor: string|null, probe_challenge?: array{probe_id: string, nonce: string, algorithm: string}}, failure: array{Spoke, SpokeProbe}|null, spoke: Spoke} $result */
+            $result = DB::transaction(function () use ($credential, $actorId, $validation, $envelopes, $serverId, $probeManager, $sender, $acknowledger, $spokes, $pendingProfiles): array {
                 $now = CarbonImmutable::now();
                 $spoke = $spokes->resolve($actorId, $credential->id, $now, deviceName: $validation['device_name']);
+                $pendingProfiles->apply($spoke, $actorId, $credential->id);
                 $readyInboxes = array_values(array_unique($validation['ready_inboxes']));
                 $failedProbe = $probeManager->respond($spoke, $validation['probe_response'], $now);
 
@@ -124,6 +142,7 @@ class PollController extends Controller
                 return [
                     'payload' => $payload,
                     'failure' => $failedProbe === null ? null : [$spoke, $failedProbe],
+                    'spoke' => $spoke,
                 ];
             });
         } catch (ApiErrorException $rejection) {
@@ -140,6 +159,22 @@ class PollController extends Controller
                     'exception' => $exception,
                 ]);
             }
+        }
+
+        if ($hasUsage) {
+            $usageStatus = 'ignored_invalid';
+            if (! $usageInvalid && $usage !== null) {
+                try {
+                    $usageStatus = $usageIngest->ingest($result['spoke'], $usage, CarbonImmutable::now());
+                } catch (Throwable $exception) {
+                    Log::warning('Machine usage report was ignored.', [
+                        'spoke_id' => $result['spoke']->id,
+                        'result_code' => 'ignored_invalid',
+                        'exception_class' => $exception::class,
+                    ]);
+                }
+            }
+            $result['payload']['usage_status'] = $usageStatus;
         }
 
         return new JsonResponse($result['payload']);

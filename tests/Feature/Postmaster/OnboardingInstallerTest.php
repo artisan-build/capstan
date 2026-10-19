@@ -54,7 +54,10 @@ test('the generated installer is valid shell and protects local credentials and 
         ->toContain('chmod 700 "$CAPSTAN_HOME"')
         ->toContain('chmod 600 "$CAPSTAN_TOKEN_FILE"')
         ->toContain('chmod 600 "$CAPSTAN_ACTOR_FILE"')
+        ->toContain('chmod 600 "$CAPSTAN_CONFIG_FILE"')
+        ->toContain('chmod 600 "$CAPSTAN_USAGE_COLLECTOR"')
         ->toContain('chmod 700 "$CAPSTAN_POLL_SCRIPT"')
+        ->toContain("--user-agent 'capstan-machine/1'")
         ->toContain("'https://capstan.example/bfc/device/token'")
         ->toContain('scutil --get ComputerName 2>/dev/null')
         ->toContain('hostname -s 2>/dev/null || hostname 2>/dev/null')
@@ -144,6 +147,8 @@ test('the generated installer pins relative executable paths before cron runs fr
     File::makeDirectory($existingInstall, 0700, true);
     File::put($existingInstall.'/token', 'existing-secret-bearer');
     symlink(PHP_BINARY, $tools.'/php');
+    File::put($tools.'/openusage', "#!/bin/sh\nprintf '%s' '{}'\n");
+    chmod($tools.'/openusage', 0700);
 
     File::put($bin.'/uname', "#!/bin/sh\nprintf '%s\\n' Darwin\n");
     File::put($bin.'/scutil', "#!/bin/sh\nprintf '%s\\n' \"Ed's Test Mac\"\n");
@@ -215,8 +220,13 @@ SH));
             ->and(fileperms($install.'/token') & 0777)->toBe(0600)
             ->and(fileperms($install.'/actor-id') & 0777)->toBe(0600)
             ->and(fileperms($install.'/poll.sh') & 0777)->toBe(0700)
+            ->and(fileperms($install.'/runtime.json') & 0777)->toBe(0600)
+            ->and(fileperms($install.'/openusage-collector.php') & 0777)->toBe(0600)
+            ->and(fileperms($install.'/usage-cache.json') & 0777)->toBe(0600)
             ->and(File::get($install.'/poll.sh'))->toContain('CAPSTAN_PHP='.escapeshellarg($absoluteTools.'/php'))
             ->and(File::get($install.'/poll.sh'))->toContain('CAPSTAN_CURL='.escapeshellarg($absoluteTools.'/curl'))
+            ->and(File::get($install.'/poll.sh'))->toContain('CAPSTAN_OPENUSAGE='.escapeshellarg($absoluteTools.'/openusage'))
+            ->and(File::get($install.'/poll.sh'))->toContain("--user-agent 'capstan-machine/1'")
             ->and(File::get($install.'/poll.sh'))->not->toContain('existing-secret-bearer')
             ->and(File::get($crontab))->toContain('# capstan-postmaster:'.INSTALLER_SERVER_ID)
             ->and($initialPayload['presence'])->toBe([

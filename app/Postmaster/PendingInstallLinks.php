@@ -41,10 +41,18 @@ final readonly class PendingInstallLinks
             DB::table('postmaster_installs')->insert([
                 'id' => (string) Str::uuid(),
                 'actor_id' => $actorId,
+                'credential_authorization_id' => $generated->authorizationId,
+                'team_id' => $generated->initialProfile['team_id'],
+                'work_enabled' => $generated->initialProfile['enabled'],
+                'work_roles' => json_encode($generated->initialProfile['roles'], JSON_THROW_ON_ERROR),
+                'work_capabilities' => json_encode($generated->initialProfile['capabilities'], JSON_THROW_ON_ERROR),
+                'work_role_providers' => json_encode($generated->initialProfile['role_providers'], JSON_THROW_ON_ERROR),
+                'work_concurrency_ceiling' => $generated->initialProfile['concurrency_ceiling'],
                 'token_hash' => hash('sha256', $token),
                 'script' => $generated->script,
                 'expires_at' => $expiresAt,
                 'used_at' => null,
+                'applied_at' => null,
                 'created_at' => $now,
                 'updated_at' => $now,
             ]);

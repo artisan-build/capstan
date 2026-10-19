@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\Team;
 use App\Postmaster\GeneratedOnboardingSnippet;
 use App\Postmaster\OnboardingSnippet;
 use App\Postmaster\PendingInstallLinks;
@@ -90,6 +91,14 @@ test('postgres serializes concurrent installer issuance for one actor', function
                             return new GeneratedOnboardingSnippet(
                                 "#!/bin/sh\n(\nprintf '%s\\n' 'worker-{$this->worker}'\n)\n",
                                 $this->authorizationId,
+                                [
+                                    'team_id' => Team::default()->id,
+                                    'enabled' => true,
+                                    'roles' => ['builder'],
+                                    'capabilities' => [],
+                                    'role_providers' => [],
+                                    'concurrency_ceiling' => 1,
+                                ],
                             );
                         }
                     };

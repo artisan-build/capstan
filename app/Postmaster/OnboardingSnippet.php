@@ -3,6 +3,8 @@
 namespace App\Postmaster;
 
 use App\Auth\CapstanCredentialDeclaration;
+use App\Machine\InitialMachineWorkProfile;
+use App\Machine\InstalledUsageCollectorSource;
 use App\Support\ServerIdentity;
 use ArtisanBuild\BuiltForCloud\Actions\StartDeviceAuthorization;
 use Illuminate\Http\Request;
@@ -13,6 +15,8 @@ class OnboardingSnippet
     public function __construct(
         private readonly ServerIdentity $identity,
         private readonly StartDeviceAuthorization $startDeviceAuthorization,
+        private readonly InitialMachineWorkProfile $profiles,
+        private readonly InstalledUsageCollectorSource $usageCollector,
     ) {}
 
     public function generate(Request $request, string $actorId): string
@@ -27,10 +31,13 @@ class OnboardingSnippet
         $pollUrl = $this->installUrl('api.postmaster.poll');
         $replaceUrl = $this->installUrl('api.postmaster.replace');
         $tokenUrl = rtrim($this->baseUrl(), '/').'/bfc/device/token';
+        $initialProfile = $this->profiles->default();
+        $runtimeConfig = json_encode($initialProfile, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        $collectorSource = $this->usageCollector->source();
         $device = ($this->startDeviceAuthorization)(
             $request,
-            CapstanCredentialDeclaration::POSTMASTER_POLL,
-            mb_substr($serverName.' postmaster', 0, 64),
+            CapstanCredentialDeclaration::MACHINE,
+            mb_substr($serverName.' machine', 0, 64),
         );
         $deviceCode = $device->deviceCode->reveal();
         $userCode = $device->userCode->reveal();
@@ -57,6 +64,9 @@ class OnboardingSnippet
             'CAPSTAN_ACTOR_FILE="$CAPSTAN_HOME/actor-id"',
             'CAPSTAN_POLL_SCRIPT="$CAPSTAN_HOME/poll.sh"',
             'CAPSTAN_INBOX_FILE="$CAPSTAN_HOME/inboxes.json"',
+            'CAPSTAN_CONFIG_FILE="$CAPSTAN_HOME/runtime.json"',
+            'CAPSTAN_USAGE_COLLECTOR="$CAPSTAN_HOME/openusage-collector.php"',
+            'CAPSTAN_USAGE_CACHE="$CAPSTAN_HOME/usage-cache.json"',
             'CAPSTAN_CRON_TAG="# capstan-postmaster:$CAPSTAN_SERVER_ID"',
             'CAPSTAN_CRON_LINE='.$this->quote($cronLine),
             'CAPSTAN_CRON_READ="$CAPSTAN_HOME/crontab.read"',
@@ -67,6 +77,7 @@ class OnboardingSnippet
             '',
             $this->resolveExecutable('curl', '--version'),
             $this->resolveExecutable('php', '-v'),
+            $this->resolveOptionalExecutable('openusage'),
             $this->requireCommand('crontab'),
             'umask 077',
             'mkdir -p "$CAPSTAN_HOME"',
@@ -89,7 +100,7 @@ class OnboardingSnippet
             'CAPSTAN_INTERVAL='.$device->interval,
             'while [ -z "$CAPSTAN_TOKEN" ] && [ "$CAPSTAN_ATTEMPT" -lt 180 ]; do',
             '    CAPSTAN_ATTEMPT=$((CAPSTAN_ATTEMPT + 1))',
-            '    CAPSTAN_TOKEN_RESPONSE="$(printf \'%s\' "$CAPSTAN_BODY" | "$CAPSTAN_CURL" --silent --show-error --connect-timeout 5 --max-time 15 --dump-header "$CAPSTAN_TOKEN_HEADERS" --request POST --header \'Content-Type: application/json\' --data @- "$CAPSTAN_TOKEN_URL" || true)"',
+            '    CAPSTAN_TOKEN_RESPONSE="$(printf \'%s\' "$CAPSTAN_BODY" | "$CAPSTAN_CURL" --silent --show-error --connect-timeout 5 --max-time 15 --user-agent \'capstan-machine/1\' --dump-header "$CAPSTAN_TOKEN_HEADERS" --request POST --header \'Content-Type: application/json\' --data @- "$CAPSTAN_TOKEN_URL" || true)"',
             '    CAPSTAN_TOKEN="$(printf \'%s\' "$CAPSTAN_TOKEN_RESPONSE" | "$CAPSTAN_PHP" -r \'$body = json_decode(stream_get_contents(STDIN)); if (is_object($body) && isset($body->access_token) && is_string($body->access_token)) { echo $body->access_token; }\')"',
             '    CAPSTAN_ERROR="$(printf \'%s\' "$CAPSTAN_TOKEN_RESPONSE" | "$CAPSTAN_PHP" -r \'$body = json_decode(stream_get_contents(STDIN)); if (is_object($body) && isset($body->error) && is_string($body->error)) { echo $body->error; }\')"',
             '    case "$CAPSTAN_ERROR" in access_denied|expired_token|invalid_grant|invalid_request) printf \'%s: %s\n\' '.$this->quote(__('Authorization failed')).' "$CAPSTAN_ERROR" >&2; exit 1 ;; esac',
@@ -101,7 +112,7 @@ class OnboardingSnippet
             'done',
             '[ -n "$CAPSTAN_TOKEN" ] || { printf \'%s\n\' '.$this->quote(__('Authorization expired. Generate a new onboarding snippet and try again.')).' >&2; exit 1; }',
             'if [ -f "$CAPSTAN_OLD_TOKEN_FILE" ]; then',
-            '    printf \'header = "Authorization: Bearer %s"\nheader = "X-Capstan-Actor-ID: %s"\nheader = "X-Capstan-Previous-Credential: %s"\n\' "$CAPSTAN_TOKEN" "$CAPSTAN_ACTOR_ID" "$(cat "$CAPSTAN_OLD_TOKEN_FILE")" | "$CAPSTAN_CURL" --config - --fail --silent --show-error --connect-timeout 5 --max-time 15 --request POST "$CAPSTAN_REPLACE_URL" >/dev/null',
+            '    printf \'header = "Authorization: Bearer %s"\nheader = "X-Capstan-Actor-ID: %s"\nheader = "X-Capstan-Previous-Credential: %s"\n\' "$CAPSTAN_TOKEN" "$CAPSTAN_ACTOR_ID" "$(cat "$CAPSTAN_OLD_TOKEN_FILE")" | "$CAPSTAN_CURL" --config - --fail --silent --show-error --connect-timeout 5 --max-time 15 --user-agent \'capstan-machine/1\' --request POST "$CAPSTAN_REPLACE_URL" >/dev/null',
             'fi',
             'printf \'%s\' "$CAPSTAN_TOKEN" > "$CAPSTAN_TOKEN_FILE"',
             'chmod 600 "$CAPSTAN_TOKEN_FILE"',
@@ -112,10 +123,15 @@ class OnboardingSnippet
             '',
             'CAPSTAN_PHP_LITERAL="$("$CAPSTAN_PHP" -r \'echo escapeshellarg($argv[1]);\' "$CAPSTAN_PHP")"',
             'CAPSTAN_CURL_LITERAL="$("$CAPSTAN_PHP" -r \'echo escapeshellarg($argv[1]);\' "$CAPSTAN_CURL")"',
+            'CAPSTAN_OPENUSAGE_LITERAL="$("$CAPSTAN_PHP" -r \'echo escapeshellarg($argv[1]);\' "$CAPSTAN_OPENUSAGE")"',
             "printf '%s\\n' ".implode(' ', array_map($this->pollScriptArgument(...), $pollScriptLines)).' > "$CAPSTAN_POLL_SCRIPT"',
             'chmod 700 "$CAPSTAN_POLL_SCRIPT"',
             '[ -e "$CAPSTAN_INBOX_FILE" ] || printf \'[]\n\' > "$CAPSTAN_INBOX_FILE"',
             'chmod 600 "$CAPSTAN_INBOX_FILE"',
+            'printf \'%s\' '.$this->quote($runtimeConfig).' > "$CAPSTAN_CONFIG_FILE"',
+            'chmod 600 "$CAPSTAN_CONFIG_FILE"',
+            'printf \'%s\' '.$this->quote($collectorSource).' > "$CAPSTAN_USAGE_COLLECTOR"',
+            'chmod 600 "$CAPSTAN_USAGE_COLLECTOR"',
             '',
             '# CAPSTAN_CRON_INSTALL_BEGIN',
             'if crontab -l > "$CAPSTAN_CRON_READ" 2> "$CAPSTAN_CRON_ERR"; then',
@@ -141,7 +157,7 @@ class OnboardingSnippet
 
         // The installer must not read from stdin: under `curl | sh`, stdin is the
         // script stream itself. Every curl input comes from an explicit pipe.
-        return new GeneratedOnboardingSnippet($script, $device->authorizationId);
+        return new GeneratedOnboardingSnippet($script, $device->authorizationId, $initialProfile);
     }
 
     /** @return list<string> */
@@ -158,6 +174,16 @@ $payload = ['presence' => [
 ]];
 if (is_file($argv[2])) {
     $payload['probe_response'] = json_decode(file_get_contents($argv[2]), true, flags: JSON_THROW_ON_ERROR);
+}
+if ($argv[4] !== '') {
+    try {
+        $usage = json_decode($argv[4], true, 8, JSON_THROW_ON_ERROR);
+        if (is_array($usage) && ! array_is_list($usage)) {
+            $payload['usage'] = $usage;
+        }
+    } catch (Throwable) {
+        // Usage is optional and must never block the rest of a poll.
+    }
 }
 echo json_encode($payload, JSON_THROW_ON_ERROR);
 PHP;
@@ -179,17 +205,21 @@ PHP;
             'CAPSTAN_POLL_URL='.$this->quote($pollUrl),
             'CAPSTAN_PHP=',
             'CAPSTAN_CURL=',
+            'CAPSTAN_OPENUSAGE=',
             'CAPSTAN_HOME="$HOME/.config/capstan/$CAPSTAN_SERVER_ID"',
             'CAPSTAN_TOKEN_FILE="$CAPSTAN_HOME/token"',
             'CAPSTAN_ACTOR_FILE="$CAPSTAN_HOME/actor-id"',
             'CAPSTAN_INBOX_FILE="$CAPSTAN_HOME/inboxes.json"',
             'CAPSTAN_PENDING_FILE="$CAPSTAN_HOME/probe-response.json"',
+            'CAPSTAN_USAGE_COLLECTOR="$CAPSTAN_HOME/openusage-collector.php"',
+            'CAPSTAN_USAGE_CACHE="$CAPSTAN_HOME/usage-cache.json"',
             'case "$(uname -s)" in',
             '    Darwin) CAPSTAN_DEVICE_NAME="$(scutil --get ComputerName 2>/dev/null || true)" ;;',
             '    *) CAPSTAN_DEVICE_NAME="$(hostname -s 2>/dev/null || hostname 2>/dev/null || true)" ;;',
             'esac',
-            'CAPSTAN_PAYLOAD="$("$CAPSTAN_PHP" -r '.$this->quote($payloadBuilder).' "$CAPSTAN_INBOX_FILE" "$CAPSTAN_PENDING_FILE" "$CAPSTAN_DEVICE_NAME")"',
-            'CAPSTAN_RESPONSE="$(printf \'header = "Authorization: Bearer %s"\nheader = "X-Capstan-Actor-ID: %s"\n\' "$(cat "$CAPSTAN_TOKEN_FILE")" "$(cat "$CAPSTAN_ACTOR_FILE")" | "$CAPSTAN_CURL" --config - --fail --silent --show-error --connect-timeout 5 --max-time 15 --request POST --header \'Content-Type: application/json\' --data "$CAPSTAN_PAYLOAD" "$CAPSTAN_POLL_URL")"',
+            'CAPSTAN_USAGE="$("$CAPSTAN_PHP" "$CAPSTAN_USAGE_COLLECTOR" "$CAPSTAN_CURL" "$CAPSTAN_OPENUSAGE" "$CAPSTAN_USAGE_CACHE" 2>/dev/null || true)"',
+            'CAPSTAN_PAYLOAD="$("$CAPSTAN_PHP" -r '.$this->quote($payloadBuilder).' "$CAPSTAN_INBOX_FILE" "$CAPSTAN_PENDING_FILE" "$CAPSTAN_DEVICE_NAME" "$CAPSTAN_USAGE")"',
+            'CAPSTAN_RESPONSE="$(printf \'header = "Authorization: Bearer %s"\nheader = "X-Capstan-Actor-ID: %s"\n\' "$(cat "$CAPSTAN_TOKEN_FILE")" "$(cat "$CAPSTAN_ACTOR_FILE")" | "$CAPSTAN_CURL" --config - --fail --silent --show-error --connect-timeout 5 --max-time 15 --user-agent \'capstan-machine/1\' --request POST --header \'Content-Type: application/json\' --data "$CAPSTAN_PAYLOAD" "$CAPSTAN_POLL_URL")"',
             'rm -f "$CAPSTAN_PENDING_FILE"',
             'printf \'%s\' "$CAPSTAN_RESPONSE" | "$CAPSTAN_PHP" -r '.$this->quote($probeParser).' "$CAPSTAN_PENDING_FILE"',
         ];
@@ -200,6 +230,7 @@ PHP;
         return match ($line) {
             'CAPSTAN_PHP=' => '"CAPSTAN_PHP=$CAPSTAN_PHP_LITERAL"',
             'CAPSTAN_CURL=' => '"CAPSTAN_CURL=$CAPSTAN_CURL_LITERAL"',
+            'CAPSTAN_OPENUSAGE=' => '"CAPSTAN_OPENUSAGE=$CAPSTAN_OPENUSAGE_LITERAL"',
             default => $this->quote($line),
         };
     }
@@ -246,6 +277,25 @@ PHP;
                 $this->quote(__(':command must resolve to an executable file.', ['command' => $command])).' >&2; exit 1; }',
             '"$'.$variable.'" '.$versionFlag.' >/dev/null 2>&1 || { printf \'%s\n\' '.
                 $this->quote(__(':command could not be executed.', ['command' => $command])).' >&2; exit 1; }',
+        ]);
+    }
+
+    private function resolveOptionalExecutable(string $command): string
+    {
+        $variable = 'CAPSTAN_'.strtoupper($command);
+
+        return implode("\n", [
+            $variable.'="$(command -v '.$command.' 2>/dev/null || true)"',
+            'if [ -n "$'.$variable.'" ]; then',
+            '    case "$'.$variable.'" in',
+            '        /*) ;;',
+            '        */*) CAPSTAN_EXECUTABLE_DIRECTORY="$(CDPATH= cd "${'.$variable.'%/*}" 2>/dev/null && pwd -P)" || CAPSTAN_EXECUTABLE_DIRECTORY=\'\'; '.
+                'if [ -n "$CAPSTAN_EXECUTABLE_DIRECTORY" ]; then '.$variable.'="$CAPSTAN_EXECUTABLE_DIRECTORY/${'.$variable.'##*/}"; else '.$variable.'=\'\'; fi ;;',
+            '        *) '.$variable.'=\'\' ;;',
+            '    esac',
+            'fi',
+            'unset CAPSTAN_EXECUTABLE_DIRECTORY',
+            '[ -z "$'.$variable.'" ] || { [ -f "$'.$variable.'" ] && [ -x "$'.$variable.'" ]; } || '.$variable.'=\'\'',
         ]);
     }
 
