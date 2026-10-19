@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Machine\MachineRecordBounds;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -48,6 +49,17 @@ class MachineWorkPresence extends Model
             'concurrency_ceiling' => 'integer',
             'observed_at' => 'immutable_datetime',
         ];
+    }
+
+    protected static function booted(): void
+    {
+        static::saving(fn (self $presence) => MachineRecordBounds::presence([
+            'roles' => $presence->roles,
+            'capabilities' => $presence->capabilities,
+            'role_providers' => $presence->role_providers,
+            'current_claimed_item_count' => $presence->current_claimed_item_count,
+            'concurrency_ceiling' => $presence->concurrency_ceiling,
+        ]));
     }
 
     /** @return BelongsTo<Spoke, $this> */

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Machine\MachineRecordBounds;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
@@ -73,6 +74,18 @@ class MachineWorkSettingChange extends Model
 
     protected static function booted(): void
     {
+        static::saving(fn (self $change) => MachineRecordBounds::audit([
+            'old_enabled' => $change->old_enabled,
+            'old_roles' => $change->old_roles,
+            'old_capabilities' => $change->old_capabilities,
+            'old_role_providers' => $change->old_role_providers,
+            'old_concurrency_ceiling' => $change->old_concurrency_ceiling,
+            'new_enabled' => $change->new_enabled,
+            'new_roles' => $change->new_roles,
+            'new_capabilities' => $change->new_capabilities,
+            'new_role_providers' => $change->new_role_providers,
+            'new_concurrency_ceiling' => $change->new_concurrency_ceiling,
+        ]));
         static::updating(static fn () => throw new LogicException('Machine Work setting history is append-only.'));
         static::deleting(static fn () => throw new LogicException('Machine Work setting history is append-only.'));
     }

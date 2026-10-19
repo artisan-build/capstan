@@ -39,7 +39,7 @@ final readonly class WorkOrchestrationCapability
     {
         return $this->authorised($context, $now, function (WorkTask $parent) use ($underTaskId, $attributes, $brief, $context): WorkTask {
             $under = $this->target($parent, $underTaskId, allowParent: true);
-            if (isset($attributes['device_spoke_id']) && ! Spoke::query()->active()
+            if (isset($attributes['device_spoke_id']) && ! Spoke::query()->workEligible()
                 ->whereKey($attributes['device_spoke_id'])->lockForUpdate()->exists()) {
                 throw $this->forbidden('Work host is unavailable.');
             }
@@ -259,7 +259,7 @@ final readonly class WorkOrchestrationCapability
         }
 
         return DB::transaction(function () use ($context, $now, $write): mixed {
-            $spoke = Spoke::query()->active()
+            $spoke = Spoke::query()->workEligible()
                 ->whereKey($context->spokeId)
                 ->where('actor_id', $context->actorId)
                 ->lockForUpdate()

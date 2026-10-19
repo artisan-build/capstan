@@ -26,7 +26,7 @@ final readonly class WorkToolService
     {
         return DB::transaction(function () use ($tool, $input, $actor): array {
             if ($tool === 'create_task') {
-                if (isset($input['device_spoke_id']) && ! Spoke::query()->active()
+                if (isset($input['device_spoke_id']) && ! Spoke::query()->workEligible()
                     ->whereKey($input['device_spoke_id'])->lockForUpdate()->exists()) {
                     throw new ApiErrorException(409, 'spoke_unavailable', 'Work host is unavailable.');
                 }

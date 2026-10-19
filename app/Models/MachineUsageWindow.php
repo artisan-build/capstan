@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Machine\MachineRecordBounds;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -14,6 +15,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property int|null $window_seconds
  * @property string $remaining_percent
  * @property CarbonImmutable|null $resets_at
+ * @property string $window_identity
  * @property-read MachineUsageProvider $provider
  *
  * @mixin IdeHelperMachineUsageWindow
@@ -38,6 +40,16 @@ class MachineUsageWindow extends Model
             'remaining_percent' => 'decimal:3',
             'resets_at' => 'immutable_datetime',
         ];
+    }
+
+    protected static function booted(): void
+    {
+        static::saving(function (self $window): void {
+            $window->setAttribute('window_identity', MachineRecordBounds::window(
+                $window->getAttributes(),
+                $window->exists ? (int) $window->getKey() : null,
+            ));
+        });
     }
 
     /** @return BelongsTo<MachineUsageProvider, $this> */

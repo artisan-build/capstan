@@ -12,9 +12,15 @@ use App\Models\WorkItem;
 use App\Models\WorkTask;
 use App\Postmaster\MachineLifecycle;
 use App\Postmaster\MarkInactiveMachines;
+use ArtisanBuild\BuiltForCloud\Actions\OffboardSubject as OffboardSubjectAction;
+use ArtisanBuild\BuiltForCloud\Actions\RevokeCredential;
+use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\Hmac\SigningRootLifecycle;
-use ArtisanBuild\BuiltForCloud\OffboardedSubject;
+use ArtisanBuild\BuiltForCloud\LifecycleEventType;
+use ArtisanBuild\BuiltForCloud\OffboardOptions;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
@@ -71,12 +77,10 @@ function configuredMachine(Spoke $spoke, User $actor): MachineTeamWorkSetting
 
 function offboardMachineOwner(User $owner): void
 {
-    OffboardedSubject::query()->create([
-        'subject_type' => SubjectType::UserPrincipal,
-        'subject_ref' => 'capstan-user:'.$owner->getKey(),
-        'user_id' => (string) $owner->getKey(),
-        'offboarded_at' => now(),
-    ]);
+    resolve(OffboardSubjectAction::class)(new OffboardOptions(
+        SubjectType::UserPrincipal,
+        'capstan-user:'.$owner->getKey(),
+    ));
 }
 
 test('machine lifecycle precedence is retired orphaned unhealthy inactive active then pending', function (): void {
@@ -141,7 +145,6 @@ test('dead credential reconciliation orphans offboarded owners and retires other
         'credential_id' => $retiredCredential['credential']->id,
     ]);
     offboardMachineOwner($orphanOwner);
-    $orphanCredential['credential']->forceFill(['revoked_at' => now()])->save();
     $retiredCredential['credential']->forceFill(['revoked_at' => now()])->save();
 
     $this->artisan('postmaster:retire-dead-spokes', ['--local' => true])->assertSuccessful();
@@ -205,7 +208,6 @@ test('exact on-machine proof transfers an orphaned machine and preserves its his
         'actor_id' => (string) $oldOwner->getKey(),
         'credential_id' => $old['credential']->id,
         'name' => 'Kept machine history',
-        'orphaned_at' => now(),
     ]);
     configuredMachine($spoke, $oldOwner);
     $inbox = Inbox::query()->create([
@@ -214,7 +216,14 @@ test('exact on-machine proof transfers an orphaned machine and preserves its his
     ]);
     $spoke->inboxes()->attach($inbox);
     offboardMachineOwner($oldOwner);
-    $old['credential']->forceFill(['revoked_at' => now()])->save();
+    $this->artisan('postmaster:retire-dead-spokes', ['--local' => true])->assertSuccessful();
+
+    expect(CredentialAuditEvent::query()
+        ->where('credential_id', $old['credential']->id)
+        ->where('event', LifecycleEventType::Revoked->value)
+        ->where('reason_code', AuditReason::Offboarding->value)
+        ->count())->toBe(1)
+        ->and($spoke->refresh()->orphaned_at)->not->toBeNull();
 
     replaceOrphanedMachine($this, $newOwner, $new, $old['token'])
         ->assertOk()
@@ -227,7 +236,8 @@ test('exact on-machine proof transfers an orphaned machine and preserves its his
         ->and($spoke->credential_id)->toBe($new['credential']->id)
         ->and($spoke->orphaned_at)->toBeNull()
         ->and($spoke->name)->toBe('Kept machine history')
-        ->and($spoke->inboxes()->pluck('inboxes.id')->all())->toBe([$inbox->id])
+        ->and($spoke->inboxes()->count())->toBe(0)
+        ->and($inbox->fresh()->id)->toBe($inbox->id)
         ->and($old['credential']->refresh()->revoked_at)->not->toBeNull();
 });
 
@@ -278,9 +288,10 @@ test('an orphan proof cannot be replayed after a successful transfer', function 
     $spoke = Spoke::query()->create([
         'actor_id' => (string) $oldOwner->getKey(),
         'credential_id' => $old['credential']->id,
-        'orphaned_at' => now(),
     ]);
     configuredMachine($spoke, $oldOwner);
+    offboardMachineOwner($oldOwner);
+    $this->artisan('postmaster:retire-dead-spokes', ['--local' => true])->assertSuccessful();
 
     replaceOrphanedMachine($this, $newOwner, $new, $old['token'])
         ->assertOk()
@@ -303,9 +314,10 @@ test('an orphan with live Work authority cannot transfer or partially mutate', f
     $spoke = Spoke::query()->create([
         'actor_id' => (string) $oldOwner->getKey(),
         'credential_id' => $old['credential']->id,
-        'orphaned_at' => now(),
     ]);
     configuredMachine($spoke, $oldOwner);
+    offboardMachineOwner($oldOwner);
+    $this->artisan('postmaster:retire-dead-spokes', ['--local' => true])->assertSuccessful();
     $task = WorkTask::query()->create([
         'team_id' => Team::default()->id,
         'title' => 'Orphan transfer conflict',
@@ -331,6 +343,42 @@ test('an orphan with live Work authority cannot transfer or partially mutate', f
     expect($spoke->refresh()->actor_id)->toBe((string) $oldOwner->getKey())
         ->and($spoke->credential_id)->toBe($old['credential']->id)
         ->and($spoke->orphaned_at)->not->toBeNull()
-        ->and($old['credential']->refresh()->revoked_at)->toBeNull()
+        ->and($old['credential']->refresh()->revoked_at)->not->toBeNull()
         ->and(Spoke::query()->where('actor_id', (string) $newOwner->getKey())->count())->toBe(1);
 });
+
+test('revocation expiry and non-active state never gain orphan transfer authority', function (string $case): void {
+    $oldOwner = capstanUser();
+    $newOwner = capstanUser();
+    $old = machineLifecycleCredential($oldOwner);
+    $new = machineLifecycleCredential($newOwner);
+    $spoke = Spoke::query()->create([
+        'actor_id' => (string) $oldOwner->getKey(),
+        'credential_id' => $old['credential']->id,
+        'orphaned_at' => now(),
+    ]);
+    configuredMachine($spoke, $oldOwner);
+
+    if ($case === 'explicit revoke before offboarding') {
+        (resolve(RevokeCredential::class))($old['credential']->id);
+        offboardMachineOwner($oldOwner);
+    } elseif ($case === 'explicit revoke after orphaning') {
+        (resolve(RevokeCredential::class))($old['credential']->id);
+    } elseif ($case === 'expired') {
+        $old['credential']->forceFill(['expires_at' => now()->subSecond(), 'revoked_at' => now()])->save();
+    } elseif ($case === 'non-active') {
+        $old['credential']->forceFill(['status' => CredentialStatus::Pending, 'revoked_at' => now()])->save();
+    }
+
+    replaceOrphanedMachine($this, $newOwner, $new, $old['token'])
+        ->assertOk()
+        ->assertJsonPath('replaced', false);
+
+    $unchanged = $spoke->refresh();
+    expect($unchanged->id)->toBe($spoke->id)
+        ->and($unchanged->actor_id)->toBe((string) $oldOwner->getKey())
+        ->and($unchanged->credential_id)->toBe($old['credential']->id)
+        ->and($unchanged->orphaned_at)->not->toBeNull()
+        ->and($unchanged->retired_at)->toBeNull()
+        ->and(Spoke::query()->where('actor_id', (string) $newOwner->getKey())->count())->toBe(1);
+})->with(['explicit revoke before offboarding', 'explicit revoke after orphaning', 'expired', 'non-active']);

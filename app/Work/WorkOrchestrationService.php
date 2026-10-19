@@ -4,6 +4,7 @@ namespace App\Work;
 
 use App\Enums\WorkItemState;
 use App\Features\Work;
+use App\Models\Spoke;
 use App\Models\WorkEscalation;
 use App\Models\WorkItem;
 use App\Models\WorkOrchestrationDecision;
@@ -179,6 +180,11 @@ final readonly class WorkOrchestrationService
         $this->locks->tasks($item->work_task_id);
         $seat = $this->locks->seat($item->workTask);
         $locked = WorkItem::query()->whereKey($item->id)->lockForUpdate()->firstOrFail();
+        $spokeAvailable = Spoke::query()->workEligible()
+            ->whereKey($locked->claimant_spoke_id)
+            ->where('actor_id', $locked->claimant_actor)
+            ->lockForUpdate()
+            ->exists();
         if ($locked->role !== WorkItem::ROLE_ORCHESTRATOR || $locked->state->isTerminal()
             || $locked->state === WorkItemState::Queued || $locked->fence !== $itemFence
             || $seat->fence !== $seatFence || $locked->seat_fence !== $seatFence
@@ -186,7 +192,7 @@ final readonly class WorkOrchestrationService
             || $locked->claimant_actor !== $seat->holder_actor || $locked->claimant_spoke_id !== $seat->holder_spoke_id
             || $locked->lease_until === null || $locked->lease_until->lte($now)
             || $seat->lease_until === null || $seat->lease_until->lte($now)
-            || $locked->workTask->cancelled_at !== null || $seat->stopped_at !== null) {
+            || ! $spokeAvailable || $locked->workTask->cancelled_at !== null || $seat->stopped_at !== null) {
             throw new DomainException('Orchestrator item or seat fence lost.');
         }
 

@@ -3,6 +3,7 @@
 namespace App\Work;
 
 use App\Enums\WorkItemState;
+use App\Models\Spoke;
 use App\Models\WorkItem;
 use App\Models\WorkOrchestratorSeat;
 use Carbon\CarbonImmutable;
@@ -56,6 +57,9 @@ class WorkItemStateService
 
             if ($locked->state !== WorkItemState::Queued) {
                 throw new DomainException("Work item cannot transition from {$locked->state->value} to claimed.");
+            }
+            if (! Spoke::query()->workEligible()->whereKey($claimantSpokeId)->where('actor_id', $claimantActor)->lockForUpdate()->exists()) {
+                throw new DomainException('Work host is unavailable.');
             }
 
             $occurredAt = $at ?? CarbonImmutable::now();
@@ -303,6 +307,9 @@ class WorkItemStateService
             ->where('claimant_spoke_id', $claimantSpokeId)
             ->where('claimant_actor', $claimantActor)
             ->where('lease_until', '>', $at)
+            ->whereIn('claimant_spoke_id', Spoke::query()->workEligible()
+                ->where('actor_id', $claimantActor)
+                ->select('id'))
             ->whereHas('workTask', fn (Builder $query): Builder => $query
                 ->where('team_id', $teamId)
                 ->whereNull('cancelled_at'));

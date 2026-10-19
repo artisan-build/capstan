@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Machine\MachineRecordBounds;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -44,6 +45,16 @@ class MachineTeamWorkSetting extends Model
             'role_providers' => 'array',
             'concurrency_ceiling' => 'integer',
         ];
+    }
+
+    protected static function booted(): void
+    {
+        static::saving(fn (self $setting) => MachineRecordBounds::workProfile([
+            'roles' => $setting->roles,
+            'capabilities' => $setting->capabilities,
+            'role_providers' => $setting->role_providers,
+            'concurrency_ceiling' => $setting->concurrency_ceiling,
+        ]));
     }
 
     /** @return BelongsTo<Spoke, $this> */

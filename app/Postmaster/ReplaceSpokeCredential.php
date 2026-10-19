@@ -10,10 +10,14 @@ use App\Models\WorkOrchestratorSeat;
 use App\Support\BoundCredentialSpokeResolver;
 use ArtisanBuild\BuiltForCloud\Actions\RevokeCredential;
 use ArtisanBuild\BuiltForCloud\AuditActor;
+use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\BoundBearerCredential;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialProtocolBinding;
+use ArtisanBuild\BuiltForCloud\CredentialStatus;
+use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\RolePolicy;
 use ArtisanBuild\BuiltForCloud\User;
@@ -143,6 +147,10 @@ final readonly class ReplaceSpokeCredential
             ->first();
 
         if ($oldCredential === null
+            || $oldCredential->status !== CredentialStatus::Active
+            || $oldCredential->revoked_at === null
+            || ($oldCredential->expires_at !== null && ! $oldCredential->expires_at->isAfter($now))
+            || ! $this->hasOffboardingRevocation($oldCredential)
             || ! CredentialProtocolBinding::query()
                 ->whereKey($oldCredential->id)
                 ->whereIn('app_purpose', [
@@ -175,6 +183,16 @@ final readonly class ReplaceSpokeCredential
         ($this->revokeCredential)($oldCredential->id, AuditActor::boundUser($actorId));
 
         return ['spoke' => $spoke->refresh(), 'replaced' => true, 'conflict' => false];
+    }
+
+    private function hasOffboardingRevocation(Credential $credential): bool
+    {
+        return CredentialAuditEvent::query()
+            ->where('credential_id', $credential->id)
+            ->where('event', LifecycleEventType::Revoked->value)
+            ->where('reason_code', AuditReason::Offboarding->value)
+            ->where('occurred_at', $credential->revoked_at)
+            ->exists();
     }
 
     private function activeApprover(string $actorId): bool

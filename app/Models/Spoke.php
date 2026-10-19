@@ -75,6 +75,13 @@ class Spoke extends Model
         $query->whereNull('retired_at');
     }
 
+    /** @param  Builder<static>  $query */
+    #[Scope]
+    protected function workEligible(Builder $query): void
+    {
+        $query->whereNull('retired_at')->whereNull('orphaned_at');
+    }
+
     /**
      * The inboxes this spoke is currently ready to receive for.
      *

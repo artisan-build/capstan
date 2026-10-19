@@ -152,7 +152,7 @@ abstract class WorkTool extends CapstanTool
                 throw ValidationException::withMessages(['failover' => ['A device pin requires explicit failover.']]);
             }
             if (isset($input['device_spoke_id'])) {
-                $spoke = Spoke::query()->active()->whereKey($input['device_spoke_id'])->first();
+                $spoke = Spoke::query()->workEligible()->whereKey($input['device_spoke_id'])->first();
                 if ($spoke === null || ! User::query()->whereKey($spoke->actor_id)->exists()) {
                     throw ValidationException::withMessages(['device_spoke_id' => ['Work host is unavailable.']]);
                 }

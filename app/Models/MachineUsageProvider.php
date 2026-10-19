@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Machine\MachineRecordBounds;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
@@ -43,6 +44,14 @@ class MachineUsageProvider extends Model
             'source_stale' => 'boolean',
             'expires_at' => 'immutable_datetime',
         ];
+    }
+
+    protected static function booted(): void
+    {
+        static::saving(fn (self $provider) => MachineRecordBounds::provider(
+            $provider->getAttributes(),
+            $provider->exists ? (int) $provider->getKey() : null,
+        ));
     }
 
     /** @return BelongsTo<MachineUsageReport, $this> */

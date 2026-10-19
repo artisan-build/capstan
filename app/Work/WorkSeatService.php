@@ -114,6 +114,9 @@ final readonly class WorkSeatService
         if (! Feature::active(Work::class)) {
             return false;
         }
+        if (! Spoke::query()->workEligible()->whereKey($spoke)->where('actor_id', $actor)->exists()) {
+            return false;
+        }
         $neverHeldTimedOut = $seat !== null && $seat->failover && $seat->fence === 0
             && $seat->holder_actor === null && $seat->active_item_id === $activeItemId
             && $queuedAt !== null && $queuedAt->lte($now->subSeconds(max(1, (int) config('capstan.work.failover_after_seconds', 300))));
@@ -225,7 +228,7 @@ final readonly class WorkSeatService
 
     private function activeSpoke(string $actor, int $spoke): Spoke
     {
-        $active = Spoke::query()->active()
+        $active = Spoke::query()->workEligible()
             ->whereKey($spoke)
             ->where('actor_id', $actor)
             ->lockForUpdate()

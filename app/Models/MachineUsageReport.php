@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Machine\MachineRecordBounds;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
@@ -45,6 +46,11 @@ class MachineUsageReport extends Model
             'last_attempt_at' => 'immutable_datetime',
             'last_success_received_at' => 'immutable_datetime',
         ];
+    }
+
+    protected static function booted(): void
+    {
+        static::saving(fn (self $report) => MachineRecordBounds::report($report->getAttributes()));
     }
 
     /** @return BelongsTo<Spoke, $this> */

@@ -3,6 +3,8 @@
 use App\Auth\CapstanCredentialDeclaration;
 use App\Models\Spoke;
 use App\Models\Team;
+use App\Models\WorkItem;
+use App\Models\WorkTask;
 use ArtisanBuild\BuiltForCloud\ClientIdentity;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\Hmac\SigningRootLifecycle;
@@ -227,4 +229,69 @@ test('an orphaned machine credential cannot poll or claim Work', function (): vo
     ])->assertStatus(401)->assertJsonPath('error.code', 'unauthenticated');
 
     expect(Spoke::query()->count())->toBe(1);
+});
+
+test('a machine credential is isolated from MCP credential management and browser surfaces', function (): void {
+    $owner = capstanUser();
+    $issued = capstanBoundBearer($owner, CapstanCredentialDeclaration::MACHINE);
+    $headers = [
+        'Authorization' => 'Bearer '.$issued['token'],
+        CapstanCredentialDeclaration::ACTOR_HEADER => (string) $owner->getKey(),
+    ];
+
+    foreach (['/mcp', '/mcp/write'] as $uri) {
+        $this->withHeaders($headers)->postJson($uri, [
+            'jsonrpc' => '2.0', 'id' => 1, 'method' => 'tools/list',
+        ])->assertStatus(401);
+    }
+    $this->withHeaders($headers)->getJson('/bfc/credentials')->assertStatus(401);
+    $this->withHeaders($headers)->get('/bfc/device')->assertRedirect(route('bfc.login'));
+    $this->withHeaders($headers)->get('/bfc/me/credentials')->assertRedirect(route('bfc.login'));
+    $this->withHeaders($headers)->postJson('/api/v1/artifacts', [])->assertStatus(401)->assertJsonPath('error.code', 'unauthenticated');
+
+    expect($issued['credential']->refresh()->last_used_at)->toBeNull();
+});
+
+test('machine purpose authenticates claim renew and transition while Postmaster purpose reaches none', function (): void {
+    $team = Team::default();
+    $task = WorkTask::query()->create([
+        'team_id' => $team->id,
+        'title' => 'Machine Work endpoint coverage',
+        'required_capabilities' => [],
+        'timebox_minutes' => 30,
+        'creator_actor' => 'creator',
+    ]);
+    $item = WorkItem::query()->create(['work_task_id' => $task->id, 'role' => 'builder']);
+    $owner = capstanUser();
+    $machine = capstanBoundBearer($owner, CapstanCredentialDeclaration::MACHINE);
+    $machineHeaders = [
+        'Authorization' => 'Bearer '.$machine['token'],
+        CapstanCredentialDeclaration::ACTOR_HEADER => (string) $owner->getKey(),
+    ];
+
+    $claim = $this->withHeaders($machineHeaders)->postJson(route('api.work.claim', $team), [
+        'capacity' => 1, 'roles' => ['builder'], 'capabilities' => [],
+    ])->assertOk()->assertJsonPath('items.0.id', $item->id);
+    $fence = $claim->json('items.0.fence');
+    $this->withHeaders($machineHeaders)->postJson(route('api.work.renew', $team), [
+        'items' => [['item_id' => $item->id, 'fence' => $fence]],
+    ])->assertOk()->assertJsonPath('results.0.status', 'renewed');
+    $this->withHeaders($machineHeaders)->postJson(route('api.work.transition', $team), [
+        'item_id' => $item->id, 'fence' => $fence, 'state' => 'delivered',
+    ])->assertOk()->assertJsonPath('item.state', 'delivered');
+
+    $legacy = capstanBoundBearer($owner, CapstanCredentialDeclaration::POSTMASTER_POLL);
+    $legacyHeaders = [
+        'Authorization' => 'Bearer '.$legacy['token'],
+        CapstanCredentialDeclaration::ACTOR_HEADER => (string) $owner->getKey(),
+    ];
+    $this->withHeaders($legacyHeaders)->postJson(route('api.work.claim', $team), [
+        'capacity' => 1, 'roles' => ['builder'], 'capabilities' => [],
+    ])->assertStatus(401)->assertJsonPath('error.code', 'unauthenticated');
+    $this->withHeaders($legacyHeaders)->postJson(route('api.work.renew', $team), [
+        'items' => [['item_id' => $item->id, 'fence' => $fence]],
+    ])->assertStatus(401)->assertJsonPath('error.code', 'unauthenticated');
+    $this->withHeaders($legacyHeaders)->postJson(route('api.work.transition', $team), [
+        'item_id' => $item->id, 'fence' => $fence, 'state' => 'routed',
+    ])->assertStatus(401)->assertJsonPath('error.code', 'unauthenticated');
 });
