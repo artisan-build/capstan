@@ -61,7 +61,7 @@ test('the snippet starts the fixed package device flow without disclosing durabl
         ->toContain("CAPSTAN_POLL_URL='https://capstan.example/api/v1/poll'")
         ->not->toContain($existing['token'])
         ->not->toContain((string) config('app.key'))
-        ->and($authorization->app_purpose)->toBe(CapstanCredentialDeclaration::POSTMASTER_POLL)
+        ->and($authorization->app_purpose)->toBe(CapstanCredentialDeclaration::MACHINE)
         ->and($authorization->initiating_user_id)->toBe((string) $operator->getKey())
         ->and($authorization->device_code_hash)->toBe(hash('sha256', $device[1]))
         ->and($authorization->user_code_hash)->toBe(hash('sha256', $user[1]))
