@@ -17,12 +17,18 @@ use Symfony\Component\HttpKernel\Exception\HttpException;
 final class WorkWorkerService
 {
     /** @return Builder<WorkItem> */
-    public function activeQuery(): Builder
+    public function recoveryQuery(): Builder
     {
         return WorkItem::query()->whereIn('state', ['claimed', 'delivered', 'routed'])
             ->whereNotNull('claimant_spoke_id')->whereNotNull('claimant_actor')
-            ->whereIn('claimant_spoke_id', Spoke::query()->workEligible()->select('id'))
             ->whereHas('workTask', fn ($query) => $query->whereNull('cancelled_at'));
+    }
+
+    /** @return Builder<WorkItem> */
+    public function activeQuery(): Builder
+    {
+        return $this->recoveryQuery()
+            ->whereIn('claimant_spoke_id', Spoke::query()->workEligible()->select('id'));
     }
 
     /**

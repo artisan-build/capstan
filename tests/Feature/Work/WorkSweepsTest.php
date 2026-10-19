@@ -1,15 +1,21 @@
 <?php
 
+use App\Auth\CapstanCredentialDeclaration;
 use App\Enums\SpokeLiveness;
 use App\Enums\WorkItemState;
 use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkItem;
 use App\Models\WorkTask;
+use App\Postmaster\RetireSpoke;
 use App\Support\BoundCredentialSpokeResolver;
 use App\Work\WorkClaimService;
+use App\Work\WorkItemStateService;
 use App\Work\WorkNotifier;
 use App\Work\WorkSweepService;
+use ArtisanBuild\BuiltForCloud\Actions\OffboardSubject;
+use ArtisanBuild\BuiltForCloud\OffboardOptions;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Date;
@@ -18,7 +24,9 @@ use Laravel\Pennant\Feature;
 
 beforeEach(function (): void {
     config([
+        'app.key' => 'base64:'.base64_encode(str_repeat('s', 32)),
         'capstan.features.work' => true,
+        'capstan.postmaster.server_id' => '01ARZ3NDEKTSV4RRFFQ69G5FAV',
         'capstan.work.missed_heartbeat_seconds' => 180,
         'capstan.work.failover_after_seconds' => 300,
     ]);
@@ -54,6 +62,113 @@ test('lease expiry is an atomic one time release retaining progress', function (
         ->and($item->transitions()->count())->toBe(1)
         ->and($item->transitions()->sole()->actor_id)->toBe('lease-expiry');
 });
+
+test('recovery sweeps requeue claims from newly ineligible machines without restoring authority', function (string $lifecycle): void {
+    $owner = capstanUser();
+    $issued = capstanBoundBearer($owner, CapstanCredentialDeclaration::MACHINE);
+    $team = Team::query()->create(['name' => 'Recovery split', 'slug' => 'recovery-split-'.Str::random(8)]);
+    $task = WorkTask::query()->create([
+        'team_id' => $team->id,
+        'title' => 'Recovery authority split',
+        'required_capabilities' => [],
+        'timebox_minutes' => 30,
+        'creator_actor' => (string) $owner->id,
+    ]);
+    $item = $task->items()->create(['role' => 'builder']);
+    $spoke = Spoke::query()->create([
+        'actor_id' => (string) $owner->id,
+        'credential_id' => $issued['credential']->id,
+    ]);
+    $claimed = resolve(WorkClaimService::class)->claim(
+        $team->id,
+        (string) $owner->id,
+        $spoke->id,
+        ['builder'],
+        [],
+        1,
+        CarbonImmutable::now(),
+        60,
+    );
+    expect($claimed)->toHaveCount(1)
+        ->and($claimed[0]->id)->toBe($item->id);
+    $observedClaim = $claimed[0];
+
+    if ($lifecycle === 'orphaned') {
+        resolve(OffboardSubject::class)(new OffboardOptions(
+            SubjectType::UserPrincipal,
+            'capstan-user:'.$owner->id,
+        ));
+        $this->artisan('postmaster:retire-dead-spokes', ['--local' => true])->assertSuccessful();
+        expect($spoke->refresh()->orphaned_at)->not->toBeNull()
+            ->and($spoke->retired_at)->toBeNull();
+
+        $authorityTime = CarbonImmutable::now()->addSeconds(30);
+        $states = resolve(WorkItemStateService::class);
+        expect($states->renewClaim(
+            $observedClaim, $team->id, $spoke->id, (string) $owner->id,
+            $observedClaim->fence, $authorityTime, $authorityTime->addMinute(),
+        ))->toBeNull()
+            ->and($states->transitionClaim(
+                $observedClaim, WorkItemState::Delivered, $team->id, $spoke->id,
+                (string) $owner->id, $observedClaim->fence, $authorityTime,
+            ))->toBeNull();
+    }
+
+    Date::setTestNow(now()->addMinutes(2));
+    if ($lifecycle === 'retired') {
+        resolve(RetireSpoke::class)->handle($spoke->id, (string) $owner->id, CarbonImmutable::now());
+        expect($spoke->refresh()->retired_at)->not->toBeNull();
+    }
+
+    $states = resolve(WorkItemStateService::class);
+    expect($states->renewClaim(
+        $observedClaim, $team->id, $spoke->id, (string) $owner->id,
+        $observedClaim->fence, CarbonImmutable::now(), CarbonImmutable::now()->addMinute(),
+    ))->toBeNull()
+        ->and($states->transitionClaim(
+            $observedClaim, WorkItemState::Delivered, $team->id, $spoke->id,
+            (string) $owner->id, $observedClaim->fence, CarbonImmutable::now(),
+        ))->toBeNull();
+
+    resolve(WorkSweepService::class)->liveness(CarbonImmutable::now());
+
+    $recovered = $item->fresh();
+    $recovery = $item->transitions()->where('actor_id', 'lease-expiry')->sole();
+    expect($recovered->state)->toBe(WorkItemState::Queued)
+        ->and($recovered->claimant_spoke_id)->toBeNull()
+        ->and($recovered->claimant_actor)->toBeNull()
+        ->and($recovered->claimed_at)->toBeNull()
+        ->and($recovered->lease_until)->toBeNull()
+        ->and($recovered->attempts)->toBe(1)
+        ->and($recovery->from_state)->toBe(WorkItemState::Claimed)
+        ->and($recovery->to_state)->toBe(WorkItemState::Queued)
+        ->and($recovery->actor_kind)->toBe('system')
+        ->and($recovery->actor_id)->toBe('lease-expiry');
+
+    expect(resolve(WorkClaimService::class)->claim(
+        $team->id, (string) $owner->id, $spoke->id, ['builder'], [], 1, CarbonImmutable::now(), 300,
+    ))->toBe([]);
+
+    $replacementOwner = capstanUser();
+    $replacementCredential = capstanBoundBearer($replacementOwner, CapstanCredentialDeclaration::MACHINE);
+    $replacement = Spoke::query()->create([
+        'actor_id' => (string) $replacementOwner->id,
+        'credential_id' => $replacementCredential['credential']->id,
+    ]);
+    $reclaimed = resolve(WorkClaimService::class)->claim(
+        $team->id,
+        (string) $replacementOwner->id,
+        $replacement->id,
+        ['builder'],
+        [],
+        1,
+        CarbonImmutable::now(),
+        300,
+    );
+    expect($reclaimed)->toHaveCount(1)
+        ->and($reclaimed[0]->id)->toBe($item->id)
+        ->and($reclaimed[0]->claimant_spoke_id)->toBe($replacement->id);
+})->with(['orphaned', 'retired']);
 
 test('losing expiry sweep does not requeue a renewed or reclaimed item', function (string $race): void {
     $item = sweepItem(['lease_until' => now()->subSecond(), 'claimed_at' => now()->subMinutes(2)]);

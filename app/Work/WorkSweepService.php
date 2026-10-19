@@ -23,7 +23,7 @@ final readonly class WorkSweepService
             return;
         }
 
-        foreach ($this->workers->activeQuery()->with('workTask')->get() as $item) {
+        foreach ($this->workers->recoveryQuery()->with('workTask')->get() as $item) {
             $afterIdentified?->__invoke($item);
             DB::transaction(function () use ($item, $now): void {
                 resolve(WorkOrchestrationLock::class)->tasks($item->work_task_id);
@@ -62,12 +62,12 @@ final readonly class WorkSweepService
         }
 
         $cutoff = $now->subSeconds(max(1, (int) config('capstan.work.missed_heartbeat_seconds', 180)));
-        $liveSpokes = $this->workers->activeQuery()->where('lease_until', '>', $now)->select('claimant_spoke_id');
+        $liveSpokes = $this->workers->recoveryQuery()->where('lease_until', '>', $now)->select('claimant_spoke_id');
         foreach (Spoke::query()->whereIn('id', $liveSpokes)->get() as $spoke) {
             DB::transaction(function () use ($spoke, $cutoff, $now): void {
                 $updated = Spoke::query()->whereKey($spoke->id)->whereNull('work_heartbeat_notified_at')
                     ->where(fn ($query) => $query->where('last_polled_at', '<=', $cutoff)->orWhereNull('last_polled_at'))
-                    ->whereIn('id', $this->workers->activeQuery()->where('lease_until', '>', $now)->select('claimant_spoke_id'))
+                    ->whereIn('id', $this->workers->recoveryQuery()->where('lease_until', '>', $now)->select('claimant_spoke_id'))
                     ->update(['work_heartbeat_notified_at' => $now]);
                 if ($updated === 1) {
                     $this->notifier->missedHeartbeat($spoke->fresh());
@@ -123,7 +123,7 @@ final readonly class WorkSweepService
     /** @return Builder<WorkItem> */
     private function sameClaim(WorkItem $item): Builder
     {
-        return $this->workers->activeQuery()->whereKey($item->id)->where('fence', $item->fence)->where('state', $item->state->value)
+        return $this->workers->recoveryQuery()->whereKey($item->id)->where('fence', $item->fence)->where('state', $item->state->value)
             ->where('claimed_at', $item->claimed_at);
     }
 
