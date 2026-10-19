@@ -399,32 +399,40 @@ test('window values and nullable duration identity are enforced at the model and
     }
 
     $databaseViolations = [
-        fn () => DB::table('machine_usage_windows')->insert([
+        ['machine_usage_windows', fn () => DB::table('machine_usage_windows')->insert([
             'machine_usage_provider_id' => $provider->id,
             'slot' => 'raw-over', 'kind' => 'consumption', 'window_seconds' => 1,
             'remaining_percent' => 101, 'window_identity' => str_repeat('a', 64),
             'created_at' => now(), 'updated_at' => now(),
-        ]),
-        fn () => DB::table('machine_team_work_settings')->insert([
+        ]), 'invalid machine usage window values', 'machine_usage_windows_values_check'],
+        ['machine_team_work_settings', fn () => DB::table('machine_team_work_settings')->insert([
             'spoke_id' => $machine['spoke']->id, 'team_id' => $machine['team']->id,
             'enabled' => true, 'roles' => '[]', 'capabilities' => '[]', 'role_providers' => '[]',
             'concurrency_ceiling' => 0, 'updated_by_actor' => $machine['actor'],
             'created_at' => now(), 'updated_at' => now(),
-        ]),
-        fn () => DB::table('machine_work_setting_changes')->insert([
+        ]), 'invalid machine work setting ceiling', 'machine_team_work_settings_ceiling_check'],
+        ['machine_work_setting_changes', fn () => DB::table('machine_work_setting_changes')->insert([
             'id' => (string) Str::uuid7(), 'spoke_id' => $machine['spoke']->id, 'team_id' => $machine['team']->id,
             'new_enabled' => true, 'new_roles' => '[]', 'new_capabilities' => '[]', 'new_role_providers' => '[]',
             'new_concurrency_ceiling' => 26, 'updated_by_actor' => $machine['actor'], 'occurred_at' => now(),
-        ]),
-        fn () => DB::table('machine_work_presence')->insert([
+        ]), 'invalid machine work setting change ceiling', 'machine_work_setting_changes_ceilings_check'],
+        ['machine_work_presence', fn () => DB::table('machine_work_presence')->insert([
             'spoke_id' => $machine['spoke']->id,
             'team_id' => $machine['team']->id,
             'roles' => '[]', 'capabilities' => '[]', 'role_providers' => '[]',
             'current_claimed_item_count' => 2, 'concurrency_ceiling' => 1,
             'observed_at' => now(), 'created_at' => now(), 'updated_at' => now(),
-        ]),
+        ]), 'invalid machine work presence counts', 'machine_work_presence_counts_check'],
     ];
-    foreach ($databaseViolations as $violation) {
-        expect(fn () => DB::transaction($violation))->toThrow(QueryException::class);
+    foreach ($databaseViolations as [$table, $violation, $sqliteMessage, $postgresConstraint]) {
+        $before = DB::table($table)->count();
+        try {
+            DB::transaction($violation);
+            test()->fail('Expected the database constraint to reject the invalid row.');
+        } catch (PDOException $exception) {
+            expect($exception->getMessage())->toContain(
+                DB::getDriverName() === 'pgsql' ? $postgresConstraint : $sqliteMessage,
+            )->and(DB::table($table)->count())->toBe($before);
+        }
     }
 });
