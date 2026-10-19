@@ -86,7 +86,7 @@ final class PostmasterSpokesTool extends CapstanTool
         /** @var Collection<int, Spoke> $nameRows */
         $nameRows = Spoke::query()
             ->where('actor_id', $owner->actorId)
-            ->when(! $includeRetired, fn ($query) => $query->whereNull('retired_at'))
+            ->unless($includeRetired, fn ($query) => $query->whereNull('retired_at'))
             ->get(['id', 'actor_id', 'name', 'device_name']);
         $baseNames = $nameRows->mapWithKeys(fn (Spoke $spoke): array => [
             $spoke->id => $this->baseDisplayName($spoke),
@@ -97,7 +97,7 @@ final class PostmasterSpokesTool extends CapstanTool
             ->all();
         $query = Spoke::query()
             ->where('actor_id', $owner->actorId)
-            ->when(! $includeRetired, fn ($query) => $query->whereNull('retired_at'))
+            ->unless($includeRetired, fn ($query) => $query->whereNull('retired_at'))
             ->when($lastId !== null, fn ($query) => $query->where('id', '>', $lastId));
 
         if ($status === SpokeMapStatus::Red) {

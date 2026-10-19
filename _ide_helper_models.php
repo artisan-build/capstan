@@ -320,6 +320,8 @@ namespace App\Models{
  * @property string|null $last_cursor
  * @property SpokeLiveness $probe_status
  * @property CarbonImmutable|null $probe_failed_at
+ * @property CarbonImmutable|null $retired_at
+ * @property string|null $retired_by
  * @property CarbonImmutable $created_at
  * @property CarbonImmutable $updated_at
  * @property-read int|null $inboxes_count

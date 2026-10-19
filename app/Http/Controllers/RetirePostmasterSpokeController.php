@@ -25,6 +25,6 @@ final class RetirePostmasterSpokeController
             return back()->withErrors(['retireSpoke' => $exception->getMessage()]);
         }
 
-        return redirect()->route('postmaster.map')->with('status', __('Postmaster spoke retired.'));
+        return to_route('postmaster.map')->with('status', __('Postmaster spoke retired.'));
     }
 }
