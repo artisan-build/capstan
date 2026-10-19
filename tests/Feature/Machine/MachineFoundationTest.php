@@ -126,7 +126,7 @@ test('machine foundation models cast bounded records and expose their relations'
         ->and($presence->current_claimed_item_count)->toBe(0);
 
     expect(fn () => $change->forceFill(['updated_by_actor' => 'changed'])->save())
-        ->toThrow(\LogicException::class, 'append-only');
+        ->toThrow(LogicException::class, 'append-only');
 });
 
 test('machine foundation uniqueness and foreign key behavior are enforced', function (): void {

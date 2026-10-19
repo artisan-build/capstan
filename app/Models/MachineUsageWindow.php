@@ -15,6 +15,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property string $remaining_percent
  * @property CarbonImmutable|null $resets_at
  * @property-read MachineUsageProvider $provider
+ *
+ * @mixin IdeHelperMachineUsageWindow
  */
 class MachineUsageWindow extends Model
 {

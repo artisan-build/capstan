@@ -19,6 +19,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string $status
  * @property-read MachineUsageReport $report
  * @property-read Collection<int, MachineUsageWindow> $windows
+ *
+ * @mixin IdeHelperMachineUsageProvider
  */
 class MachineUsageProvider extends Model
 {
