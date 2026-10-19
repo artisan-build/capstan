@@ -376,10 +376,11 @@ test('window values and nullable duration identity are enforced at the model and
         'machine_usage_provider_id' => $provider->id,
         'slot' => 'balance', 'kind' => 'balance', 'window_seconds' => null, 'remaining_percent' => '100.000',
     ]);
-    expect(fn () => MachineUsageWindow::query()->create([
+    expect(fn () => DB::transaction(fn () => MachineUsageWindow::query()->create([
         'machine_usage_provider_id' => $provider->id,
         'slot' => 'balance', 'kind' => 'balance', 'window_seconds' => null, 'remaining_percent' => '50.000',
-    ]))->toThrow(QueryException::class);
+    ])))->toThrow(QueryException::class);
+    expect(MachineUsageWindow::query()->where('machine_usage_provider_id', $provider->id)->count())->toBe(1);
 
     foreach ([
         ['slot' => 'bad slot', 'kind' => 'balance', 'window_seconds' => null, 'remaining_percent' => 1],
