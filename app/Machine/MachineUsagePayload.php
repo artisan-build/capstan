@@ -201,7 +201,17 @@ final class MachineUsagePayload
     private function timestamp(mixed $value): CarbonImmutable
     {
         if (! is_string($value) || strlen($value) > 64
-            || preg_match('/\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\z/D', $value) !== 1) {
+            || preg_match(
+                '/\A(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})T(?<hour>\d{2}):(?<minute>\d{2}):(?<second>\d{2})(?:\.\d+)?(?<offset>Z|[+-]\d{2}:\d{2})\z/D',
+                $value,
+                $parts,
+            ) !== 1
+            || (int) $parts['year'] < 1
+            || ! checkdate((int) $parts['month'], (int) $parts['day'], (int) $parts['year'])
+            || (int) $parts['hour'] > 23
+            || (int) $parts['minute'] > 59
+            || (int) $parts['second'] > 59
+            || ($parts['offset'] !== 'Z' && ((int) substr($parts['offset'], 1, 2) > 23 || (int) substr($parts['offset'], 4, 2) > 59))) {
             throw new InvalidArgumentException('Usage timestamp is invalid.');
         }
         try {

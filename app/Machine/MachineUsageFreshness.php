@@ -13,8 +13,7 @@ final class MachineUsageFreshness
         MachineUsageProvider $provider,
         CarbonImmutable $now,
     ): bool {
-        return $report->availability === 'available'
-            && $report->last_success_received_at !== null
+        return $report->last_success_received_at !== null
             && $report->last_success_received_at->greaterThanOrEqualTo($now->subMinutes(10))
             && $provider->fetched_at->greaterThanOrEqualTo($now->subMinutes(15))
             && $provider->fetched_at->lessThanOrEqualTo($now->addMinutes(5))

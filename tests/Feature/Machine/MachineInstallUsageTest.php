@@ -77,7 +77,7 @@ function validMachineUsage(string $provider = 'codex', float $remaining = 72.5):
             'plan' => 'team',
             'fetched_at' => now()->utc()->format('Y-m-d\TH:i:s\Z'),
             'source_stale' => false,
-            'expires_at' => now()->addMinutes(5)->utc()->format('Y-m-d\TH:i:s\Z'),
+            'expires_at' => now()->addMinutes(15)->utc()->format('Y-m-d\TH:i:s\Z'),
             'status' => 'ok',
             'windows' => [[
                 'slot' => 'primary',
@@ -199,6 +199,10 @@ test('poll ingest is latest-only transactional and unavailable attempts preserve
         ->and($report->failure_code)->toBe('timeout')
         ->and($report->providers()->sole()->provider)->toBe('codex')
         ->and($report->last_success_received_at?->equalTo($now))->toBeTrue();
+    $provider = $report->providers()->sole();
+    $freshness = resolve(MachineUsageFreshness::class);
+    expect($freshness->providerIsFresh($report, $provider, CarbonImmutable::now()))->toBeTrue()
+        ->and($freshness->providerIsFresh($report, $provider, $now->addMinutes(10)->addSecond()))->toBeFalse();
 });
 
 test('invalid usage is ignored atomically without blocking routing acknowledgements or presence', function (): void {
@@ -228,12 +232,21 @@ test('usage pre-validation rejects oversized window cardinality and nesting befo
     $issued = capstanBoundBearer($owner, CapstanCredentialDeclaration::MACHINE);
     $usage = validMachineUsage();
 
-    if ($case === 'windows') {
-        $usage['providers'][0]['windows'] = array_fill(0, 9, $usage['providers'][0]['windows'][0]);
-    } elseif ($case === 'bytes') {
-        $usage['forbidden'] = str_repeat('x', 65536);
-    } else {
-        $usage['forbidden'] = ['a' => ['b' => ['c' => ['d' => ['e' => ['f' => ['g' => ['h' => ['i' => true]]]]]]]]];
+    switch ($case) {
+        case 'windows':
+            $usage['providers'][0]['windows'] = array_fill(0, 9, $usage['providers'][0]['windows'][0]);
+            break;
+        case 'bytes':
+            $usage['forbidden'] = str_repeat('x', 65536);
+            break;
+        case 'calendar':
+            $usage['collected_at'] = '2026-02-30T12:00:00Z';
+            break;
+        case 'hour':
+            $usage['collected_at'] = '2026-01-01T24:00:00Z';
+            break;
+        default:
+            $usage['forbidden'] = ['a' => ['b' => ['c' => ['d' => ['e' => ['f' => ['g' => ['h' => ['i' => true]]]]]]]]];
     }
 
     $this->withHeaders(machineUsageHeaders($owner, $issued))->postJson('/api/v1/poll', [
@@ -241,7 +254,7 @@ test('usage pre-validation rejects oversized window cardinality and nesting befo
         'usage' => $usage,
     ])->assertOk()->assertJsonPath('usage_status', 'ignored_invalid');
     expect(MachineUsageReport::query()->count())->toBe(0);
-})->with(['windows', 'bytes', 'depth']);
+})->with(['windows', 'bytes', 'depth', 'calendar', 'hour']);
 
 test('provider freshness is derived from server receipt and bounded source evidence', function (): void {
     $now = CarbonImmutable::parse('2026-10-20T10:00:00Z');

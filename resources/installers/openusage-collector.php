@@ -12,8 +12,32 @@ const CAPSTAN_MAX_WINDOWS = 8;
 /** @return array{stdout: string, exit: int, timed_out: bool, oversized: bool} */
 function capstanRun(array $command, int $wallSeconds, int $suffixAllowance = 0): array
 {
+    if (! function_exists('pcntl_exec') || ! function_exists('posix_setsid') || ! function_exists('posix_kill')) {
+        return ['stdout' => '', 'exit' => 126, 'timed_out' => false, 'oversized' => false];
+    }
+    try {
+        $encodedCommand = json_encode($command, JSON_THROW_ON_ERROR);
+    } catch (Throwable) {
+        return ['stdout' => '', 'exit' => 126, 'timed_out' => false, 'oversized' => false];
+    }
+    $launcher = <<<'PHP'
+$command = json_decode($argv[1], true, 4, JSON_THROW_ON_ERROR);
+if (!is_array($command) || !array_is_list($command) || $command === []) {
+    exit(126);
+}
+foreach ($command as $argument) {
+    if (!is_string($argument)) {
+        exit(126);
+    }
+}
+if (posix_setsid() === -1) {
+    exit(126);
+}
+pcntl_exec($command[0], array_slice($command, 1));
+exit(127);
+PHP;
     $pipes = [];
-    $process = @proc_open($command, [
+    $process = @proc_open([PHP_BINARY, '-d', 'auto_prepend_file=', '-r', $launcher, $encodedCommand], [
         0 => ['pipe', 'r'],
         1 => ['pipe', 'w'],
         2 => ['pipe', 'w'],
@@ -28,9 +52,6 @@ function capstanRun(array $command, int $wallSeconds, int $suffixAllowance = 0):
     stream_set_blocking($pipes[2], false);
     $status = proc_get_status($process);
     $pid = is_int($status['pid'] ?? null) ? $status['pid'] : null;
-    if ($pid !== null && function_exists('posix_setpgid')) {
-        @posix_setpgid($pid, $pid);
-    }
 
     $stdout = '';
     $stderrBytes = 0;
@@ -73,7 +94,7 @@ function capstanRun(array $command, int $wallSeconds, int $suffixAllowance = 0):
 
         if ($oversized || microtime(true) >= $deadline) {
             $timedOut = ! $oversized;
-            if ($pid !== null && function_exists('posix_kill')) {
+            if ($pid !== null) {
                 @posix_kill(-$pid, 15);
                 @time_nanosleep(0, 50_000_000);
                 @posix_kill(-$pid, 9);
@@ -143,7 +164,17 @@ function capstanDecode(string $json): ?array
 function capstanTimestamp(mixed $value): ?string
 {
     if (! is_string($value) || strlen($value) > 64
-        || preg_match('/\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\z/D', $value) !== 1) {
+        || preg_match(
+            '/\A(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})T(?<hour>\d{2}):(?<minute>\d{2}):(?<second>\d{2})(?:\.\d+)?(?<offset>Z|[+-]\d{2}:\d{2})\z/D',
+            $value,
+            $parts,
+        ) !== 1
+        || (int) $parts['year'] < 1
+        || ! checkdate((int) $parts['month'], (int) $parts['day'], (int) $parts['year'])
+        || (int) $parts['hour'] > 23
+        || (int) $parts['minute'] > 59
+        || (int) $parts['second'] > 59
+        || ($parts['offset'] !== 'Z' && ((int) substr($parts['offset'], 1, 2) > 23 || (int) substr($parts['offset'], 4, 2) > 59))) {
         return null;
     }
     try {
@@ -208,7 +239,9 @@ function capstanMergeProvider(array &$providers, string $provider, ?string $plan
         if (strcmp($fetchedAt, $current['fetched_at']) < 0) {
             $current['fetched_at'] = $fetchedAt;
         }
-        $current['source_stale'] = $current['source_stale'] === true || $sourceStale === true;
+        $current['source_stale'] = $current['source_stale'] === null && $sourceStale === null
+            ? null
+            : $current['source_stale'] === true || $sourceStale === true;
         if ($expiresAt !== null && ($current['expires_at'] === null || strcmp($expiresAt, $current['expires_at']) < 0)) {
             $current['expires_at'] = $expiresAt;
         }
@@ -604,7 +637,7 @@ $report = null;
 if (is_string($curl) && str_starts_with($curl, '/') && is_file($curl) && is_executable($curl)) {
     $app = capstanRun([
         $curl, '--silent', '--show-error', '--connect-timeout', '1', '--max-time', '3',
-        '--max-redirs', '0', '--max-filesize', (string) CAPSTAN_MAX_SOURCE_BYTES,
+        '--max-redirs', '0', '--noproxy', '*', '--max-filesize', (string) CAPSTAN_MAX_SOURCE_BYTES,
         '--user-agent', 'capstan-machine/1', '--write-out', "\nCAPSTAN_HTTP_STATUS:%{http_code}",
         'http://127.0.0.1:6736/v1/limits',
     ], 4, 32);

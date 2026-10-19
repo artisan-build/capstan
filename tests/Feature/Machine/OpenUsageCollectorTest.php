@@ -1,6 +1,8 @@
 <?php
 
+use App\Machine\MachineUsagePayload;
 use Illuminate\Support\Facades\File;
+use Symfony\Component\Process\ExecutableFinder;
 use Symfony\Component\Process\Process;
 
 function usageCollectorDirectory(): string
@@ -9,6 +11,31 @@ function usageCollectorDirectory(): string
     File::makeDirectory($directory, 0700, true);
 
     return $directory;
+}
+
+function appUsageWithTimestamp(string $timestamp): string
+{
+    return json_encode([
+        'schema' => 'openusage.limits.v1',
+        'providers' => [
+            'codex' => [
+                'fetchedAt' => $timestamp,
+                'expiresAt' => '2026-10-19T18:05:00Z',
+                'stale' => false,
+                'resources' => ['session' => [
+                    'kind' => 'consumption',
+                    'unit' => 'percent',
+                    'remaining' => 50,
+                    'windowSeconds' => 18000,
+                ]],
+            ],
+        ],
+    ], JSON_THROW_ON_ERROR);
+}
+
+function usageCollectorProcessIsAlive(int $pid): bool
+{
+    return @posix_kill($pid, 0);
 }
 
 /** @return array<string, mixed> */
@@ -176,14 +203,19 @@ test('the CLI adapter uses the exact export command and conservatively collapses
     try {
         $report = runUsageCollector($directory, '{}', $body, 503);
         $encoded = json_encode($report, JSON_THROW_ON_ERROR);
+        $parsed = resolve(MachineUsagePayload::class)->parse(json_decode($encoded, false, 8, JSON_THROW_ON_ERROR));
 
         expect($report['source'])->toBe('openusage-sh')
             ->and($report['source_version'])->toBe('0.26.1')
             ->and($report['providers'][0]['provider'])->toBe('claude')
             ->and($report['providers'][0]['plan'])->toBeNull()
             ->and($report['providers'][0]['fetched_at'])->toBe('2026-10-19T17:58:55Z')
+            ->and($report['providers'][0]['source_stale'])->toBeNull()
+            ->and($report['providers'][0]['expires_at'])->toBeNull()
             ->and($report['providers'][0]['windows'][0]['remaining_percent'])->toBe(70)
             ->and($report['providers'][1]['provider'])->toBe('codex')
+            ->and($report['providers'][1]['source_stale'])->toBeNull()
+            ->and($report['providers'][1]['expires_at'])->toBeNull()
             ->and($report['providers'][1]['windows'][0])->toBe([
                 'slot' => 'primary',
                 'kind' => 'consumption',
@@ -191,6 +223,9 @@ test('the CLI adapter uses the exact export command and conservatively collapses
                 'remaining_percent' => 75,
                 'resets_at' => '2026-10-19T18:00:00Z',
             ])
+            ->and($parsed['source'])->toBe('openusage-sh')
+            ->and($parsed['providers'][0]['source_stale'])->toBeNull()
+            ->and($parsed['providers'][0]['expires_at'])->toBeNull()
             ->and($encoded)->not->toContain($canary)
             ->and($encoded)->not->toContain('private@example.test')
             ->and($encoded)->not->toContain('/secret/path');
@@ -213,6 +248,8 @@ test('invalid schemas percentages durations redirects and trailing JSON fail clo
 })->with([
     'redirect' => ['{}', null, 302, 'incompatible'],
     'app trailing document' => ['{"schema":"openusage.limits.v1"}{}', null, 200, 'invalid_output'],
+    'app impossible calendar date' => [appUsageWithTimestamp('2026-02-30T12:00:00Z'), null, 200, 'invalid_output'],
+    'app hour 24' => [appUsageWithTimestamp('2026-01-01T24:00:00Z'), null, 200, 'invalid_output'],
     'CLI schema integer' => ['{}', '{"schema_version":1,"snapshots":[]}', 503, 'invalid_output'],
     'CLI inconsistent percent' => ['{}', json_encode([
         'schema_version' => '1',
@@ -327,20 +364,84 @@ test('refusal timeout oversize depth and stderr failures stay bounded and saniti
 
 test('the standalone collector terminates the app process group at its wall clock', function (): void {
     $directory = usageCollectorDirectory();
+    $pidFile = $directory.'/descendant.pid';
+    $descendantPid = null;
 
     try {
         expect(function_exists('posix_kill'))->toBeTrue()
-            ->and(function_exists('posix_setpgid'))->toBeTrue();
+            ->and(function_exists('posix_setsid'))->toBeTrue()
+            ->and(function_exists('pcntl_exec'))->toBeTrue();
         $startedAt = microtime(true);
-        $result = runCustomUsageCollector($directory, "#!/bin/sh\nsleep 20\n");
+        $result = runCustomUsageCollector(
+            $directory,
+            "#!/bin/sh\nsleep 20 &\nprintf '%s' \"\$!\" > ".escapeshellarg($pidFile)."\nwait\n",
+        );
         $elapsed = microtime(true) - $startedAt;
+        expect(File::exists($pidFile))->toBeTrue();
+        $descendantPid = (int) trim(File::get($pidFile));
+        $deathDeadline = microtime(true) + 2;
+        while (usageCollectorProcessIsAlive($descendantPid) && microtime(true) < $deathDeadline) {
+            time_nanosleep(0, 10_000_000);
+        }
 
         expect($result['report']['availability'])->toBe('unavailable')
             ->and($result['report']['failure'])->toBe('timeout')
             ->and($result['report']['providers'])->toBe([])
             ->and($elapsed)->toBeGreaterThanOrEqual(3.0)
-            ->and($elapsed)->toBeLessThan(8.0);
+            ->and($elapsed)->toBeLessThan(8.0)
+            ->and($descendantPid)->toBeGreaterThan(1)
+            ->and(usageCollectorProcessIsAlive($descendantPid))->toBeFalse();
     } finally {
+        if (is_int($descendantPid) && $descendantPid > 1 && usageCollectorProcessIsAlive($descendantPid)) {
+            @posix_kill($descendantPid, 9);
+        }
+        File::deleteDirectory($directory);
+    }
+});
+
+test('the fixed loopback request never reaches a configured HTTP proxy', function (): void {
+    $directory = usageCollectorDirectory();
+    $proxy = stream_socket_server('tcp://127.0.0.1:0', $errorCode, $errorMessage);
+    if (! is_resource($proxy)) {
+        throw new RuntimeException("Could not start the proxy listener: {$errorCode} {$errorMessage}");
+    }
+
+    try {
+        $curl = (new ExecutableFinder)->find('curl');
+        if (! is_string($curl) || ! str_starts_with($curl, '/')) {
+            throw new RuntimeException('The proxy isolation test requires an absolute curl executable.');
+        }
+        $proxyAddress = stream_socket_get_name($proxy, false);
+        if (! is_string($proxyAddress)) {
+            throw new RuntimeException('Could not resolve the proxy listener address.');
+        }
+        $proxyUrl = 'http://'.$proxyAddress;
+        $process = new Process([
+            PHP_BINARY,
+            '-d',
+            'auto_prepend_file=',
+            resource_path('installers/openusage-collector.php'),
+            $curl,
+            '',
+            $directory.'/usage-cache.json',
+        ], null, [
+            'http_proxy' => $proxyUrl,
+            'HTTP_PROXY' => $proxyUrl,
+            'all_proxy' => $proxyUrl,
+            'ALL_PROXY' => $proxyUrl,
+            'no_proxy' => '',
+            'NO_PROXY' => '',
+        ]);
+        $process->run();
+        $proxyConnection = @stream_socket_accept($proxy, 0);
+
+        expect($process->isSuccessful())->toBeTrue($process->getErrorOutput())
+            ->and($proxyConnection)->toBeFalse();
+    } finally {
+        if (isset($proxyConnection) && is_resource($proxyConnection)) {
+            fclose($proxyConnection);
+        }
+        fclose($proxy);
         File::deleteDirectory($directory);
     }
 });
@@ -350,6 +451,7 @@ test('the collector pins the fixed loopback and execution bounds', function (): 
 
     expect($source)->toContain("'--connect-timeout', '1', '--max-time', '3'")
         ->and($source)->toContain("'--max-redirs', '0'")
+        ->and($source)->toContain("'--noproxy', '*'")
         ->and($source)->toContain("'http://127.0.0.1:6736/v1/limits'")
         ->and($source)->toContain('[$openusage, \'export\', \'--output\', \'-\', \'--format\', \'json\', \'--source\', \'auto\'], 30')
         ->and($source)->not->toContain('https://api.anthropic.com')
