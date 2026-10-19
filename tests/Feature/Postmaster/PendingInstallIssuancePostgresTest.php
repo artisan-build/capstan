@@ -23,33 +23,38 @@ test('postgres serializes concurrent installer issuance for one actor', function
     config(['app.url' => 'https://capstan.example']);
     $operator = capstanUser();
     $actorId = (string) $operator->getKey();
-    $authorizationId = (string) Str::uuid();
+    $authorizationIds = [
+        1 => (string) Str::uuid(),
+        2 => (string) Str::uuid(),
+    ];
     $now = now();
-    DB::table('credential_authorizations')->insert([
-        'id' => $authorizationId,
-        'flow' => 'device',
-        'device_code_hash' => hash('sha256', 'postgres-device-'.Str::random(16)),
-        'user_code_hash' => hash('sha256', 'postgres-user-'.Str::random(16)),
-        'status' => 'pending',
-        'app_purpose' => 'postmaster.concurrent-issuance',
-        'protocol_purpose' => 'postmaster.concurrent-issuance',
-        'subject_type' => 'user',
-        'subject_ref' => $actorId,
-        'installation_ref' => 'test-installation',
-        'application_ref' => 'test-application',
-        'audience' => 'test-audience',
-        'ownership' => 'user',
-        'abilities' => '[]',
-        'initiating_user_id' => $actorId,
-        'browser_session_nonce_hash' => hash('sha256', 'postgres-browser-'.Str::random(16)),
-        'profile_code_ttl_seconds' => 600,
-        'profile_initial_poll_interval' => 5,
-        'base_interval' => 5,
-        'effective_interval' => 5,
-        'expires_at' => $now->addMinutes(10),
-        'created_at' => $now,
-        'updated_at' => $now,
-    ]);
+    foreach ($authorizationIds as $worker => $authorizationId) {
+        DB::table('credential_authorizations')->insert([
+            'id' => $authorizationId,
+            'flow' => 'device',
+            'device_code_hash' => hash('sha256', 'postgres-device-'.$worker.'-'.Str::random(16)),
+            'user_code_hash' => hash('sha256', 'postgres-user-'.$worker.'-'.Str::random(16)),
+            'status' => 'pending',
+            'app_purpose' => 'postmaster.concurrent-issuance',
+            'protocol_purpose' => 'postmaster.concurrent-issuance',
+            'subject_type' => 'user',
+            'subject_ref' => $actorId,
+            'installation_ref' => 'test-installation',
+            'application_ref' => 'test-application',
+            'audience' => 'test-audience',
+            'ownership' => 'user',
+            'abilities' => '[]',
+            'initiating_user_id' => $actorId,
+            'browser_session_nonce_hash' => hash('sha256', 'postgres-browser-'.$worker.'-'.Str::random(16)),
+            'profile_code_ttl_seconds' => 600,
+            'profile_initial_poll_interval' => 5,
+            'base_interval' => 5,
+            'effective_interval' => 5,
+            'expires_at' => $now->addMinutes(10),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+    }
     $children = [];
     $parentLockOpen = false;
 
@@ -79,7 +84,7 @@ test('postgres serializes concurrent installer issuance for one actor', function
                         throw new RuntimeException('The installer issuance barrier was not released.');
                     }
 
-                    $snippet = new class($authorizationId, $worker) extends OnboardingSnippet
+                    $snippet = new class($authorizationIds[$worker], $worker) extends OnboardingSnippet
                     {
                         public function __construct(
                             private readonly string $authorizationId,
@@ -216,7 +221,7 @@ test('postgres serializes concurrent installer issuance for one actor', function
         DB::purge();
         DB::reconnect();
         DB::table('postmaster_installs')->where('actor_id', $actorId)->delete();
-        DB::table('credential_authorizations')->where('id', $authorizationId)->delete();
+        DB::table('credential_authorizations')->whereIn('id', $authorizationIds)->delete();
         User::query()->whereKey($actorId)->delete();
         DB::connection()->beginTransaction();
     }
