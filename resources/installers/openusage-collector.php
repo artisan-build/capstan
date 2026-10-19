@@ -75,7 +75,7 @@ function capstanRun(array $command, int $wallSeconds, int $suffixAllowance = 0):
             $timedOut = ! $oversized;
             if ($pid !== null && function_exists('posix_kill')) {
                 @posix_kill(-$pid, 15);
-                usleep(50000);
+                @time_nanosleep(0, 50_000_000);
                 @posix_kill(-$pid, 9);
             }
             @proc_terminate($process, 9);

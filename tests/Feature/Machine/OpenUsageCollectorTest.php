@@ -25,6 +25,8 @@ function runUsageCollector(string $directory, string $curlBody, ?string $cliBody
     }
     $process = new Process([
         PHP_BINARY,
+        '-d',
+        'auto_prepend_file=',
         resource_path('installers/openusage-collector.php'),
         $curl,
         $openusage,
@@ -49,7 +51,15 @@ function runCustomUsageCollector(string $directory, string $curlScript, ?string 
         chmod($openusage, 0700);
     }
     $cache = $directory.'/usage-cache.json';
-    $process = new Process([PHP_BINARY, resource_path('installers/openusage-collector.php'), $curl, $openusage, $cache]);
+    $process = new Process([
+        PHP_BINARY,
+        '-d',
+        'auto_prepend_file=',
+        resource_path('installers/openusage-collector.php'),
+        $curl,
+        $openusage,
+        $cache,
+    ]);
     $process->run();
     expect($process->isSuccessful())->toBeTrue($process->getErrorOutput());
 
@@ -315,6 +325,26 @@ test('refusal timeout oversize depth and stderr failures stay bounded and saniti
     'stderr discarded' => ['stderr', 'not_found'],
 ]);
 
+test('the standalone collector terminates the app process group at its wall clock', function (): void {
+    $directory = usageCollectorDirectory();
+
+    try {
+        expect(function_exists('posix_kill'))->toBeTrue()
+            ->and(function_exists('posix_setpgid'))->toBeTrue();
+        $startedAt = microtime(true);
+        $result = runCustomUsageCollector($directory, "#!/bin/sh\nsleep 20\n");
+        $elapsed = microtime(true) - $startedAt;
+
+        expect($result['report']['availability'])->toBe('unavailable')
+            ->and($result['report']['failure'])->toBe('timeout')
+            ->and($result['report']['providers'])->toBe([])
+            ->and($elapsed)->toBeGreaterThanOrEqual(3.0)
+            ->and($elapsed)->toBeLessThan(8.0);
+    } finally {
+        File::deleteDirectory($directory);
+    }
+});
+
 test('the collector pins the fixed loopback and execution bounds', function (): void {
     $source = File::get(resource_path('installers/openusage-collector.php'));
 
@@ -323,5 +353,7 @@ test('the collector pins the fixed loopback and execution bounds', function (): 
         ->and($source)->toContain("'http://127.0.0.1:6736/v1/limits'")
         ->and($source)->toContain('[$openusage, \'export\', \'--output\', \'-\', \'--format\', \'json\', \'--source\', \'auto\'], 30')
         ->and($source)->not->toContain('https://api.anthropic.com')
-        ->and($source)->not->toContain('api.openai.com');
+        ->and($source)->not->toContain('api.openai.com')
+        ->and($source)->not->toContain('Illuminate\\')
+        ->and($source)->not->toContain('vendor/autoload');
 });
