@@ -424,12 +424,17 @@ test('window values and nullable duration identity are enforced at the model and
             'observed_at' => now(), 'created_at' => now(), 'updated_at' => now(),
         ]), 'invalid machine work presence counts', 'machine_work_presence_counts_check'],
     ];
-    foreach ($databaseViolations as [$table, $violation, $sqliteMessage, $postgresConstraint]) {
+    foreach ($databaseViolations as $index => [$table, $violation, $sqliteMessage, $postgresConstraint]) {
         $before = DB::table($table)->count();
+        $savepoint = 'machine_bounds_'.$index;
+        DB::statement('SAVEPOINT '.$savepoint);
         try {
-            DB::transaction($violation);
+            $violation();
+            DB::statement('RELEASE SAVEPOINT '.$savepoint);
             test()->fail('Expected the database constraint to reject the invalid row.');
         } catch (PDOException $exception) {
+            DB::statement('ROLLBACK TO SAVEPOINT '.$savepoint);
+            DB::statement('RELEASE SAVEPOINT '.$savepoint);
             expect($exception->getMessage())->toContain(
                 DB::getDriverName() === 'pgsql' ? $postgresConstraint : $sqliteMessage,
             )->and(DB::table($table)->count())->toBe($before);
