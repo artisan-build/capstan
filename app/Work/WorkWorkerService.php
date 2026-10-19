@@ -4,6 +4,7 @@ namespace App\Work;
 
 use App\Enums\WorkItemState;
 use App\Enums\WorkMilestoneKind;
+use App\Models\Spoke;
 use App\Models\WorkItem;
 use App\Models\WorkMilestone;
 use App\Models\WorkSteer;
@@ -38,6 +39,11 @@ final class WorkWorkerService
             $item = WorkItem::query()->with('workTask')->find($id);
             abort_if($item === null, 409, 'claim lost');
             abort_if($item->state === WorkItemState::Cancelled || $item->workTask->cancelled_at !== null, 410, 'cancelled');
+            $spokeLocked = Spoke::query()->active()
+                ->whereKey($item->claimant_spoke_id)
+                ->where('actor_id', $item->claimant_actor)
+                ->update(['updated_at' => DB::raw('updated_at')]);
+            abort_unless($spokeLocked === 1, 409, 'claim lost');
             $afterIdentified?->__invoke($item);
             resolve(WorkOrchestrationLock::class)->tasks($item->work_task_id);
             $updated = $this->activeQuery()->whereKey($id)->where('fence', $fence)
