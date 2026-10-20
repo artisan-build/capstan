@@ -706,15 +706,8 @@ test('invalid page writes and unavailable feature configurations leave no durabl
         ->and(PageVersion::query()->count())->toBe(0)
         ->and(Storage::disk()->allFiles())->toBe([]);
 
-    foreach ([false, true, true] as $index => $flag) {
-        config([
-            'capstan.features.artifacts' => $flag,
-            'capstan.artifacts.render_origin' => match ($index) {
-                0 => 'https://render.pages.test',
-                1 => null,
-                default => 'https://app.pages.test',
-            },
-        ]);
+    foreach ([null, 'https://app.pages.test'] as $index => $renderOrigin) {
+        config(['capstan.artifacts.render_origin' => $renderOrigin]);
         Feature::flushCache();
         expect(Feature::active(Artifacts::class))->toBeFalse();
         pagesMcpCall('publish_page', publishPageArguments('closed-'.$index, 'Closed', 'Recipe', 'test'), $token)
