@@ -439,7 +439,7 @@ test('rendering several routed spokes uses a bounded query count', function (): 
 
     expect($spokes)->toHaveCount(6)
         ->and($spokes->every(fn (array $spoke): bool => $spoke['inboxes_count'] === 2))->toBeTrue()
-        ->and($queryCount)->toBeLessThanOrEqual(10);
+        ->and($queryCount)->toBeLessThanOrEqual(12);
 });
 
 test('machine owners and managers edit only the selected team Work profile without exposing credential fields', function (): void {
@@ -559,6 +559,31 @@ test('work profile actions reject a tampered team and a team manager attaching a
         ->call('saveWorkProfile', $machine->id)
         ->assertHasErrors('workProfile');
     expect(MachineTeamWorkSetting::query()->where('spoke_id', $machine->id)->where('team_id', $foreignTeam->id)->doesntExist())->toBeTrue();
+});
+
+test('a selected-team manager creates the first profile for a same-team machine', function (): void {
+    $team = Team::default();
+    $owner = capstanUser(['role' => UserRole::Member->value]);
+    $manager = capstanUser(['role' => UserRole::Admin->value]);
+    $machine = createMapSpoke($owner, 'unconfigured team machine', now(), SpokeLiveness::Green);
+
+    Livewire::actingAs($manager)->test(SpokeMap::class)
+        ->call('beginEditingWorkProfile', $machine->id)
+        ->assertSet('editingWorkSpokeId', $machine->id)
+        ->set('workEnabled', true)
+        ->set('workRoles', 'builder')
+        ->set('workCapabilities', '')
+        ->set('workRoleProviders', '{}')
+        ->set('workConcurrencyCeiling', 1)
+        ->call('saveWorkProfile', $machine->id)
+        ->assertHasNoErrors();
+
+    $setting = MachineTeamWorkSetting::query()
+        ->where('spoke_id', $machine->id)
+        ->where('team_id', $team->id)
+        ->sole();
+    expect($setting->roles)->toBe(['builder'])
+        ->and($setting->updated_by_actor)->toBe((string) $manager->id);
 });
 
 test('map ordering stays in id order after rename and status changes', function (): void {

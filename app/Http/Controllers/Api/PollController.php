@@ -117,13 +117,16 @@ class PollController extends Controller
         $serverId = $identity->id();
 
         try {
-            /** @var array{payload: array{inbound: list<array<string, mixed>>, cursor: string|null, probe_challenge?: array{probe_id: string, nonce: string, algorithm: string}}, failure: array{Spoke, SpokeProbe}|null, spoke: Spoke} $result */
-            $result = DB::transaction(function () use ($credential, $actorId, $validation, $envelopes, $serverId, $probeManager, $sender, $acknowledger, $spokes, $pendingProfiles): array {
+            /** @var array{payload: array{inbound: list<array<string, mixed>>, cursor: string|null, probe_challenge?: array{probe_id: string, nonce: string, algorithm: string}}, spoke: Spoke} $result */
+            $result = DB::transaction(function () use ($credential, $actorId, $validation, $envelopes, $serverId, $probeManager, $probeFailureNotifier, $sender, $acknowledger, $spokes, $pendingProfiles): array {
                 $now = CarbonImmutable::now();
                 $spoke = $spokes->resolve($actorId, $credential->id, $now, deviceName: $validation['device_name']);
                 $pendingProfiles->apply($spoke, $actorId, $credential->id);
                 $readyInboxes = array_values(array_unique($validation['ready_inboxes']));
                 $failedProbe = $probeManager->respond($spoke, $validation['probe_response'], $now);
+                if ($failedProbe instanceof SpokeProbe) {
+                    $probeFailureNotifier->notify($spoke, $failedProbe);
+                }
 
                 $this->refreshRouting($spoke, $actorId, $readyInboxes, $validation['cursor'], $now);
                 $this->assertSendersOwned($actorId, $envelopes, $serverId);
@@ -148,24 +151,11 @@ class PollController extends Controller
 
                 return [
                     'payload' => $payload,
-                    'failure' => $failedProbe === null ? null : [$spoke, $failedProbe],
                     'spoke' => $spoke,
                 ];
             });
         } catch (ApiErrorException $rejection) {
             return $rejection->toResponse($request);
-        }
-
-        if ($result['failure'] !== null) {
-            try {
-                $probeFailureNotifier->notify(...$result['failure']);
-            } catch (Throwable $exception) {
-                Log::error('Postmaster probe failure notification failed.', [
-                    'spoke_id' => $result['failure'][0]->id,
-                    'probe_id' => $result['failure'][1]->probe_id,
-                    'exception' => $exception,
-                ]);
-            }
         }
 
         if ($hasUsage) {

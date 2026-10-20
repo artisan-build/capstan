@@ -4,8 +4,10 @@ use App\Auth\CapstanCredentialDeclaration;
 use App\Enums\ProbeStatus;
 use App\Enums\SpokeLiveness;
 use App\Features\Postmaster;
+use App\Machine\MachineConditionNotifier;
 use App\Models\Envelope;
 use App\Models\Inbox;
+use App\Models\MachineConditionState;
 use App\Models\Spoke;
 use App\Models\SpokeProbe;
 use App\Postmaster\DatabaseProbeFailureNotifier;
@@ -15,9 +17,11 @@ use ArtisanBuild\BuiltForCloud\SystemAuthorityContext;
 use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Laravel\Pennant\Feature;
 
@@ -52,6 +56,18 @@ beforeEach(function (): void {
 function probeToken(User $user): string
 {
     return capstanBoundBearer($user, CapstanCredentialDeclaration::POSTMASTER_POLL)['token'];
+}
+
+function createProbeNotificationsTable(): void
+{
+    Schema::create('notifications', function (Blueprint $table): void {
+        $table->uuid('id')->primary();
+        $table->string('type');
+        $table->morphs('notifiable');
+        $table->text('data');
+        $table->timestamp('read_at')->nullable();
+        $table->timestamps();
+    });
 }
 
 test('a correct computed echo passes the probe and marks the spoke green without message side effects', function (): void {
@@ -172,6 +188,125 @@ test('the production probe notifier persists one failure and one successful reco
     expect($owner->fresh()->notifications)->toHaveCount(2)
         ->and($owner->fresh()->notifications->pluck('data.state_transition')->sort()->values()->all())
         ->toBe(['recovered', 'started']);
+});
+
+test('an HTTP first-red notification failure rolls back and the identical response retries once', function (): void {
+    Date::setTestNow('2026-10-20 12:00:00');
+    $this->app->forgetInstance(ProbeFailureNotifier::class);
+    $this->app->bind(ProbeFailureNotifier::class, DatabaseProbeFailureNotifier::class);
+    $owner = capstanUser(['name' => 'HTTP durable probe owner']);
+    $token = probeToken($owner);
+    $challenge = $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+    ])->assertOk()->json('probe_challenge');
+    $response = [
+        'presence' => ['ready_inboxes' => []],
+        'probe_response' => ['probe_id' => $challenge['probe_id'], 'digest' => str_repeat('0', 64)],
+    ];
+
+    Schema::drop('notifications');
+    try {
+        Date::setTestNow('2026-10-20 12:00:01');
+        $this->withToken($token)->postJson('/api/v1/poll', $response)->assertServerError();
+        expect(SpokeProbe::query()->where('probe_id', $challenge['probe_id'])->sole()->status)->toBe(ProbeStatus::Awaiting)
+            ->and(Spoke::query()->sole()->probe_status)->toBe(SpokeLiveness::Unknown)
+            ->and(MachineConditionState::query()->where('finding_code', MachineConditionNotifier::PROBE_FAILURE)->doesntExist())->toBeTrue();
+    } finally {
+        if (! Schema::hasTable('notifications')) {
+            createProbeNotificationsTable();
+        }
+    }
+
+    $this->withToken($token)->postJson('/api/v1/poll', $response)->assertOk();
+    $this->withToken($token)->postJson('/api/v1/poll', $response)->assertOk();
+    expect(SpokeProbe::query()->where('probe_id', $challenge['probe_id'])->sole()->status)->toBe(ProbeStatus::Failed)
+        ->and(Spoke::query()->sole()->probe_status)->toBe(SpokeLiveness::Red)
+        ->and($owner->fresh()->notifications)->toHaveCount(1)
+        ->and($owner->fresh()->notifications->sole()->data['state_transition'])->toBe('started')
+        ->and(MachineConditionState::query()->where('finding_code', MachineConditionNotifier::PROBE_FAILURE)->sole()->active)->toBeTrue();
+});
+
+test('a scheduled first-red notification failure rolls back and remains retryable', function (): void {
+    Date::setTestNow('2026-10-20 12:00:00');
+    $this->app->forgetInstance(ProbeFailureNotifier::class);
+    $this->app->bind(ProbeFailureNotifier::class, DatabaseProbeFailureNotifier::class);
+    $owner = capstanUser(['name' => 'Sweep durable probe owner']);
+    $this->withToken(probeToken($owner))->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+    ])->assertOk();
+
+    Schema::drop('notifications');
+    try {
+        Date::setTestNow('2026-10-20 12:15:00');
+        $this->artisan('postmaster:probe-sweep')
+            ->expectsOutput('Failed 0 overdue probe(s).')
+            ->assertSuccessful();
+        expect(SpokeProbe::query()->sole()->status)->toBe(ProbeStatus::Awaiting)
+            ->and(Spoke::query()->sole()->probe_status)->toBe(SpokeLiveness::Unknown)
+            ->and(MachineConditionState::query()->where('finding_code', MachineConditionNotifier::PROBE_FAILURE)->doesntExist())->toBeTrue();
+    } finally {
+        if (! Schema::hasTable('notifications')) {
+            createProbeNotificationsTable();
+        }
+    }
+
+    $this->artisan('postmaster:probe-sweep')
+        ->expectsOutput('Failed 1 overdue probe(s).')
+        ->assertSuccessful();
+    $this->artisan('postmaster:probe-sweep')
+        ->expectsOutput('Failed 0 overdue probe(s).')
+        ->assertSuccessful();
+    expect(SpokeProbe::query()->sole()->status)->toBe(ProbeStatus::Failed)
+        ->and(Spoke::query()->sole()->probe_status)->toBe(SpokeLiveness::Red)
+        ->and($owner->fresh()->notifications)->toHaveCount(1)
+        ->and($owner->fresh()->notifications->sole()->data['state_transition'])->toBe('started');
+});
+
+test('a recovery notification failure rolls back green state and the identical response retries once', function (): void {
+    Date::setTestNow('2026-10-20 12:00:00');
+    config(['capstan.postmaster.probe.backoff_seconds' => 0]);
+    $this->app->forgetInstance(ProbeFailureNotifier::class);
+    $this->app->bind(ProbeFailureNotifier::class, DatabaseProbeFailureNotifier::class);
+    $owner = capstanUser(['name' => 'Recovery durable probe owner']);
+    $token = probeToken($owner);
+    $failed = $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+    ])->assertOk()->json('probe_challenge');
+    $recovery = $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+        'probe_response' => ['probe_id' => $failed['probe_id'], 'digest' => str_repeat('0', 64)],
+    ])->assertOk()->json('probe_challenge');
+    $response = [
+        'presence' => ['ready_inboxes' => []],
+        'probe_response' => [
+            'probe_id' => $recovery['probe_id'],
+            'digest' => hash('sha256', $recovery['nonce']),
+        ],
+    ];
+
+    $startedNotification = (array) DB::table('notifications')->sole();
+    Schema::drop('notifications');
+    try {
+        $this->withToken($token)->postJson('/api/v1/poll', $response)->assertServerError();
+        expect(SpokeProbe::query()->where('probe_id', $recovery['probe_id'])->sole()->status)->toBe(ProbeStatus::Awaiting)
+            ->and(Spoke::query()->sole()->probe_status)->toBe(SpokeLiveness::Red)
+            ->and(Spoke::query()->sole()->probe_failed_at)->not->toBeNull()
+            ->and(MachineConditionState::query()->where('finding_code', MachineConditionNotifier::PROBE_FAILURE)->sole()->active)->toBeTrue();
+    } finally {
+        if (! Schema::hasTable('notifications')) {
+            createProbeNotificationsTable();
+            DB::table('notifications')->insert($startedNotification);
+        }
+    }
+
+    $this->withToken($token)->postJson('/api/v1/poll', $response)->assertOk();
+    $this->withToken($token)->postJson('/api/v1/poll', $response)->assertOk();
+    expect(SpokeProbe::query()->where('probe_id', $recovery['probe_id'])->sole()->status)->toBe(ProbeStatus::Passed)
+        ->and(Spoke::query()->sole()->probe_status)->toBe(SpokeLiveness::Green)
+        ->and(Spoke::query()->sole()->probe_failed_at)->toBeNull()
+        ->and(MachineConditionState::query()->where('finding_code', MachineConditionNotifier::PROBE_FAILURE)->sole()->active)->toBeFalse()
+        ->and($owner->fresh()->notifications)->toHaveCount(2)
+        ->and($owner->fresh()->notifications->pluck('data.state_transition')->sort()->values()->all())->toBe(['recovered', 'started']);
 });
 
 test('malformed probe responses return the api validation envelope without changing probe state', function (): void {
@@ -473,14 +608,25 @@ test('sweeping a stale probe cannot overwrite a newer successful probe', functio
     ])->assertOk()->assertJsonPath('probe_challenge.algorithm', 'sha256');
 });
 
-test('a throwing notifier does not stop the sweep or lose failed records', function (): void {
-    $this->app->instance(ProbeFailureNotifier::class, new class implements ProbeFailureNotifier
+test('a throwing notifier rolls back one sweep candidate without stopping unrelated candidates', function (): void {
+    $notifier = new class implements ProbeFailureNotifier
     {
+        public int $calls = 0;
+
+        /** @var list<int> */
+        public array $notifications = [];
+
         public function notify(Spoke $spoke, SpokeProbe $probe): void
         {
-            throw new RuntimeException('Notifier unavailable.');
+            $this->calls++;
+            if ($this->calls === 1) {
+                throw new RuntimeException('Notifier unavailable.');
+            }
+
+            $this->notifications[] = $probe->id;
         }
-    });
+    };
+    $this->app->instance(ProbeFailureNotifier::class, $notifier);
     Log::spy();
     Date::setTestNow('2026-08-17 12:00:00');
 
@@ -492,12 +638,22 @@ test('a throwing notifier does not stop the sweep or lose failed records', funct
 
     Date::setTestNow('2026-08-17 12:15:00');
     $this->artisan('postmaster:probe-sweep')
-        ->expectsOutput('Failed 2 overdue probe(s).')
+        ->expectsOutput('Failed 1 overdue probe(s).')
         ->assertSuccessful();
 
+    expect(SpokeProbe::query()->where('status', ProbeStatus::Awaiting->value)->count())->toBe(1)
+        ->and(SpokeProbe::query()->where('status', ProbeStatus::Failed->value)->count())->toBe(1)
+        ->and(Spoke::query()->where('probe_status', SpokeLiveness::Unknown->value)->count())->toBe(1)
+        ->and(Spoke::query()->where('probe_status', SpokeLiveness::Red->value)->count())->toBe(1)
+        ->and($notifier->notifications)->toHaveCount(1);
+    Log::shouldHaveReceived('error')->once();
+
+    $this->artisan('postmaster:probe-sweep')
+        ->expectsOutput('Failed 1 overdue probe(s).')
+        ->assertSuccessful();
     expect(SpokeProbe::query()->where('status', ProbeStatus::Failed->value)->count())->toBe(2)
-        ->and(Spoke::query()->where('probe_status', SpokeLiveness::Red->value)->count())->toBe(2);
-    Log::shouldHaveReceived('error')->twice();
+        ->and(Spoke::query()->where('probe_status', SpokeLiveness::Red->value)->count())->toBe(2)
+        ->and($notifier->notifications)->toHaveCount(2);
 });
 
 test('probe ids are protected by a database unique constraint', function (): void {

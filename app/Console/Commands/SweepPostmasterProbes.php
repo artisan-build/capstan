@@ -40,50 +40,48 @@ class SweepPostmasterProbes extends SystemAuthorityCommand
             ->select(['id', 'spoke_id'])
             ->chunkById(100, function ($candidates) use ($manager, $notifier, $now, &$failed): void {
                 foreach ($candidates as $candidate) {
-                    $transition = DB::transaction(function () use ($candidate, $manager, $now): ?array {
-                        // Match poll's spoke-then-probe lock order to avoid a PostgreSQL deadlock.
-                        $spoke = Spoke::query()->whereKey($candidate->spoke_id)->lockForUpdate()->first();
-                        $probe = SpokeProbe::query()->whereKey($candidate->id)->lockForUpdate()->first();
+                    try {
+                        $transitioned = DB::transaction(function () use ($candidate, $manager, $notifier, $now): bool {
+                            // Match poll's spoke-then-probe lock order to avoid a PostgreSQL deadlock.
+                            $spoke = Spoke::query()->whereKey($candidate->spoke_id)->lockForUpdate()->first();
+                            $probe = SpokeProbe::query()->whereKey($candidate->id)->lockForUpdate()->first();
 
-                        if (! $spoke instanceof Spoke
-                            || ! $probe instanceof SpokeProbe
-                            || $probe->status !== ProbeStatus::Awaiting
-                            || $probe->expires_at->isAfter($now)) {
-                            return null;
-                        }
-
-                        $newerPassed = SpokeProbe::query()
-                            ->where('spoke_id', $spoke->id)
-                            ->where('status', ProbeStatus::Passed->value)
-                            ->where('issued_at', '>', $probe->issued_at)
-                            ->exists();
-
-                        if ($newerPassed) {
-                            $manager->recordFailure($probe, $now, responded: false);
-
-                            return [$spoke, $probe, false];
-                        }
-
-                        $notify = $manager->fail($spoke, $probe, $now, responded: false);
-
-                        return [$spoke, $probe, $notify];
-                    });
-
-                    if ($transition !== null) {
-                        [$spoke, $probe, $notify] = $transition;
-
-                        if ($notify) {
-                            try {
-                                $notifier->notify($spoke, $probe);
-                            } catch (Throwable $exception) {
-                                Log::error('Postmaster probe failure notification failed.', [
-                                    'spoke_id' => $spoke->id,
-                                    'probe_id' => $probe->probe_id,
-                                    'exception' => $exception,
-                                ]);
+                            if (! $spoke instanceof Spoke
+                                || ! $probe instanceof SpokeProbe
+                                || $probe->status !== ProbeStatus::Awaiting
+                                || $probe->expires_at->isAfter($now)) {
+                                return false;
                             }
-                        }
 
+                            $newerPassed = SpokeProbe::query()
+                                ->where('spoke_id', $spoke->id)
+                                ->where('status', ProbeStatus::Passed->value)
+                                ->where('issued_at', '>', $probe->issued_at)
+                                ->exists();
+
+                            if ($newerPassed) {
+                                $manager->recordFailure($probe, $now, responded: false);
+
+                                return true;
+                            }
+
+                            if ($manager->fail($spoke, $probe, $now, responded: false)) {
+                                $notifier->notify($spoke, $probe);
+                            }
+
+                            return true;
+                        });
+                    } catch (Throwable $exception) {
+                        Log::error('Postmaster probe failure notification failed.', [
+                            'spoke_id' => $candidate->spoke_id,
+                            'probe_id' => $candidate->id,
+                            'exception' => $exception,
+                        ]);
+
+                        continue;
+                    }
+
+                    if ($transitioned) {
                         $failed++;
                     }
                 }

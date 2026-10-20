@@ -9,10 +9,6 @@ use App\Models\MachineUsageWindow;
 use App\Models\Spoke;
 use App\Models\Team;
 use App\Postmaster\MachineLifecycle;
-use ArtisanBuild\BuiltForCloud\OffboardedSubject;
-use ArtisanBuild\BuiltForCloud\RolePolicy;
-use ArtisanBuild\BuiltForCloud\Subject;
-use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -26,6 +22,7 @@ final readonly class MachineBudgetProjection
         private MachineUsageFreshness $freshness,
         private MachineLifecycle $lifecycle,
         private TeamMemberships $memberships,
+        private MachineWorkProfiles $workProfiles,
     ) {}
 
     /**
@@ -73,14 +70,15 @@ final readonly class MachineBudgetProjection
         $duplicateNames = $machines->groupBy(
             fn (Spoke $machine): string => $machine->actor_id."\0".$baseNames[$machine->id],
         )->map->count()->all();
+        $workPermissions = $this->workProfiles->permissions($team, $viewer, $machines, $owners, true);
         $items = array_values($machines->map(fn (Spoke $machine): array => $this->machine(
             $machine,
-            $owners[$machine->actor_id] ?? __('Former member'),
+            $this->ownerName($owners->get($machine->actor_id)),
             $duplicateNames[$machine->actor_id."\0".$baseNames[$machine->id]] > 1
                 ? $baseNames[$machine->id].' (#'.$machine->id.')'
                 : $baseNames[$machine->id],
             (string) $viewer->getKey(),
-            RolePolicy::canManageMembers($viewer->role),
+            $workPermissions[$machine->id] ?? false,
             $now,
         ))->values()->all());
         $people = $this->people($items);
@@ -102,33 +100,36 @@ final readonly class MachineBudgetProjection
 
     private function authorize(User $viewer): void
     {
-        $actorId = (string) $viewer->getKey();
-        if ($viewer->status !== 'active'
-            || ! RolePolicy::canUseProduct($viewer->role)
-            || OffboardedSubject::subjectIsOffboarded(new Subject(SubjectType::UserPrincipal, 'capstan-user:'.$actorId))
-            || OffboardedSubject::userIsOffboarded($actorId)) {
+        if (! $this->workProfiles->isAdmitted($viewer)) {
             throw new AuthorizationException('The selected team is unavailable.');
         }
     }
 
     /**
      * @param  Collection<int, Spoke>  $machines
-     * @return array<string, string>
+     * @return Collection<string, User>
      */
-    private function owners(Collection $machines): array
+    private function owners(Collection $machines): Collection
     {
         $ids = $machines->pluck('actor_id')
             ->filter(fn (mixed $id): bool => is_string($id) && preg_match('/\A[1-9][0-9]{0,18}\z/D', $id) === 1)
             ->unique()->values()->all();
 
-        return User::query()->whereIn('id', $ids)->get(['id', 'name'])
-            ->mapWithKeys(fn (User $user): array => [
-                (string) $user->getKey() => trim($user->name) !== '' ? trim($user->name) : __('Member'),
-            ])->all();
+        return User::query()->whereIn('id', $ids)->get()
+            ->keyBy(fn (User $user): string => (string) $user->getKey());
+    }
+
+    private function ownerName(?User $owner): string
+    {
+        if (! $owner instanceof User) {
+            return __('Former member');
+        }
+
+        return trim($owner->name) !== '' ? trim($owner->name) : __('Member');
     }
 
     /** @return array<string, mixed> */
-    private function machine(Spoke $machine, string $ownerName, string $displayName, string $viewerId, bool $canManageMembers, CarbonImmutable $now): array
+    private function machine(Spoke $machine, string $ownerName, string $displayName, string $viewerId, bool $canManageWork, CarbonImmutable $now): array
     {
         $setting = $machine->workSettings->first();
         $report = $machine->usageReport;
@@ -156,7 +157,7 @@ final readonly class MachineBudgetProjection
             'work_enabled' => $setting instanceof MachineTeamWorkSetting && $setting->enabled,
             'can_rename' => $isOwner,
             'can_retire' => $isOwner,
-            'can_manage_work' => $machine->orphaned_at === null && ($isOwner || $canManageMembers),
+            'can_manage_work' => $canManageWork,
             'reactivation_required' => $machine->orphaned_at !== null,
             'usage' => [
                 'availability' => $report instanceof MachineUsageReport ? $report->availability : 'unknown',

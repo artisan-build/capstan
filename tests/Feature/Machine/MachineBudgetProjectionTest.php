@@ -2,6 +2,7 @@
 
 use App\Livewire\Postmaster\SpokeMap;
 use App\Machine\MachineBudgetProjection;
+use App\Machine\MachineWorkProfiles;
 use App\Models\MachineTeamWorkSetting;
 use App\Models\MachineUsageReport;
 use App\Models\Spoke;
@@ -132,6 +133,50 @@ test('membership is checked before projection and org administrators receive no 
     $team = Team::query()->create(['name' => 'Unshared', 'slug' => 'unshared-budget']);
 
     expect(fn () => resolve(MachineBudgetProjection::class)->forTeam($admin, $team->id, now()))
+        ->toThrow(AuthorizationException::class);
+});
+
+test('projection and writer share the selected-team Work-profile permission', function (): void {
+    $team = Team::default();
+    $manager = capstanUser(['role' => UserRole::Admin->value]);
+    $sameTeamOwner = capstanUser(['role' => UserRole::Member->value]);
+    $foreignOwner = capstanUser(['role' => UserRole::Member->value]);
+    DB::table('team_user')->where('team_id', $team->id)->where('user_id', $foreignOwner->id)->delete();
+    $sameTeamMachine = Spoke::query()->create([
+        'actor_id' => (string) $sameTeamOwner->id,
+        'credential_id' => (string) Str::uuid(),
+        'credential_backed' => true,
+        'name' => 'Same-team unconfigured machine',
+    ]);
+    $foreignMachine = Spoke::query()->create([
+        'actor_id' => (string) $foreignOwner->id,
+        'credential_id' => (string) Str::uuid(),
+        'credential_backed' => true,
+        'name' => 'Foreign unconfigured machine',
+    ]);
+    $profile = [
+        'enabled' => true,
+        'roles' => ['builder'],
+        'capabilities' => [],
+        'role_providers' => [],
+        'concurrency_ceiling' => 1,
+    ];
+
+    $projection = resolve(MachineBudgetProjection::class)->forTeam($manager, $team->id, now());
+    $permissions = collect($projection['machines'])->keyBy('machine_id')->map->can_manage_work;
+    expect($permissions[$sameTeamMachine->id])->toBeTrue()
+        ->and($permissions[$foreignMachine->id])->toBeFalse();
+
+    $profiles = resolve(MachineWorkProfiles::class);
+    expect($profiles->put($sameTeamMachine, $team, $manager, $profile, now()))->toBeTrue();
+    expect(fn () => $profiles->put($foreignMachine, $team, $manager, $profile, now()))
+        ->toThrow(AuthorizationException::class);
+
+    $otherTeamManager = capstanUser(['role' => UserRole::Owner->value]);
+    DB::table('team_user')->where('team_id', $team->id)->where('user_id', $otherTeamManager->id)->delete();
+    expect(fn () => $profiles->put($sameTeamMachine, $team, $otherTeamManager, $profile, now()))
+        ->toThrow(AuthorizationException::class);
+    expect(fn () => resolve(MachineBudgetProjection::class)->forTeam($otherTeamManager, $team->id, now()))
         ->toThrow(AuthorizationException::class);
 });
 
