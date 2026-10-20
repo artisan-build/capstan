@@ -9,7 +9,10 @@ use App\Models\Team;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Date;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Laravel\Pennant\Feature;
 use Livewire\Livewire;
@@ -84,6 +87,18 @@ test('one team-scoped projection drives web budgets without cross-team or email 
     $second = budgetMachine($owner, $team, 'Second', ['builder' => 'codex']);
     $orphan = budgetMachine($otherOwner, $team, 'Orphan', ['builder' => 'codex'], ['orphaned_at' => now()]);
     budgetMachine($owner, $foreignTeam, 'Foreign machine', ['builder' => 'claude']);
+    $legacy = Spoke::query()->create([
+        'actor_id' => (string) $owner->id,
+        'credential_id' => (string) Str::uuid(),
+        'credential_backed' => true,
+        'name' => 'Legacy machine',
+    ]);
+    $synthetic = Spoke::query()->create([
+        'actor_id' => (string) $owner->id,
+        'credential_id' => (string) Str::uuid(),
+        'credential_backed' => false,
+        'name' => 'Synthetic delegated spoke',
+    ]);
     budgetUsage($first, 'codex', 70, now()->addHours(4)->toJSON(), [[
         'slot' => 'shorter', 'kind' => 'consumption', 'window_seconds' => 3600,
         'remaining_percent' => 90, 'resets_at' => now()->addHour()->toJSON(),
@@ -95,7 +110,7 @@ test('one team-scoped projection drives web budgets without cross-team or email 
     $encoded = json_encode($projection, JSON_THROW_ON_ERROR);
 
     expect($web)->toBe($projection)
-        ->and(array_column($projection['machines'], 'name'))->toBe(['First', 'Second', 'Orphan'])
+        ->and(array_column($projection['machines'], 'name'))->toBe(['First', 'Second', 'Orphan', 'Legacy machine'])
         ->and(data_get($projection, 'machines.2.reactivation_required'))->toBeTrue()
         ->and($projection['people'])->toHaveCount(2)
         ->and(data_get($projection, 'people.0.providers.0.machines'))->toHaveCount(2)
@@ -106,7 +121,10 @@ test('one team-scoped projection drives web budgets without cross-team or email 
         ->and($encoded)->not->toContain('private-owner@example.test')
         ->and($encoded)->not->toContain('private-other@example.test')
         ->and($encoded)->not->toContain($first->credential_id)
-        ->and($encoded)->not->toContain('Foreign machine');
+        ->and($encoded)->not->toContain('Foreign machine')
+        ->and($encoded)->not->toContain('Synthetic delegated spoke')
+        ->and($projection['machines'][3]['machine_id'])->toBe($legacy->id)
+        ->and(collect($projection['machines'])->pluck('machine_id'))->not->toContain($synthetic->id);
 });
 
 test('membership is checked before projection and org administrators receive no bypass', function (): void {
@@ -139,4 +157,36 @@ test('inactive users are denied before machine representation', function (): voi
 
     expect(fn () => resolve(MachineBudgetProjection::class)->forTeam($viewer, Team::default()->id, now()))
         ->toThrow(AuthorizationException::class);
+});
+
+test('team membership migration backfills in the database and provides the user-first index', function (): void {
+    $default = DB::getDefaultConnection();
+    config(['database.connections.team_membership_migration' => [
+        'driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '', 'foreign_key_constraints' => true,
+    ]]);
+    DB::setDefaultConnection('team_membership_migration');
+
+    try {
+        Schema::create('teams', function (Blueprint $table): void {
+            $table->id();
+            $table->boolean('is_default')->default(false);
+        });
+        Schema::create('users', fn (Blueprint $table) => $table->id());
+        DB::table('teams')->insert(['id' => 7, 'is_default' => true]);
+        DB::table('users')->insert([['id' => 10], ['id' => 20], ['id' => 30]]);
+
+        $migration = require database_path('migrations/2026_10_20_015000_create_team_user_table.php');
+        $migration->up();
+        expect(DB::table('team_user')->orderBy('user_id')->get(['team_id', 'user_id'])->map(fn ($row): array => (array) $row)->all())->toBe([
+            ['team_id' => 7, 'user_id' => 10],
+            ['team_id' => 7, 'user_id' => 20],
+            ['team_id' => 7, 'user_id' => 30],
+        ])->and(collect(Schema::getIndexes('team_user'))->pluck('name'))->toContain('team_user_user_team_index');
+
+        $migration->down();
+        expect(Schema::hasTable('team_user'))->toBeFalse();
+    } finally {
+        DB::disconnect('team_membership_migration');
+        DB::setDefaultConnection($default);
+    }
 });

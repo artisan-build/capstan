@@ -11,6 +11,16 @@ final class MachineFindingPayload
 {
     public const int MAX_FINDINGS = 25;
 
+    public const int MAX_ENCODED_BYTES = 4080;
+
+    public const int MAX_MEMBER_ENCODED_BYTES = 203;
+
+    public const int MAX_CODE_BYTES = 64;
+
+    public const int MAX_SEVERITY_BYTES = 9;
+
+    public const int MAX_OBSERVED_AT_BYTES = 29;
+
     /** @return array{accepted: list<array{code: string, recovered: bool, observed_at: CarbonImmutable}>, ignored_unknown: int, ignored_invalid: int} */
     public function parse(mixed $raw): array
     {
@@ -23,6 +33,10 @@ final class MachineFindingPayload
         if (count($raw) > self::MAX_FINDINGS) {
             return ['accepted' => [], 'ignored_unknown' => 0, 'ignored_invalid' => count($raw)];
         }
+        $encoded = json_encode($raw, JSON_UNESCAPED_SLASHES);
+        if (! is_string($encoded) || strlen($encoded) > self::MAX_ENCODED_BYTES) {
+            return ['accepted' => [], 'ignored_unknown' => 0, 'ignored_invalid' => count($raw)];
+        }
 
         $accepted = [];
         $unknown = 0;
@@ -33,13 +47,23 @@ final class MachineFindingPayload
 
                 continue;
             }
+            $encodedFinding = json_encode($finding, JSON_UNESCAPED_SLASHES);
+            if (! is_string($encodedFinding) || strlen($encodedFinding) > self::MAX_MEMBER_ENCODED_BYTES) {
+                $invalid++;
+
+                continue;
+            }
             $values = get_object_vars($finding);
-            if (array_diff(array_keys($values), ['code', 'severity', 'observed_at']) !== []
+            $keys = array_keys($values);
+            sort($keys, SORT_STRING);
+            if (count($values) !== 3 || $keys !== ['code', 'observed_at', 'severity']
                 || ! is_string($values['code'] ?? null)
-                || strlen($values['code']) > 64
+                || strlen($values['code']) > self::MAX_CODE_BYTES
                 || ! is_string($values['severity'] ?? null)
+                || strlen($values['severity']) > self::MAX_SEVERITY_BYTES
                 || ! in_array($values['severity'], ['warning', 'critical', 'recovered'], true)
-                || ! is_string($values['observed_at'] ?? null)) {
+                || ! is_string($values['observed_at'] ?? null)
+                || strlen($values['observed_at']) > self::MAX_OBSERVED_AT_BYTES) {
                 $invalid++;
 
                 continue;

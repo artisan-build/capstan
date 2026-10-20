@@ -12,7 +12,6 @@ use App\Models\Team;
 use App\Postmaster\PendingInstallLinks;
 use App\Postmaster\RetireSpoke;
 use ArtisanBuild\BuiltForCloud\Contracts\IdentityContext;
-use ArtisanBuild\BuiltForCloud\RolePolicy;
 use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
 use DomainException;
@@ -146,11 +145,17 @@ class SpokeMap extends Component
         }
     }
 
-    public function beginEditingWorkProfile(int $spokeId, InitialMachineWorkProfile $defaults): void
-    {
+    public function beginEditingWorkProfile(
+        int $spokeId,
+        InitialMachineWorkProfile $defaults,
+        MachineWorkProfiles $profiles,
+    ): void {
         $this->guardFeature();
-        $spoke = $this->manageableWorkSpoke($spokeId);
         $team = $this->selectedTeam();
+        $spoke = Spoke::query()->whereNull('retired_at')->findOrFail($spokeId);
+        $actor = request()->user();
+        abort_unless($actor instanceof User, 401);
+        $profiles->authorize($spoke, $team, $actor);
         $setting = $spoke->workSettings()->where('team_id', $team->id)->first();
         $profile = $setting === null ? $defaults->default() : [
             'enabled' => $setting->enabled,
@@ -180,8 +185,9 @@ class SpokeMap extends Component
     public function saveWorkProfile(int $spokeId, MachineWorkProfiles $profiles): void
     {
         $this->guardFeature();
-        $spoke = $this->manageableWorkSpoke($spokeId);
-        abort_unless($this->editingWorkSpokeId === $spoke->id && $this->editingWorkTeamId !== null, 409);
+        $team = $this->selectedTeam();
+        abort_unless($this->editingWorkSpokeId === $spokeId && $this->editingWorkTeamId === $team->id, 409);
+        $spoke = Spoke::query()->whereNull('retired_at')->findOrFail($spokeId);
         $validated = $this->validate([
             'workEnabled' => ['required', 'boolean'],
             'workRoles' => ['present', 'string', 'max:1624'],
@@ -197,7 +203,6 @@ class SpokeMap extends Component
             }
             $actor = request()->user();
             abort_unless($actor instanceof User, 401);
-            $team = Team::query()->findOrFail($this->editingWorkTeamId);
             /** @var array<string, string> $providers */
             $profiles->put($spoke, $team, $actor, [
                 'enabled' => $validated['workEnabled'],
@@ -222,16 +227,6 @@ class SpokeMap extends Component
 
         $spoke = Spoke::query()->whereNull('retired_at')->findOrFail($spokeId);
         abort_unless(hash_equals((string) $user->getKey(), $spoke->actor_id), 403);
-
-        return $spoke;
-    }
-
-    private function manageableWorkSpoke(int $spokeId): Spoke
-    {
-        $user = request()->user();
-        abort_unless($user instanceof User, 401);
-        $spoke = Spoke::query()->whereNull('retired_at')->findOrFail($spokeId);
-        abort_unless(hash_equals((string) $user->getKey(), $spoke->actor_id) || RolePolicy::canManageMembers($user->role), 403);
 
         return $spoke;
     }

@@ -779,6 +779,18 @@ test('machine budgets MCP returns the shared team-scoped projection', function (
             'last_polled_at' => now(),
             'probe_status' => 'green',
         ]);
+        $legacy = Spoke::query()->create([
+            'actor_id' => (string) $owner->id,
+            'credential_id' => (string) Str::uuid(),
+            'credential_backed' => true,
+            'name' => 'Legacy budget machine',
+        ]);
+        $synthetic = Spoke::query()->create([
+            'actor_id' => (string) $owner->id,
+            'credential_id' => (string) Str::uuid(),
+            'credential_backed' => false,
+            'name' => 'Synthetic delegated budget spoke',
+        ]);
         MachineTeamWorkSetting::query()->create([
             'spoke_id' => $machine->id,
             'team_id' => $team->id,
@@ -794,6 +806,9 @@ test('machine budgets MCP returns the shared team-scoped projection', function (
         $actual = capstanMcpReadStructured(capstanMcpReadCall('machine_budgets', ['team_id' => $team->id], $token));
         $expected = resolve(MachineBudgetProjection::class)->forTeam($viewer, $team->id, now());
         expect($actual)->toBe($expected)
+            ->and(array_column($actual['machines'], 'name'))->toBe(['Budget machine', 'Legacy budget machine'])
+            ->and(collect($actual['machines'])->pluck('machine_id'))->toContain($legacy->id)
+            ->and(collect($actual['machines'])->pluck('machine_id'))->not->toContain($synthetic->id)
             ->and(json_encode($actual, JSON_THROW_ON_ERROR))->not->toContain('private-budget@example.test')
             ->and(json_encode($actual, JSON_THROW_ON_ERROR))->not->toContain($machine->credential_id);
     } finally {

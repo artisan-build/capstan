@@ -29,20 +29,21 @@ final class MachineWorkProfiles
      */
     public function put(Spoke $machine, Team $team, User $actor, array $profile, CarbonImmutable $now): bool
     {
-        $this->authorize($machine, $actor);
+        $this->authorize($machine, $team, $actor);
         $profile = $this->normalize($profile);
         MachineRecordBounds::workProfile($profile);
 
         return DB::transaction(function () use ($machine, $team, $actor, $profile, $now): bool {
             $lockedMachine = Spoke::query()->whereKey($machine->id)->lockForUpdate()->firstOrFail();
             $lockedTeam = Team::query()->whereKey($team->id)->lockForUpdate()->firstOrFail();
-            $this->authorize($lockedMachine, $actor);
+            $lockedActor = User::query()->whereKey($actor->getKey())->lockForUpdate()->firstOrFail();
 
             $setting = MachineTeamWorkSetting::query()
                 ->where('spoke_id', $lockedMachine->id)
                 ->where('team_id', $lockedTeam->id)
                 ->lockForUpdate()
                 ->first();
+            $this->authorize($lockedMachine, $lockedTeam, $lockedActor, $setting !== null, lockMembership: true);
             $old = $setting === null ? null : $this->values($setting);
 
             if ($old === $profile) {
@@ -76,16 +77,32 @@ final class MachineWorkProfiles
         });
     }
 
-    private function authorize(Spoke $machine, User $actor): void
-    {
+    public function authorize(
+        Spoke $machine,
+        Team $team,
+        User $actor,
+        ?bool $hasExistingSetting = null,
+        bool $lockMembership = false,
+    ): void {
         $actorId = (string) $actor->getKey();
         $admitted = $actor->status === 'active'
             && ! OffboardedSubject::userIsOffboarded($actorId)
             && DomainIdentityContext::forUser($actor, InstallationAuthority::current())->canUseProduct();
+        $membership = DB::table('team_user')
+            ->where('user_id', $actor->getKey())
+            ->where('team_id', $team->id);
+        $belongsToTeam = $lockMembership
+            ? $membership->lockForUpdate()->first(['user_id']) !== null
+            : $membership->exists();
         $ownsMachine = hash_equals($machine->actor_id, $actorId);
+        $hasExistingSetting ??= MachineTeamWorkSetting::query()
+            ->where('spoke_id', $machine->id)
+            ->where('team_id', $team->id)
+            ->exists();
+        $teamManagerUpdatingExisting = RolePolicy::canManageMembers($actor->role) && $hasExistingSetting;
 
-        if (! $admitted || (! $ownsMachine && ! RolePolicy::canManageMembers($actor->role))) {
-            throw new AuthorizationException('Only the machine owner or an Owner or Admin may change its Work profile.');
+        if (! $admitted || ! $belongsToTeam || (! $ownsMachine && ! $teamManagerUpdatingExisting)) {
+            throw new AuthorizationException('Only a target-team machine owner or manager may change its Work profile.');
         }
     }
 

@@ -8,6 +8,7 @@ use App\Models\Spoke;
 use App\Notifications\MachineConditionNotification;
 use App\Postmaster\MarkInactiveMachines;
 use App\Support\BoundCredentialSpokeResolver;
+use Illuminate\Database\QueryException;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
@@ -83,6 +84,30 @@ test('inactivity sweep and a later authenticated poll emit one transition and re
         ->and($owner->fresh()->notifications->pluck('data.state_transition')->sort()->values()->all())->toBe(['recovered', 'started']);
 });
 
+test('an inactivity notification failure rolls back the lifecycle transition and remains retryable', function (): void {
+    [$owner, $machine] = conditionMachine();
+    $machine->forceFill(['last_polled_at' => now()->subMinutes(6)])->save();
+    Schema::drop('notifications');
+
+    expect(fn () => (resolve(MarkInactiveMachines::class))(now()))->toThrow(QueryException::class);
+    expect($machine->refresh()->inactive_at)->toBeNull()
+        ->and(MachineConditionState::query()->where('spoke_id', $machine->id)->doesntExist())->toBeTrue();
+
+    Schema::create('notifications', function (Blueprint $table): void {
+        $table->uuid('id')->primary();
+        $table->string('type');
+        $table->morphs('notifiable');
+        $table->text('data');
+        $table->timestamp('read_at')->nullable();
+        $table->timestamps();
+    });
+
+    expect((resolve(MarkInactiveMachines::class))(now()))->toBe(1)
+        ->and($machine->refresh()->inactive_at)->not->toBeNull()
+        ->and($owner->fresh()->notifications)->toHaveCount(1)
+        ->and(MachineConditionState::query()->where('spoke_id', $machine->id)->sole()->active)->toBeTrue();
+});
+
 test('usage unavailability notifies only after fifteen continuous minutes and recovery closes it', function (): void {
     [$owner, $machine] = conditionMachine();
     $ingest = resolve(IngestMachineUsage::class);
@@ -133,6 +158,55 @@ test('finding parsing is bounded ignores unknown and malformed members and stabl
 
     $over = resolve(MachineFindingPayload::class)->parse(array_fill(0, 26, new stdClass));
     expect($over)->toBe(['accepted' => [], 'ignored_unknown' => 0, 'ignored_invalid' => 26]);
+});
+
+test('finding byte shape and string bounds hold at the limit and reject limit plus one', function (): void {
+    $parser = resolve(MachineFindingPayload::class);
+    $timestamp = '2026-10-20T12:00:00+00:00';
+    $memberAtLimit = (object) [
+        'code' => str_repeat('\\', 64),
+        'severity' => 'critical',
+        'observed_at' => $timestamp,
+    ];
+    $memberOverLimit = (object) [
+        'code' => str_repeat('\\', 64),
+        'severity' => 'recovered',
+        'observed_at' => $timestamp,
+    ];
+    expect(strlen(json_encode($memberAtLimit, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)))
+        ->toBe(MachineFindingPayload::MAX_MEMBER_ENCODED_BYTES)
+        ->and($parser->parse([$memberAtLimit]))->toMatchArray(['ignored_unknown' => 1, 'ignored_invalid' => 0])
+        ->and(strlen(json_encode($memberOverLimit, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)))
+        ->toBe(MachineFindingPayload::MAX_MEMBER_ENCODED_BYTES + 1)
+        ->and($parser->parse([$memberOverLimit]))->toMatchArray(['ignored_unknown' => 0, 'ignored_invalid' => 1]);
+
+    $listAtLimit = array_fill(0, 19, $memberAtLimit);
+    $listAtLimit[] = (object) [
+        'code' => str_repeat('\\', 64),
+        'severity' => 'warning',
+        'observed_at' => $timestamp,
+    ];
+    $listOverLimit = $listAtLimit;
+    $listOverLimit[19] = $memberAtLimit;
+    expect(strlen(json_encode($listAtLimit, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)))
+        ->toBe(MachineFindingPayload::MAX_ENCODED_BYTES)
+        ->and($parser->parse($listAtLimit))->toMatchArray(['ignored_unknown' => 20, 'ignored_invalid' => 0])
+        ->and(strlen(json_encode($listOverLimit, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)))
+        ->toBe(MachineFindingPayload::MAX_ENCODED_BYTES + 1)
+        ->and($parser->parse($listOverLimit))->toBe(['accepted' => [], 'ignored_unknown' => 0, 'ignored_invalid' => 20]);
+
+    $exact = (object) ['code' => 'runner_check', 'severity' => 'critical', 'observed_at' => $timestamp];
+    $missing = (object) ['code' => 'runner_check', 'severity' => 'critical'];
+    $extra = (object) ['code' => 'runner_check', 'severity' => 'critical', 'observed_at' => $timestamp, 'detail' => 'rejected'];
+    expect($parser->parse([$exact])['accepted'])->toHaveCount(1)
+        ->and($parser->parse([$missing])['ignored_invalid'])->toBe(1)
+        ->and($parser->parse([$extra])['ignored_invalid'])->toBe(1)
+        ->and($parser->parse([(object) ['code' => str_repeat('x', 64), 'severity' => 'critical', 'observed_at' => $timestamp]])['ignored_unknown'])->toBe(1)
+        ->and($parser->parse([(object) ['code' => str_repeat('x', 65), 'severity' => 'critical', 'observed_at' => $timestamp]])['ignored_invalid'])->toBe(1)
+        ->and($parser->parse([(object) ['code' => 'runner_check', 'severity' => 'recovered', 'observed_at' => $timestamp]])['accepted'])->toHaveCount(1)
+        ->and($parser->parse([(object) ['code' => 'runner_check', 'severity' => 'recoveredd', 'observed_at' => $timestamp]])['ignored_invalid'])->toBe(1)
+        ->and($parser->parse([(object) ['code' => 'runner_check', 'severity' => 'critical', 'observed_at' => '2026-10-20T12:00:00.123+00:00']])['accepted'])->toHaveCount(1)
+        ->and($parser->parse([(object) ['code' => 'runner_check', 'severity' => 'critical', 'observed_at' => '2026-10-20T12:00:00.1234+00:00']])['ignored_invalid'])->toBe(1);
 });
 
 test('rolling back preserves a notifications table that existed before this migration', function (): void {

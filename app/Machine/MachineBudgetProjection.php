@@ -48,6 +48,7 @@ final readonly class MachineBudgetProjection
 
         /** @var Collection<int, Spoke> $machines */
         $machines = Spoke::query()
+            ->where('credential_backed', true)
             ->whereNull('retired_at')
             ->where(function ($query) use ($team): void {
                 $query->whereHas('workSettings', fn ($settings) => $settings->where('team_id', $team->id));

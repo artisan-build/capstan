@@ -532,6 +532,35 @@ test('machine owners and managers edit only the selected team Work profile witho
     expect($html)->not->toContain($machine->credential_id);
 });
 
+test('work profile actions reject a tampered team and a team manager attaching an unrelated machine', function (): void {
+    $owner = capstanUser(['role' => UserRole::Member->value]);
+    $machine = createMapSpoke($owner, 'owned machine', now(), SpokeLiveness::Green);
+    $foreignTeam = Team::query()->create(['name' => 'Foreign team', 'slug' => 'foreign-work-profile']);
+
+    Livewire::actingAs($owner)->test(SpokeMap::class)
+        ->call('beginEditingWorkProfile', $machine->id)
+        ->set('editingWorkTeamId', $foreignTeam->id)
+        ->call('saveWorkProfile', $machine->id)
+        ->assertStatus(409);
+    expect(MachineTeamWorkSetting::query()->where('spoke_id', $machine->id)->where('team_id', $foreignTeam->id)->doesntExist())->toBeTrue();
+
+    $admin = capstanUser(['role' => UserRole::Admin->value]);
+    DB::table('team_user')->insert([
+        'team_id' => $foreignTeam->id,
+        'user_id' => $admin->id,
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    Livewire::actingAs($admin)->test(SpokeMap::class)
+        ->set('selectedTeamId', $foreignTeam->id)
+        ->set('editingWorkSpokeId', $machine->id)
+        ->set('editingWorkTeamId', $foreignTeam->id)
+        ->set('workRoleProviders', '{}')
+        ->call('saveWorkProfile', $machine->id)
+        ->assertHasErrors('workProfile');
+    expect(MachineTeamWorkSetting::query()->where('spoke_id', $machine->id)->where('team_id', $foreignTeam->id)->doesntExist())->toBeTrue();
+});
+
 test('map ordering stays in id order after rename and status changes', function (): void {
     $owner = capstanUser(['role' => UserRole::Owner->value]);
     $alpha = createMapSpoke($owner, 'alpha', now(), SpokeLiveness::Green);

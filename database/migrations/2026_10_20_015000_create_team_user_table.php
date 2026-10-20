@@ -14,17 +14,18 @@ return new class extends Migration
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();
             $table->timestamps();
             $table->primary(['team_id', 'user_id']);
+            $table->index(['user_id', 'team_id'], 'team_user_user_team_index');
         });
 
         $defaultTeamId = DB::table('teams')->where('is_default', true)->value('id');
         if (is_int($defaultTeamId)) {
             $now = now();
-            DB::table('team_user')->insertOrIgnore(DB::table('users')->pluck('id')->map(fn (int $userId): array => [
-                'team_id' => $defaultTeamId,
-                'user_id' => $userId,
-                'created_at' => $now,
-                'updated_at' => $now,
-            ])->all());
+            DB::table('team_user')->insertUsing(
+                ['team_id', 'user_id', 'created_at', 'updated_at'],
+                DB::table('users')->selectRaw('? as team_id, id, ? as created_at, ? as updated_at', [
+                    $defaultTeamId, $now, $now,
+                ]),
+            );
         }
     }
 
