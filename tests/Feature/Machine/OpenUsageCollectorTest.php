@@ -234,6 +234,60 @@ test('the CLI adapter uses the exact export command and conservatively collapses
     }
 });
 
+test('an existing collector discovers a CLI installed later without reinstalling Capstan', function (): void {
+    $directory = usageCollectorDirectory();
+    $home = $directory.'/home';
+    $bin = $home.'/.local/bin';
+    File::makeDirectory($bin, 0700, true);
+    $curl = $directory.'/curl';
+    $cache = $directory.'/usage-cache.json';
+    File::put($curl, "#!/bin/sh\nexit 7\n");
+    chmod($curl, 0700);
+    $run = function () use ($curl, $cache, $home): Process {
+        $process = new Process([
+            PHP_BINARY, '-d', 'auto_prepend_file=', resource_path('installers/openusage-collector.php'),
+            $curl, '', $cache,
+        ], null, ['HOME' => $home]);
+        $process->run();
+
+        return $process;
+    };
+
+    try {
+        $before = $run();
+        expect($before->isSuccessful())->toBeTrue($before->getErrorOutput())
+            ->and(json_decode($before->getOutput(), true, flags: JSON_THROW_ON_ERROR)['source'])->toBe('none');
+
+        $cli = json_encode([
+            'schema_version' => '1',
+            'openusage_version' => '0.26.1',
+            'snapshots' => [[
+                'provider_id' => 'codex',
+                'account_id' => 'private-account',
+                'timestamp' => '2026-10-19T17:59:55Z',
+                'status' => 'ok',
+                'metrics' => ['rate_limit_primary' => [
+                    'unit' => '%', 'limit' => 100, 'used' => 25, 'remaining' => 75, 'window' => '1h30m',
+                ]],
+                'resets' => ['rate_limit_primary' => '2026-10-19T19:00:00+01:00'],
+                'attributes' => [],
+            ]],
+        ], JSON_THROW_ON_ERROR);
+        File::put($bin.'/openusage', "#!/bin/sh\nprintf '%s' ".escapeshellarg($cli)."\n");
+        chmod($bin.'/openusage', 0700);
+        File::put($cache, json_encode(['attempted_at' => 0], JSON_THROW_ON_ERROR));
+
+        $after = $run();
+        $report = json_decode($after->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+        expect($after->isSuccessful())->toBeTrue($after->getErrorOutput())
+            ->and($report['source'])->toBe('openusage-sh')
+            ->and($report['providers'][0]['provider'])->toBe('codex')
+            ->and($after->getOutput())->not->toContain('private-account');
+    } finally {
+        File::deleteDirectory($directory);
+    }
+});
+
 test('invalid schemas percentages durations redirects and trailing JSON fail closed', function (string $body, ?string $cli, int $status, string $failure): void {
     $directory = usageCollectorDirectory();
 

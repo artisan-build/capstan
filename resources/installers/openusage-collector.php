@@ -609,6 +609,29 @@ function capstanWriteCache(string $path, array $cache): void
     @chmod($path, 0600);
 }
 
+function capstanResolveOpenUsage(string $explicit): string
+{
+    $home = $_SERVER['HOME'] ?? $_ENV['HOME'] ?? null;
+    $candidates = [$explicit];
+    if (is_string($home) && str_starts_with($home, '/')) {
+        $candidates[] = $home.'/.local/bin/openusage';
+        $candidates[] = $home.'/bin/openusage';
+    }
+    array_push($candidates, '/opt/homebrew/bin/openusage', '/usr/local/bin/openusage', '/usr/bin/openusage');
+
+    foreach ($candidates as $candidate) {
+        if (! is_string($candidate) || ! str_starts_with($candidate, '/') || ! is_file($candidate) || ! is_executable($candidate)) {
+            continue;
+        }
+        $resolved = realpath($candidate);
+        if (is_string($resolved) && str_starts_with($resolved, '/') && is_file($resolved) && is_executable($resolved)) {
+            return $resolved;
+        }
+    }
+
+    return '';
+}
+
 $curl = $argv[1] ?? '';
 $openusage = $argv[2] ?? '';
 $cachePath = $argv[3] ?? '';
@@ -663,8 +686,10 @@ if (is_string($curl) && str_starts_with($curl, '/') && is_file($curl) && is_exec
     }
 }
 
-if ($report === null && is_string($openusage) && str_starts_with($openusage, '/')
-    && is_file($openusage) && is_executable($openusage)) {
+if ($report === null) {
+    $openusage = capstanResolveOpenUsage(is_string($openusage) ? $openusage : '');
+}
+if ($report === null && $openusage !== '') {
     $cli = capstanRun([$openusage, 'export', '--output', '-', '--format', 'json', '--source', 'auto'], 30);
     if ($cli['timed_out']) {
         $failure = 'timeout';
