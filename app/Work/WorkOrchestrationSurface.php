@@ -56,13 +56,6 @@ final readonly class WorkOrchestrationSurface
     public function act(WorkOrchestrationContext $context, string $action, array $input, CarbonImmutable $now): array
     {
         $input = $this->validate($action, $input);
-        if ($action === 'create_child' && ! isset($input['user_actor_address'])) {
-            $under = WorkTask::query()->find($input['under_task_id']);
-            $team = $under instanceof WorkTask ? Team::query()->find($under->team_id) : null;
-            if ($team instanceof Team && ! $team->pool_work) {
-                $input['user_actor_address'] = $context->actorId;
-            }
-        }
 
         return match ($action) {
             'create_child' => $this->created($action, $this->capability->createChild(

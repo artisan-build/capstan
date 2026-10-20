@@ -40,7 +40,7 @@ test('machine foundation schema exposes bounded lifecycle usage settings audit a
         ]))->toBeTrue()
         ->and(Schema::hasColumns('machine_work_presence', [
             'spoke_id', 'team_id', 'roles', 'capabilities', 'role_providers',
-            'current_claimed_item_count', 'concurrency_ceiling', 'observed_at',
+            'current_claimed_item_count', 'available_capacity', 'concurrency_ceiling', 'observed_at',
         ]))->toBeTrue();
 });
 
@@ -110,6 +110,7 @@ test('machine foundation models cast bounded records and expose their relations'
         'capabilities' => ['php'],
         'role_providers' => ['builder' => 'codex'],
         'current_claimed_item_count' => 0,
+        'available_capacity' => 1,
         'concurrency_ceiling' => 1,
         'observed_at' => '2026-10-19 10:00:00',
     ]);
@@ -126,7 +127,8 @@ test('machine foundation models cast bounded records and expose their relations'
         ->and($spoke->workSettingChanges->sole()->is($change))->toBeTrue()
         ->and($change->occurred_at)->toBeInstanceOf(CarbonImmutable::class)
         ->and($spoke->workPresence->sole()->is($presence))->toBeTrue()
-        ->and($presence->current_claimed_item_count)->toBe(0);
+        ->and($presence->current_claimed_item_count)->toBe(0)
+        ->and($presence->available_capacity)->toBe(1);
 
     expect(fn () => $change->forceFill(['updated_by_actor' => 'changed'])->save())
         ->toThrow(LogicException::class, 'append-only');
@@ -240,6 +242,7 @@ test('Work presence and append-only audit validate complete old and new bounded 
         'spoke_id' => $machine['spoke']->id,
         'team_id' => $machine['team']->id,
         'current_claimed_item_count' => 25,
+        'available_capacity' => 0,
         'observed_at' => now(),
     ]);
     MachineWorkSettingChange::query()->create([
@@ -264,6 +267,7 @@ test('Work presence and append-only audit validate complete old and new bounded 
         'spoke_id' => $machine['spoke']->id,
         'team_id' => Team::query()->create(['name' => 'Count overflow', 'slug' => 'count-overflow'])->id,
         'current_claimed_item_count' => 26,
+        'available_capacity' => 0,
         'observed_at' => now(),
     ]))->toThrow(InvalidArgumentException::class);
 
@@ -421,9 +425,30 @@ test('window values and nullable duration identity are enforced at the model and
             'spoke_id' => $machine['spoke']->id,
             'team_id' => $machine['team']->id,
             'roles' => '[]', 'capabilities' => '[]', 'role_providers' => '[]',
-            'current_claimed_item_count' => 2, 'concurrency_ceiling' => 1,
+            'current_claimed_item_count' => 2, 'available_capacity' => 0, 'concurrency_ceiling' => 1,
             'observed_at' => now(), 'created_at' => now(), 'updated_at' => now(),
         ]), 'invalid machine work presence counts', 'machine_work_presence_counts_check'],
+        ['machine_work_presence', fn () => DB::table('machine_work_presence')->insert([
+            'spoke_id' => $machine['spoke']->id,
+            'team_id' => $machine['team']->id,
+            'roles' => '[]', 'capabilities' => '[]', 'role_providers' => '[]',
+            'current_claimed_item_count' => 2, 'available_capacity' => 25, 'concurrency_ceiling' => 1,
+            'observed_at' => now(), 'created_at' => now(), 'updated_at' => now(),
+        ]), 'invalid machine work presence counts', 'machine_work_presence_counts_check'],
+        ['machine_work_presence', fn () => DB::table('machine_work_presence')->insert([
+            'spoke_id' => $machine['spoke']->id,
+            'team_id' => $machine['team']->id,
+            'roles' => '[]', 'capabilities' => '[]', 'role_providers' => '[]',
+            'current_claimed_item_count' => 1, 'available_capacity' => 1, 'concurrency_ceiling' => 1,
+            'observed_at' => now(), 'created_at' => now(), 'updated_at' => now(),
+        ]), 'invalid machine work presence availability', 'machine_work_presence_available_capacity_check'],
+        ['machine_work_presence', fn () => DB::table('machine_work_presence')->insert([
+            'spoke_id' => $machine['spoke']->id,
+            'team_id' => $machine['team']->id,
+            'roles' => '[]', 'capabilities' => '[]', 'role_providers' => '[]',
+            'current_claimed_item_count' => 0, 'available_capacity' => -1, 'concurrency_ceiling' => 1,
+            'observed_at' => now(), 'created_at' => now(), 'updated_at' => now(),
+        ]), 'invalid machine work presence availability', 'machine_work_presence_available_capacity_check'],
     ];
     foreach ($databaseViolations as $index => [$table, $violation, $sqliteMessage, $postgresConstraint]) {
         $before = DB::table($table)->count();

@@ -3,6 +3,7 @@
 use App\Auth\CapstanCredentialDeclaration;
 use App\Enums\WorkItemState;
 use App\Models\Inbox;
+use App\Models\MachineTeamWorkSetting;
 use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkItem;
@@ -57,13 +58,31 @@ function workDrainItem(WorkTask $task, array $attributes = []): WorkItem
     return $task->items()->create(array_replace(['role' => 'builder'], $attributes));
 }
 
-/** @return array{token: string, credential: Credential, headers: array<string, string>} */
+/** @return array{token: string, credential: Credential, spoke: Spoke, headers: array<string, string>} */
 function workDrainCredential(User $user): array
 {
     $issued = capstanBoundBearer($user, CapstanCredentialDeclaration::WORK_DRAIN);
+    $spoke = Spoke::query()->create([
+        'actor_id' => (string) $user->getKey(),
+        'credential_id' => $issued['credential']->id,
+        'last_polled_at' => now()->addDay(),
+    ]);
+    foreach (Team::query()->get() as $team) {
+        MachineTeamWorkSetting::query()->create([
+            'spoke_id' => $spoke->id,
+            'team_id' => $team->id,
+            'enabled' => true,
+            'roles' => ['builder', 'human', 'orchestrator', 'security'],
+            'capabilities' => ['docker', 'git', 'php'],
+            'role_providers' => [],
+            'concurrency_ceiling' => 25,
+            'updated_by_actor' => (string) $user->getKey(),
+        ]);
+    }
 
     return [
         ...$issued,
+        'spoke' => $spoke,
         'headers' => [
             'Authorization' => 'Bearer '.$issued['token'],
             CapstanCredentialDeclaration::ACTOR_HEADER => (string) $user->getKey(),
@@ -74,11 +93,11 @@ function workDrainCredential(User $user): array
 /**
  * @param  list<string>  $roles
  * @param  list<string>  $capabilities
- * @return array{capacity: int, roles: list<string>, capabilities: list<string>}
+ * @return array{capacity: int, roles: list<string>, capabilities: list<string>, role_providers: array<string, string>, current_claimed_item_count: int}
  */
 function workDrainClaimPayload(int $capacity = 1, array $roles = ['builder'], array $capabilities = []): array
 {
-    return compact('capacity', 'roles', 'capabilities');
+    return [...compact('capacity', 'roles', 'capabilities'), 'role_providers' => [], 'current_claimed_item_count' => 0];
 }
 
 test('claim is deterministic capped thin and supports zero capacity', function (): void {
@@ -296,7 +315,7 @@ test('claim validates malformed duplicate and oversized declarations without eff
         ->assertJsonValidationErrors($error, 'error.errors');
 
     expect($item->fresh()?->state)->toBe(WorkItemState::Queued)
-        ->and(Spoke::query()->count())->toBe(0);
+        ->and(Spoke::query()->count())->toBe(1);
 })->with([
     'capacity above cap' => [workDrainClaimPayload(26), 'capacity'],
     'negative capacity' => [workDrainClaimPayload(-1), 'capacity'],
@@ -313,10 +332,7 @@ test('claim applies every routing capability cancellation and reserved role cons
     $user = capstanUser();
     $otherUser = capstanUser();
     $issued = workDrainCredential($user);
-    $callerSpoke = Spoke::query()->create([
-        'actor_id' => (string) $user->getKey(),
-        'credential_id' => $issued['credential']->id,
-    ]);
+    $callerSpoke = $issued['spoke'];
     $otherSpoke = Spoke::query()->create([
         'actor_id' => (string) $otherUser->getKey(),
         'credential_id' => (string) Str::uuid7(),
@@ -365,11 +381,8 @@ test('all drain calls heartbeat one credential spoke without changing Postmaster
     $item = workDrainItem(workDrainTask($team));
     $user = capstanUser();
     $issued = workDrainCredential($user);
-    $spoke = Spoke::query()->create([
-        'actor_id' => (string) $user->getKey(),
-        'credential_id' => $issued['credential']->id,
-        'last_cursor' => 'postmaster-cursor',
-    ]);
+    $spoke = $issued['spoke'];
+    $spoke->update(['last_cursor' => 'postmaster-cursor']);
     $inbox = Inbox::query()->create([
         'actor_id' => (string) $user->getKey(),
         'local_part' => 'work-heartbeat-test',
@@ -479,7 +492,8 @@ test('a reclaimed item fences its first claimant while its second claimant succe
         ->postJson(route('api.work.claim', $team), workDrainClaimPayload())
         ->assertOk();
 
-    Date::setTestNow('2026-10-17 13:01:01');
+    // The first claimant remains the deterministic winner until its 180-second presence expires.
+    Date::setTestNow('2026-10-17 13:03:01');
     resolve(WorkItemStateService::class)->expireLease(
         $item,
         'system',
@@ -675,7 +689,7 @@ test('work credentials remain bound to the presented active product actor', func
         ->assertJsonPath('error.code', 'unauthenticated');
 
     expect($item->fresh()?->state)->toBe(WorkItemState::Queued)
-        ->and(Spoke::query()->count())->toBe(0);
+        ->and(Spoke::query()->count())->toBe(1);
 });
 
 test('renew enforces its bounded distinct object list before state changes', function (array $items, string $error): void {

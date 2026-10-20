@@ -49,8 +49,11 @@ class FakeClient:
         self.renewed = [] if renewed is None else renewed
         self.calls: list[tuple] = []
 
-    def claim(self, capacity, roles, capabilities):
-        self.calls.append(("claim", capacity, tuple(roles), tuple(capabilities)))
+    def claim(self, capacity, roles, capabilities, role_providers, current_claimed_item_count):
+        self.calls.append((
+            "claim", capacity, tuple(roles), tuple(capabilities),
+            dict(role_providers), current_claimed_item_count,
+        ))
         return self.claimed
 
     def renew(self, items):
@@ -100,6 +103,7 @@ class DrainTestCase(unittest.TestCase):
             "max_memory_percent": 90.0,
             "capabilities": ["php"],
             "roles": ["builder"],
+            "role_providers": {"builder": "codex"},
             "state_file": "state/state.json",
             "work_dir": "work",
             "lock_file": "state/drain.lock",
@@ -323,7 +327,9 @@ class AdmissionAndLockTests(DrainTestCase):
                 output: list[str] = []
                 runner = drain.DrainRunner(config, client, logger=output.append, alive=lambda _: True, load=lambda: load, memory=lambda: memory)
                 runner.run()
-                self.assertFalse(any(call[0] == "claim" for call in client.calls))
+                claim = next(call for call in client.calls if call[0] == "claim")
+                self.assertEqual(claim[1], 0)
+                self.assertEqual(claim[4:], ({"builder": "codex"}, 1 if with_state else 0))
                 self.assertTrue(any("not this round" in line for line in output))
                 if config.state_file.exists():
                     config.state_file.unlink()
@@ -344,7 +350,7 @@ class AdmissionAndLockTests(DrainTestCase):
         with mock.patch.object(drain, "ApiClient", return_value=client):
             result = drain.execute(self.config_path, dry_claim=True, logger=output.append)
         self.assertEqual(result, 0)
-        client.claim.assert_called_once_with(0, self.config.roles, self.config.capabilities)
+        client.claim.assert_called_once_with(0, self.config.roles, self.config.capabilities, self.config.role_providers, 0)
         self.assertIn("no item was claimed", output[0])
 
 
@@ -363,7 +369,7 @@ class ApiTransportTests(DrainTestCase):
         client.opener.open.side_effect = redirect
 
         with self.assertRaises(drain.ApiError) as failure:
-            client.claim(0, ["builder"], ["php"])
+            client.claim(0, ["builder"], ["php"], {"builder": "codex"}, 0)
 
         response.close.assert_called_once_with()
         response.read.assert_not_called()
@@ -411,7 +417,7 @@ class ApiTransportTests(DrainTestCase):
             self.write_config(capstan_url=f"http://127.0.0.1:{source.server_port}", actor_id="918273645")
             client = drain.ApiClient(drain.load_config(self.config_path), "secret-bearer")
             with self.assertRaises(drain.ApiError) as failure:
-                client.claim(0, ["builder"], ["php"])
+                client.claim(0, ["builder"], ["php"], {"builder": "codex"}, 0)
         finally:
             source.shutdown()
             target.shutdown()
@@ -429,10 +435,13 @@ class ApiTransportTests(DrainTestCase):
 
     def test_requests_carry_an_explicit_user_agent_on_the_wire(self) -> None:
         received_headers: list[dict[str, str]] = []
+        received_bodies: list[dict] = []
 
         class WorkHandler(http.server.BaseHTTPRequestHandler):
             def do_POST(self) -> None:
                 received_headers.append(dict(self.headers))
+                length = int(self.headers.get("Content-Length", "0"))
+                received_bodies.append(json.loads(self.rfile.read(length) or b"{}"))
                 milestone = self.path.startswith("/milestone")
                 body = b'{}' if milestone else b'{"items":[]}'
                 self.send_response(201 if milestone else 200)
@@ -450,7 +459,7 @@ class ApiTransportTests(DrainTestCase):
         try:
             self.write_config(capstan_url=f"http://127.0.0.1:{server.server_port}")
             client = drain.ApiClient(drain.load_config(self.config_path), "secret-bearer")
-            self.assertEqual(client.claim(0, ["builder"], ["php"]), [])
+            self.assertEqual(client.claim(0, ["builder"], ["php"], {"builder": "codex"}, 0), [])
             stub_worker.post(f"http://127.0.0.1:{server.server_port}/milestone?signature=stub", "started")
         finally:
             server.shutdown()
@@ -458,6 +467,13 @@ class ApiTransportTests(DrainTestCase):
             server_thread.join()
 
         self.assertEqual(len(received_headers), 2)
+        self.assertEqual(received_bodies[0], {
+            "capacity": 0,
+            "roles": ["builder"],
+            "capabilities": ["php"],
+            "role_providers": {"builder": "codex"},
+            "current_claimed_item_count": 0,
+        })
         for headers in received_headers:
             user_agent = headers.get("User-Agent")
             self.assertTrue(user_agent)
@@ -484,6 +500,29 @@ class ApiTransportTests(DrainTestCase):
 
 
 class LifecycleTests(DrainTestCase):
+    def test_claim_reports_reconciled_live_count_and_remaining_capacity(self) -> None:
+        self.write_config(max_concurrent=2)
+        self.config = drain.load_config(self.config_path)
+        self.write_state()
+        renewed = [{
+            "item_id": ITEM_ID,
+            "status": "renewed",
+            "item": {"id": ITEM_ID, "state": "routed", "links": links("new")},
+        }]
+        client = FakeClient(renewed=renewed)
+
+        drain.DrainRunner(
+            self.config,
+            client,
+            logger=lambda _: None,
+            alive=lambda _: True,
+            load=lambda: (0, 0, 0),
+            memory=lambda: 1,
+        ).run()
+
+        claim = next(call for call in client.calls if call[0] == "claim")
+        self.assertEqual(claim, ("claim", 1, ("builder",), ("php",), {"builder": "codex"}, 1))
+
     def test_claim_launch_deliver_route_uses_item_cwd_and_recoverable_secret_free_state(self) -> None:
         client = FakeClient(claimed=[self.claim()])
         launcher = FakeLauncher()
@@ -655,6 +694,20 @@ class LifecycleTests(DrainTestCase):
 
 
 class ContractTests(DrainTestCase):
+    def test_role_provider_config_is_bounded_and_old_configs_default_to_unknown(self) -> None:
+        self.write_config(role_providers=None)
+        self.assertEqual(drain.load_config(self.config_path).role_providers, {})
+
+        for mapping, message in (
+            ({"reviewer": "codex"}, "declared roles"),
+            ({"builder": "Invalid Provider"}, "provider identifiers"),
+            ({"builder": "x" * 65}, "provider identifiers"),
+        ):
+            with self.subTest(mapping=mapping):
+                self.write_config(role_providers=mapping)
+                with self.assertRaisesRegex(drain.ConfigError, message):
+                    drain.load_config(self.config_path)
+
     def test_example_configs_match_schema_and_cover_three_harnesses(self) -> None:
         examples = ROOT / "drain/examples"
         loaded = {path.name: drain.load_config(path) for path in examples.glob("*.json")}

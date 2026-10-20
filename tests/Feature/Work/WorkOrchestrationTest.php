@@ -22,6 +22,7 @@ use App\Work\WorkOrchestrationCapability;
 use App\Work\WorkOrchestrationContext;
 use App\Work\WorkOrchestrationMcpService;
 use App\Work\WorkOrchestrationService;
+use App\Work\WorkOrchestrationSurface;
 use App\Work\WorkSeatService;
 use App\Work\WorkSweepService;
 use App\Work\WorkToolService;
@@ -43,6 +44,50 @@ beforeEach(function (): void {
     ]);
     Feature::flushCache();
     Date::setTestNow('2026-10-17 12:00:00');
+});
+
+test('new children inherit their parent owner only while pooling is off and policy changes never rewrite them', function (): void {
+    $team = Team::default();
+    $team->update(['pool_work' => false]);
+    $parentOwner = capstanUser();
+    $parent = WorkTask::query()->create([
+        'team_id' => $team->id,
+        'title' => 'Parent routing policy',
+        'user_actor_address' => (string) $parentOwner->id,
+        'required_capabilities' => [],
+        'timebox_minutes' => 30,
+        'creator_actor' => 'root-creator',
+    ]);
+    orchestrationEvent($parent, 'routing-policy');
+    $host = orchestrationHost((string) $parentOwner->id);
+    $turn = orchestrationClaims($parent, $host)[0];
+    $surface = resolve(WorkOrchestrationSurface::class);
+    $context = $surface->claimed($turn->id, $turn->fence);
+
+    $owned = $surface->act($context, 'create_child', [
+        'under_task_id' => $parent->id,
+        'title' => 'Owner child',
+        'brief' => 'Owned brief',
+    ], CarbonImmutable::now());
+    expect(WorkTask::query()->findOrFail($owned['id'])->user_actor_address)->toBe((string) $parentOwner->id);
+
+    $differentActor = capstanUser();
+    $explicitlyRedirected = $surface->act($context, 'create_child', [
+        'under_task_id' => $parent->id,
+        'title' => 'Caller-directed child',
+        'brief' => 'Caller-directed brief',
+        'user_actor_address' => (string) $differentActor->id,
+    ], CarbonImmutable::now());
+    expect(WorkTask::query()->findOrFail($explicitlyRedirected['id'])->user_actor_address)->toBe((string) $parentOwner->id);
+
+    $team->update(['pool_work' => true]);
+    $pooled = $surface->act($context, 'create_child', [
+        'under_task_id' => $parent->id,
+        'title' => 'Pooled child',
+        'brief' => 'Pooled brief',
+    ], CarbonImmutable::now());
+    expect(WorkTask::query()->findOrFail($pooled['id'])->user_actor_address)->toBeNull()
+        ->and(WorkTask::query()->findOrFail($owned['id'])->user_actor_address)->toBe((string) $parentOwner->id);
 });
 
 function orchestrationTask(?WorkTask $parent = null): WorkTask

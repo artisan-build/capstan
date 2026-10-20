@@ -81,6 +81,7 @@ class Config:
     max_memory_percent: float
     capabilities: tuple[str, ...]
     roles: tuple[str, ...]
+    role_providers: Mapping[str, str]
     state_file: Path
     work_dir: Path
     lock_file: Path
@@ -115,6 +116,20 @@ def _resolve_path(config_dir: Path, value: Any, label: str) -> Path:
     return (config_dir / path).resolve() if not path.is_absolute() else path.resolve()
 
 
+def _role_providers(value: Any, roles: Sequence[str]) -> dict[str, str]:
+    if value is None:
+        return {}
+    providers = _expect_object(value, "role_providers")
+    if len(providers) > MAX_BATCH:
+        raise ConfigError(f"role_providers must contain at most {MAX_BATCH} entries")
+    for role, provider in providers.items():
+        if role not in roles:
+            raise ConfigError("role_providers keys must name declared roles")
+        if not isinstance(provider, str) or re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", provider) is None:
+            raise ConfigError("role_providers values must be bounded provider identifiers")
+    return dict(sorted(providers.items()))
+
+
 def load_config(path: Path) -> Config:
     config_path = path.expanduser().resolve()
     try:
@@ -126,7 +141,7 @@ def load_config(path: Path) -> Config:
         "version", "capstan_url", "team", "actor_id", "credential_file", "max_concurrent",
         "max_load_1m", "max_memory_percent", "capabilities", "roles", "state_file", "work_dir",
         "lock_file", "prompt_template", "orchestrator_prompt_template", "role_commands",
-        "request_timeout_seconds",
+        "request_timeout_seconds", "role_providers",
     }
     unknown = set(raw) - allowed
     if unknown:
@@ -174,6 +189,7 @@ def load_config(path: Path) -> Config:
 
     roles = _scalar_list(raw.get("roles"), "roles", nonempty=True)
     capabilities = _scalar_list(raw.get("capabilities"), "capabilities")
+    role_providers = _role_providers(raw.get("role_providers"), roles)
     command_object = _expect_object(raw.get("role_commands"), "role_commands")
     if set(command_object) != set(roles):
         raise ConfigError("role_commands keys must exactly match roles")
@@ -196,6 +212,7 @@ def load_config(path: Path) -> Config:
         max_memory_percent=float(max_memory),
         capabilities=capabilities,
         roles=roles,
+        role_providers=role_providers,
         state_file=_resolve_path(config_dir, raw.get("state_file"), "state_file"),
         work_dir=_resolve_path(config_dir, raw.get("work_dir"), "work_dir"),
         lock_file=_resolve_path(config_dir, raw.get("lock_file"), "lock_file"),
@@ -313,8 +330,21 @@ class ApiClient:
             raise ApiError(None, "invalid_response")
         return decoded
 
-    def claim(self, capacity: int, roles: Sequence[str], capabilities: Sequence[str]) -> list[dict[str, Any]]:
-        response = self.request("claim", {"capacity": capacity, "roles": list(roles), "capabilities": list(capabilities)})
+    def claim(
+        self,
+        capacity: int,
+        roles: Sequence[str],
+        capabilities: Sequence[str],
+        role_providers: Mapping[str, str],
+        current_claimed_item_count: int,
+    ) -> list[dict[str, Any]]:
+        response = self.request("claim", {
+            "capacity": capacity,
+            "roles": list(roles),
+            "capabilities": list(capabilities),
+            "role_providers": dict(role_providers),
+            "current_claimed_item_count": current_claimed_item_count,
+        })
         items = response.get("items")
         if not isinstance(items, list):
             raise ApiError(None, "invalid_claim_response")
@@ -514,32 +544,48 @@ class DrainRunner:
             self.log(f"drain stopped: {safe_message(exception)}")
             return 1
 
-        free_slots = self.config.max_concurrent - len(items)
+        active_count = min(self._active_count(items), MAX_BATCH)
+        free_slots = self.config.max_concurrent - active_count
+        capacity = min(max(free_slots, 0), MAX_BATCH)
+        admission_message: str | None = None
         if free_slots <= 0:
-            self.log(f"not this round: capacity full active={len(items)} max={self.config.max_concurrent}")
-            return 0
-        try:
-            current_load = float(self.load()[0])
-        except (OSError, IndexError, TypeError, ValueError):
-            self.log("not this round: load admission could not be measured")
-            return 0
-        if current_load > self.config.max_load_1m:
-            self.log(f"not this round: load_1m={current_load:.2f} ceiling={self.config.max_load_1m:.2f}")
-            return 0
-        try:
-            current_memory = float(self.memory())
-        except (DrainError, OSError, TypeError, ValueError):
-            self.log("not this round: memory admission could not be measured")
-            return 0
-        if current_memory > self.config.max_memory_percent:
-            self.log(f"not this round: memory_percent={current_memory:.1f} ceiling={self.config.max_memory_percent:.1f}")
-            return 0
+            admission_message = f"not this round: capacity full active={active_count} max={self.config.max_concurrent}"
+            capacity = 0
+        else:
+            try:
+                current_load = float(self.load()[0])
+            except (OSError, IndexError, TypeError, ValueError):
+                admission_message = "not this round: load admission could not be measured"
+                capacity = 0
+            else:
+                if current_load > self.config.max_load_1m:
+                    admission_message = f"not this round: load_1m={current_load:.2f} ceiling={self.config.max_load_1m:.2f}"
+                    capacity = 0
+            if capacity > 0:
+                try:
+                    current_memory = float(self.memory())
+                except (DrainError, OSError, TypeError, ValueError):
+                    admission_message = "not this round: memory admission could not be measured"
+                    capacity = 0
+                else:
+                    if current_memory > self.config.max_memory_percent:
+                        admission_message = f"not this round: memory_percent={current_memory:.1f} ceiling={self.config.max_memory_percent:.1f}"
+                        capacity = 0
 
         try:
-            claimed = self.client.claim(min(free_slots, MAX_BATCH), self.config.roles, self.config.capabilities)
+            claimed = self.client.claim(
+                capacity,
+                self.config.roles,
+                self.config.capabilities,
+                self.config.role_providers,
+                active_count,
+            )
         except DrainError as exception:
             self.log(f"claim failed: {safe_message(exception)}")
             return 1
+        if admission_message is not None:
+            self.log(admission_message)
+            return 0
         if not claimed:
             self.log("queue empty")
             return 0
@@ -593,6 +639,13 @@ class DrainRunner:
                     self._ensure_routed(item_id, entry, items)
                 else:
                     self._release_exited(item_id, entry, items)
+
+    def _active_count(self, items: Mapping[str, Mapping[str, Any]]) -> int:
+        return sum(
+            1
+            for item_id, entry in items.items()
+            if self._valid_state_entry(item_id, entry) and self.alive(entry["pid"])
+        )
 
     def _start_claim(self, claim: Any, items: dict[str, dict[str, Any]]) -> None:
         launched_pid: int | None = None
@@ -792,7 +845,7 @@ def execute(config_path: Path, *, dry_claim: bool = False, logger: Callable[[str
             credential = read_credential(config.credential_file)
             client = ApiClient(config, credential)
             if dry_claim:
-                client.claim(0, config.roles, config.capabilities)
+                client.claim(0, config.roles, config.capabilities, config.role_providers, 0)
                 logger("dry claim succeeded with capacity=0; no item was claimed")
                 return 0
             return DrainRunner(config, client, logger=logger).run()

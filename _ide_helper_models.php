@@ -344,6 +344,7 @@ namespace App\Models{
  * @property list<string> $capabilities
  * @property array<string, string> $role_providers
  * @property int $current_claimed_item_count
+ * @property int $available_capacity
  * @property int $concurrency_ceiling
  * @property CarbonImmutable $observed_at
  * @property-read Spoke $spoke

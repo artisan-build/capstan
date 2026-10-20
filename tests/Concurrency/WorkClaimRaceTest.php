@@ -1,6 +1,10 @@
 <?php
 
 use App\Enums\WorkItemState;
+use App\Models\MachineTeamWorkSetting;
+use App\Models\MachineWorkPresence;
+use App\Models\Spoke;
+use App\Models\Team;
 use App\Models\WorkItem;
 use App\Models\WorkOrchestratorSeat;
 use App\Models\WorkTask;
@@ -8,6 +12,8 @@ use App\Work\WorkClaimService;
 use App\Work\WorkDrainService;
 use App\Work\WorkItemStateService;
 use App\Work\WorkOrchestrationService;
+use ArtisanBuild\BuiltForCloud\User;
+use ArtisanBuild\BuiltForCloud\UserRole;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -269,6 +275,72 @@ function runWorkClaimProcesses(string $mode, int $teamId, array $workers, array 
 }
 
 /**
+ * @param  list<array{actor: string, spoke: int, credential: string}>  $workers
+ * @param  array<string, mixed>  $connection
+ * @return list<list<string>>
+ */
+function runMachineDrainProcesses(int $teamId, array $workers, array $connection): array
+{
+    $barrier = storage_path('framework/testing/machine-drain-barrier-'.Str::lower(Str::random(16)));
+    mkdir($barrier, 0777, true);
+    $processes = [];
+
+    try {
+        foreach ($workers as $index => $worker) {
+            $process = new Process([
+                PHP_BINARY,
+                base_path('tests/Support/work-machine-claim-worker.php'),
+                (string) $index,
+                $barrier,
+                (string) $teamId,
+                $worker['actor'],
+                $worker['credential'],
+                '1',
+            ], base_path(), workRaceProcessEnvironment($connection), null, 90);
+            $process->start();
+            $processes[] = $process;
+        }
+
+        $deadline = microtime(true) + 30;
+        while (count(glob($barrier.'/ready-*') ?: []) !== count($processes)) {
+            foreach ($processes as $process) {
+                if ($process->isTerminated() && ! $process->isSuccessful()) {
+                    throw new RuntimeException('Machine drain worker failed before release: '.substr($process->getErrorOutput(), 0, 2000));
+                }
+            }
+            if (microtime(true) >= $deadline) {
+                throw new RuntimeException('Machine drain workers did not reach the barrier.');
+            }
+            Sleep::usleep(10_000);
+        }
+
+        touch($barrier.'/release');
+        $results = [];
+        foreach ($processes as $process) {
+            if ($process->wait() !== 0) {
+                throw new RuntimeException('Machine drain worker failed: '.substr($process->getErrorOutput(), 0, 2000));
+            }
+            /** @var array{worker: int, ids: list<string>} $result */
+            $result = json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+            $results[$result['worker']] = $result['ids'];
+        }
+        ksort($results);
+
+        return array_values($results);
+    } finally {
+        foreach ($processes as $process) {
+            if ($process->isRunning()) {
+                $process->stop(1);
+            }
+        }
+        foreach (glob($barrier.'/*') ?: [] as $file) {
+            unlink($file);
+        }
+        rmdir($barrier);
+    }
+}
+
+/**
  * @return array{team_id: int, item_id: string, first: array{actor: string, spoke: int, credential: string}, second: array{actor: string, spoke: int, credential: string}}
  */
 function seedWorkFenceScenario(): array
@@ -449,6 +521,149 @@ test('conditional claim guard survives a real multiprocess race and the unsafe c
         $unsafeIds = array_merge(...$unsafeResults);
 
         expect(count($unsafeIds))->toBeGreaterThan(count(array_unique($unsafeIds)));
+    } finally {
+        cleanupWorkRaceDatabase($database);
+    }
+});
+
+test('simultaneous pooled contenders cannot bypass the deterministic machine winner on SQLite', function (): void {
+    if (DB::getDriverName() !== 'sqlite') {
+        $this->markTestSkipped('Dedicated SQLite deterministic machine routing race proof.');
+    }
+
+    $database = provisionWorkRaceDatabase();
+
+    try {
+        $team = Team::query()->create([
+            'name' => 'Deterministic routing race',
+            'slug' => 'deterministic-routing-race',
+            'pool_work' => true,
+        ]);
+        $workers = [];
+        foreach (range(1, 2) as $index) {
+            $user = new User;
+            $user->forceFill([
+                'name' => "Routing worker {$index}",
+                'email' => "routing-worker-{$index}@example.test",
+                'password' => bcrypt('test-created-password'),
+                'role' => UserRole::Member->value,
+                'status' => 'active',
+            ])->save();
+            $machine = Spoke::query()->create([
+                'actor_id' => (string) $user->id,
+                'credential_id' => (string) Str::uuid7(),
+                'last_polled_at' => '2026-10-17 16:00:00',
+                'probe_status' => 'green',
+            ]);
+            MachineTeamWorkSetting::query()->create([
+                'spoke_id' => $machine->id,
+                'team_id' => $team->id,
+                'enabled' => true,
+                'roles' => ['builder'],
+                'capabilities' => ['php'],
+                'role_providers' => ['builder' => 'codex'],
+                'concurrency_ceiling' => 1,
+                'updated_by_actor' => (string) $user->id,
+            ]);
+            MachineWorkPresence::query()->create([
+                'spoke_id' => $machine->id,
+                'team_id' => $team->id,
+                'roles' => ['builder'],
+                'capabilities' => ['php'],
+                'role_providers' => ['builder' => 'codex'],
+                'current_claimed_item_count' => 0,
+                'available_capacity' => 1,
+                'concurrency_ceiling' => 1,
+                'observed_at' => '2026-10-17 16:00:00',
+            ]);
+            $workers[] = ['actor' => (string) $user->id, 'spoke' => $machine->id];
+        }
+        $task = WorkTask::query()->create([
+            'team_id' => $team->id,
+            'title' => 'One deterministic winner',
+            'required_capabilities' => ['php'],
+            'timebox_minutes' => 30,
+            'creator_actor' => 'race-creator',
+        ]);
+        $item = $task->items()->create(['role' => 'builder']);
+
+        $results = runWorkClaimProcesses('machine-routing', $team->id, $workers, [1, 1], $database['connection']);
+        expect(array_merge(...$results))->toBe([$item->id])
+            ->and($item->fresh()->claimant_spoke_id)->toBe($workers[0]['spoke']);
+    } finally {
+        cleanupWorkRaceDatabase($database);
+    }
+});
+
+test('simultaneous production drains preserve the deterministic machine winner on PostgreSQL', function (): void {
+    if (DB::getDriverName() !== 'pgsql') {
+        $this->markTestSkipped('Dedicated PostgreSQL production machine drain race proof.');
+    }
+
+    $database = provisionWorkRaceDatabase();
+
+    try {
+        $now = CarbonImmutable::parse('2026-10-17 16:00:00 UTC');
+        $team = Team::query()->create([
+            'name' => 'PostgreSQL deterministic routing race',
+            'slug' => 'postgresql-deterministic-routing-race',
+            'pool_work' => true,
+        ]);
+        $workers = [];
+        foreach (range(1, 2) as $index) {
+            $user = new User;
+            $user->forceFill([
+                'name' => "Production drain worker {$index}",
+                'email' => "production-drain-worker-{$index}@example.test",
+                'password' => bcrypt('test-created-password'),
+                'role' => UserRole::Member->value,
+                'status' => 'active',
+            ])->save();
+            $credential = (string) Str::uuid7();
+            $machine = Spoke::query()->create([
+                'actor_id' => (string) $user->id,
+                'credential_id' => $credential,
+                'credential_backed' => true,
+                'last_polled_at' => $now,
+                'probe_status' => 'green',
+            ]);
+            MachineTeamWorkSetting::query()->create([
+                'spoke_id' => $machine->id,
+                'team_id' => $team->id,
+                'enabled' => true,
+                'roles' => ['builder'],
+                'capabilities' => ['php'],
+                'role_providers' => ['builder' => 'codex'],
+                'concurrency_ceiling' => 1,
+                'updated_by_actor' => (string) $user->id,
+            ]);
+            expect(resolve(WorkDrainService::class)->claim(
+                $team->id,
+                (string) $user->id,
+                $credential,
+                1,
+                ['builder'],
+                ['php'],
+                ['builder' => 'codex'],
+                0,
+                $now,
+            ))->toBe([]);
+            $workers[] = ['actor' => (string) $user->id, 'spoke' => $machine->id, 'credential' => $credential];
+        }
+        $task = WorkTask::query()->create([
+            'team_id' => $team->id,
+            'title' => 'One PostgreSQL production drain winner',
+            'required_capabilities' => ['php'],
+            'timebox_minutes' => 30,
+            'creator_actor' => 'race-creator',
+        ]);
+        $item = $task->items()->create(['role' => 'builder']);
+
+        $results = runMachineDrainProcesses($team->id, $workers, $database['connection']);
+
+        expect(array_merge(...$results))->toBe([$item->id])
+            ->and($item->fresh()->claimant_spoke_id)->toBe($workers[0]['spoke'])
+            ->and(WorkItem::query()->whereKey($item->id)->where('state', WorkItemState::Claimed)->count())->toBe(1);
     } finally {
         cleanupWorkRaceDatabase($database);
     }

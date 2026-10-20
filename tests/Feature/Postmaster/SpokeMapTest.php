@@ -5,6 +5,8 @@ use App\Enums\SpokeLiveness;
 use App\Enums\SpokeMapStatus;
 use App\Livewire\Postmaster\SpokeMap;
 use App\Models\Inbox;
+use App\Models\MachineTeamWorkSetting;
+use App\Models\MachineWorkSettingChange;
 use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkItem;
@@ -437,7 +439,79 @@ test('rendering several routed spokes uses a bounded query count', function (): 
 
     expect($spokes)->toHaveCount(6)
         ->and($spokes->every(fn (array $spoke): bool => $spoke['inboxes_count'] === 2))->toBeTrue()
-        ->and($queryCount)->toBeLessThanOrEqual(3);
+        ->and($queryCount)->toBeLessThanOrEqual(4);
+});
+
+test('machine owners and managers edit only the selected team Work profile without exposing credential fields', function (): void {
+    $owner = capstanUser(['role' => UserRole::Member->value]);
+    $machine = createMapSpoke($owner, 'profile-machine', now(), SpokeLiveness::Green, 0);
+    $defaultTeam = Team::default();
+    $selectedTeam = Team::query()->create(['name' => 'Selected Work team', 'slug' => 'selected-work-team']);
+    $defaultSetting = MachineTeamWorkSetting::query()->create([
+        'spoke_id' => $machine->id,
+        'team_id' => $defaultTeam->id,
+        'enabled' => true,
+        'roles' => ['builder'],
+        'capabilities' => [],
+        'role_providers' => [],
+        'concurrency_ceiling' => 1,
+        'updated_by_actor' => (string) $owner->id,
+    ]);
+    $selectedSetting = MachineTeamWorkSetting::query()->create([
+        'spoke_id' => $machine->id,
+        'team_id' => $selectedTeam->id,
+        'enabled' => false,
+        'roles' => ['reviewer'],
+        'capabilities' => [],
+        'role_providers' => [],
+        'concurrency_ceiling' => 1,
+        'updated_by_actor' => (string) $owner->id,
+    ]);
+
+    Livewire::actingAs($owner)->test(SpokeMap::class)
+        ->assertSeeHtml('data-testid="machine-team-selector"')
+        ->set('selectedTeamId', $selectedTeam->id)
+        ->call('beginEditingWorkProfile', $machine->id)
+        ->assertSeeHtml('data-testid="machine-work-profile-form"')
+        ->assertSet('workEnabled', false)
+        ->assertSet('workRoles', 'reviewer')
+        ->set('workEnabled', true)
+        ->set('workRoles', 'builder, reviewer')
+        ->set('workCapabilities', 'php')
+        ->set('workRoleProviders', '{"builder":"codex"}')
+        ->set('workConcurrencyCeiling', 2)
+        ->call('saveWorkProfile', $machine->id)
+        ->assertHasNoErrors();
+
+    $selectedSetting->refresh();
+    $defaultSetting->refresh();
+    expect($selectedSetting->roles)->toBe(['builder', 'reviewer'])
+        ->and($selectedSetting->capabilities)->toBe(['php'])
+        ->and($selectedSetting->role_providers)->toBe(['builder' => 'codex'])
+        ->and($selectedSetting->concurrency_ceiling)->toBe(2)
+        ->and($defaultSetting->roles)->toBe(['builder'])
+        ->and($defaultSetting->enabled)->toBeTrue()
+        ->and(MachineWorkSettingChange::query()->count())->toBe(1);
+
+    $admin = capstanUser(['role' => UserRole::Admin->value]);
+    Livewire::actingAs($admin)->test(SpokeMap::class)
+        ->set('selectedTeamId', $selectedTeam->id)
+        ->call('beginEditingWorkProfile', $machine->id)
+        ->set('workEnabled', false)
+        ->call('saveWorkProfile', $machine->id)
+        ->assertHasNoErrors();
+    expect($selectedSetting->refresh()->enabled)->toBeFalse()
+        ->and($defaultSetting->refresh()->enabled)->toBeTrue()
+        ->and(MachineWorkSettingChange::query()->count())->toBe(2);
+
+    $member = capstanUser(['role' => UserRole::Member->value]);
+    Livewire::actingAs($member)->test(SpokeMap::class)
+        ->set('selectedTeamId', $selectedTeam->id)
+        ->call('beginEditingWorkProfile', $machine->id)
+        ->assertForbidden();
+
+    $html = $this->actingAsVersioned($owner)->get(route('postmaster.map'))->assertOk()->content();
+    expect($html)->not->toContain($machine->credential_id);
 });
 
 test('map ordering stays in id order after rename and status changes', function (): void {

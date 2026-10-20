@@ -15,6 +15,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property list<string> $capabilities
  * @property array<string, string> $role_providers
  * @property int $current_claimed_item_count
+ * @property int $available_capacity
  * @property int $concurrency_ceiling
  * @property CarbonImmutable $observed_at
  * @property-read Spoke $spoke
@@ -34,6 +35,7 @@ class MachineWorkPresence extends Model
         'capabilities',
         'role_providers',
         'current_claimed_item_count',
+        'available_capacity',
         'concurrency_ceiling',
         'observed_at',
     ];
@@ -46,6 +48,7 @@ class MachineWorkPresence extends Model
             'capabilities' => 'array',
             'role_providers' => 'array',
             'current_claimed_item_count' => 'integer',
+            'available_capacity' => 'integer',
             'concurrency_ceiling' => 'integer',
             'observed_at' => 'immutable_datetime',
         ];
@@ -58,6 +61,7 @@ class MachineWorkPresence extends Model
             'capabilities' => $presence->capabilities,
             'role_providers' => $presence->role_providers,
             'current_claimed_item_count' => $presence->current_claimed_item_count,
+            'available_capacity' => $presence->available_capacity,
             'concurrency_ceiling' => $presence->concurrency_ceiling,
         ]));
     }

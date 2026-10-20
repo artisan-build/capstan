@@ -111,6 +111,10 @@ final class MachineRecordBounds
         if (! is_int($count) || $count < 0 || $count > $attributes['concurrency_ceiling']) {
             throw new InvalidArgumentException('Current claimed item count must be between zero and the concurrency ceiling.');
         }
+        $available = $attributes['available_capacity'] ?? null;
+        if (! is_int($available) || $available < 0 || $available > $attributes['concurrency_ceiling'] - $count) {
+            throw new InvalidArgumentException('Available capacity must fit within the unclaimed concurrency ceiling.');
+        }
     }
 
     /** @param array<string, mixed> $attributes */

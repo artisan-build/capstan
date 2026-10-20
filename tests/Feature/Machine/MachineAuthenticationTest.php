@@ -1,6 +1,7 @@
 <?php
 
 use App\Auth\CapstanCredentialDeclaration;
+use App\Models\MachineTeamWorkSetting;
 use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkItem;
@@ -37,7 +38,7 @@ function machineEndpointPayload(string $endpoint): array
         'artifact' => [],
         'poll' => ['presence' => ['ready_inboxes' => []]],
         'replace' => [],
-        'work' => ['capacity' => 0, 'roles' => ['builder'], 'capabilities' => []],
+        'work' => ['capacity' => 0, 'roles' => ['builder'], 'capabilities' => [], 'role_providers' => [], 'current_claimed_item_count' => 0],
     };
 }
 
@@ -126,6 +127,8 @@ test('one machine credential resolves the same spoke for poll and Work', functio
         'capacity' => 0,
         'roles' => ['builder'],
         'capabilities' => [],
+        'role_providers' => [],
+        'current_claimed_item_count' => 0,
     ])->assertOk();
 
     expect(Spoke::query()->count())->toBe(1)
@@ -226,6 +229,8 @@ test('an orphaned machine credential cannot poll or claim Work', function (): vo
         'capacity' => 1,
         'roles' => ['builder'],
         'capabilities' => [],
+        'role_providers' => [],
+        'current_claimed_item_count' => 0,
     ])->assertStatus(401)->assertJsonPath('error.code', 'unauthenticated');
 
     expect(Spoke::query()->count())->toBe(1);
@@ -264,13 +269,28 @@ test('machine purpose authenticates claim renew and transition while Postmaster 
     $item = WorkItem::query()->create(['work_task_id' => $task->id, 'role' => 'builder']);
     $owner = capstanUser();
     $machine = capstanBoundBearer($owner, CapstanCredentialDeclaration::MACHINE);
+    $spoke = Spoke::query()->create([
+        'actor_id' => (string) $owner->getKey(),
+        'credential_id' => $machine['credential']->id,
+        'last_polled_at' => now(),
+    ]);
+    MachineTeamWorkSetting::query()->create([
+        'spoke_id' => $spoke->id,
+        'team_id' => $team->id,
+        'enabled' => true,
+        'roles' => ['builder'],
+        'capabilities' => [],
+        'role_providers' => [],
+        'concurrency_ceiling' => 1,
+        'updated_by_actor' => (string) $owner->getKey(),
+    ]);
     $machineHeaders = [
         'Authorization' => 'Bearer '.$machine['token'],
         CapstanCredentialDeclaration::ACTOR_HEADER => (string) $owner->getKey(),
     ];
 
     $claim = $this->withHeaders($machineHeaders)->postJson(route('api.work.claim', $team), [
-        'capacity' => 1, 'roles' => ['builder'], 'capabilities' => [],
+        'capacity' => 1, 'roles' => ['builder'], 'capabilities' => [], 'role_providers' => [], 'current_claimed_item_count' => 0,
     ])->assertOk()->assertJsonPath('items.0.id', $item->id);
     $fence = $claim->json('items.0.fence');
     $this->withHeaders($machineHeaders)->postJson(route('api.work.renew', $team), [
@@ -286,7 +306,7 @@ test('machine purpose authenticates claim renew and transition while Postmaster 
         CapstanCredentialDeclaration::ACTOR_HEADER => (string) $owner->getKey(),
     ];
     $this->withHeaders($legacyHeaders)->postJson(route('api.work.claim', $team), [
-        'capacity' => 1, 'roles' => ['builder'], 'capabilities' => [],
+        'capacity' => 1, 'roles' => ['builder'], 'capabilities' => [], 'role_providers' => [], 'current_claimed_item_count' => 0,
     ])->assertStatus(401)->assertJsonPath('error.code', 'unauthenticated');
     $this->withHeaders($legacyHeaders)->postJson(route('api.work.renew', $team), [
         'items' => [['item_id' => $item->id, 'fence' => $fence]],

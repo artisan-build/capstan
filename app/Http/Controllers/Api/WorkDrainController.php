@@ -17,6 +17,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
+use InvalidArgumentException;
 use Laravel\Pennant\Feature;
 
 final class WorkDrainController extends Controller
@@ -35,24 +36,34 @@ final class WorkDrainController extends Controller
             'roles.*' => ['required', 'string', 'max:64', 'distinct'],
             'capabilities' => ['present', 'array', 'list', 'max:'.self::MAX_BATCH],
             'capabilities.*' => ['required', 'string', 'max:64', 'distinct'],
+            'role_providers' => ['sometimes', 'array', 'max:'.self::MAX_BATCH],
+            'role_providers.*' => ['required', 'string', 'max:64', 'regex:/\A[a-z0-9][a-z0-9._-]*\z/D'],
+            'current_claimed_item_count' => ['sometimes', 'integer', 'min:0', 'max:'.self::MAX_BATCH],
         ]);
 
         if ($validator->fails()) {
             return $this->validationError($validator->errors()->toArray());
         }
 
-        /** @var array{capacity: int, roles: non-empty-list<string>, capabilities: list<string>} $validated */
+        /** @var array{capacity: int, roles: non-empty-list<string>, capabilities: list<string>, role_providers: array<string, string>, current_claimed_item_count: int} $validated */
         $validated = $validator->validated();
+        $validated += ['role_providers' => [], 'current_claimed_item_count' => 0];
         $credential = AuthenticateBoundCredential::credential($request);
-        $items = $drain->claim(
-            $team->id,
-            AuthenticateBoundCredential::actorId($request),
-            $credential->id,
-            $validated['capacity'],
-            $validated['roles'],
-            $validated['capabilities'],
-            CarbonImmutable::now(),
-        );
+        try {
+            $items = $drain->claim(
+                $team->id,
+                AuthenticateBoundCredential::actorId($request),
+                $credential->id,
+                $validated['capacity'],
+                $validated['roles'],
+                $validated['capabilities'],
+                $validated['role_providers'],
+                $validated['current_claimed_item_count'],
+                CarbonImmutable::now(),
+            );
+        } catch (InvalidArgumentException $exception) {
+            return $this->validationError(['runtime' => [$exception->getMessage()]]);
+        }
 
         return new JsonResponse([
             'items' => array_map($this->claimItem(...), $items),
