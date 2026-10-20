@@ -33,7 +33,6 @@ set_env DB_DATABASE "${DB}"
 set_env APP_ENV local
 set_env APP_URL "${U}"
 set_env CAPSTAN_ARTIFACT_RENDER_ORIGIN "${R}"
-set_env CAPSTAN_FEATURE_ARTIFACTS true
 grep -qE '^DB_CONNECTION=sqlite$' "${ENV_FILE}" && grep -qE "^DB_DATABASE=${DB}$" "${ENV_FILE}" \
     || die "worktree .env did not take the SQLite settings"
 

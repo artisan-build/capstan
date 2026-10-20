@@ -37,12 +37,11 @@ after="$(sqlite3 "${DB}" 'select count(*) from sessions;')"
 [[ "${after}" -gt "${before}" ]] || bad "anonymous GET did not add a session to ${DB} (${before} -> ${after}): the server is on another database"
 ok "db identity: sessions ${before} -> ${after} in ${DB}"
 
-# Artifacts/Pages/Brand need the Artifacts flag and a render origin that differs from the app origin.
+# Artifacts/Pages/Brand need a render origin that differs from the app origin.
 url_line="$(grep -E '^APP_URL=' "${W}/.env" | cut -d= -f2-)"
 render_line="$(grep -E '^CAPSTAN_ARTIFACT_RENDER_ORIGIN=' "${W}/.env" | cut -d= -f2-)"
 [[ "${url_line}" = "${U}" && "${render_line}" = "${R}" ]] || bad "worktree .env has APP_URL=${url_line} RENDER=${render_line}, expected ${U} / ${R}"
-grep -qE '^CAPSTAN_FEATURE_ARTIFACTS=true$' "${W}/.env" || bad "CAPSTAN_FEATURE_ARTIFACTS is not true in the worktree .env"
-ok "two origins + Artifacts flag set in worktree .env"
+ok "two origins set in worktree .env"
 
 [[ -f "${W}/public/build/manifest.json" ]] || bad "no Vite manifest: authenticated pages will 500"
 ok "Vite manifest present"
