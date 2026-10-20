@@ -77,7 +77,6 @@ class OnboardingSnippet
             '',
             $this->resolveExecutable('curl', '--version'),
             $this->resolveExecutable('php', '-v'),
-            $this->resolveOptionalExecutable('openusage'),
             $this->requireCommand('crontab'),
             'umask 077',
             'mkdir -p "$CAPSTAN_HOME"',
@@ -123,7 +122,6 @@ class OnboardingSnippet
             '',
             'CAPSTAN_PHP_LITERAL="$("$CAPSTAN_PHP" -r \'echo escapeshellarg($argv[1]);\' "$CAPSTAN_PHP")"',
             'CAPSTAN_CURL_LITERAL="$("$CAPSTAN_PHP" -r \'echo escapeshellarg($argv[1]);\' "$CAPSTAN_CURL")"',
-            'CAPSTAN_OPENUSAGE_LITERAL="$("$CAPSTAN_PHP" -r \'echo escapeshellarg($argv[1]);\' "$CAPSTAN_OPENUSAGE")"',
             "printf '%s\\n' ".implode(' ', array_map($this->pollScriptArgument(...), $pollScriptLines)).' > "$CAPSTAN_POLL_SCRIPT"',
             'chmod 700 "$CAPSTAN_POLL_SCRIPT"',
             '[ -e "$CAPSTAN_INBOX_FILE" ] || printf \'[]\n\' > "$CAPSTAN_INBOX_FILE"',
@@ -205,7 +203,6 @@ PHP;
             'CAPSTAN_POLL_URL='.$this->quote($pollUrl),
             'CAPSTAN_PHP=',
             'CAPSTAN_CURL=',
-            'CAPSTAN_OPENUSAGE=',
             'CAPSTAN_HOME="$HOME/.config/capstan/$CAPSTAN_SERVER_ID"',
             'CAPSTAN_TOKEN_FILE="$CAPSTAN_HOME/token"',
             'CAPSTAN_ACTOR_FILE="$CAPSTAN_HOME/actor-id"',
@@ -217,7 +214,7 @@ PHP;
             '    Darwin) CAPSTAN_DEVICE_NAME="$(scutil --get ComputerName 2>/dev/null || true)" ;;',
             '    *) CAPSTAN_DEVICE_NAME="$(hostname -s 2>/dev/null || hostname 2>/dev/null || true)" ;;',
             'esac',
-            'CAPSTAN_USAGE="$("$CAPSTAN_PHP" "$CAPSTAN_USAGE_COLLECTOR" "$CAPSTAN_CURL" "$CAPSTAN_OPENUSAGE" "$CAPSTAN_USAGE_CACHE" 2>/dev/null || true)"',
+            'CAPSTAN_USAGE="$("$CAPSTAN_PHP" "$CAPSTAN_USAGE_COLLECTOR" "$CAPSTAN_CURL" \'\' "$CAPSTAN_USAGE_CACHE" "$HOME" 2>/dev/null || true)"',
             'CAPSTAN_PAYLOAD="$("$CAPSTAN_PHP" -r '.$this->quote($payloadBuilder).' "$CAPSTAN_INBOX_FILE" "$CAPSTAN_PENDING_FILE" "$CAPSTAN_DEVICE_NAME" "$CAPSTAN_USAGE")"',
             'CAPSTAN_RESPONSE="$(printf \'header = "Authorization: Bearer %s"\nheader = "X-Capstan-Actor-ID: %s"\n\' "$(cat "$CAPSTAN_TOKEN_FILE")" "$(cat "$CAPSTAN_ACTOR_FILE")" | "$CAPSTAN_CURL" --config - --fail --silent --show-error --connect-timeout 5 --max-time 15 --user-agent \'capstan-machine/1\' --request POST --header \'Content-Type: application/json\' --data "$CAPSTAN_PAYLOAD" "$CAPSTAN_POLL_URL")"',
             'rm -f "$CAPSTAN_PENDING_FILE"',
@@ -230,7 +227,6 @@ PHP;
         return match ($line) {
             'CAPSTAN_PHP=' => '"CAPSTAN_PHP=$CAPSTAN_PHP_LITERAL"',
             'CAPSTAN_CURL=' => '"CAPSTAN_CURL=$CAPSTAN_CURL_LITERAL"',
-            'CAPSTAN_OPENUSAGE=' => '"CAPSTAN_OPENUSAGE=$CAPSTAN_OPENUSAGE_LITERAL"',
             default => $this->quote($line),
         };
     }
@@ -277,25 +273,6 @@ PHP;
                 $this->quote(__(':command must resolve to an executable file.', ['command' => $command])).' >&2; exit 1; }',
             '"$'.$variable.'" '.$versionFlag.' >/dev/null 2>&1 || { printf \'%s\n\' '.
                 $this->quote(__(':command could not be executed.', ['command' => $command])).' >&2; exit 1; }',
-        ]);
-    }
-
-    private function resolveOptionalExecutable(string $command): string
-    {
-        $variable = 'CAPSTAN_'.strtoupper($command);
-
-        return implode("\n", [
-            $variable.'="$(command -v '.$command.' 2>/dev/null || true)"',
-            'if [ -n "$'.$variable.'" ]; then',
-            '    case "$'.$variable.'" in',
-            '        /*) ;;',
-            '        */*) CAPSTAN_EXECUTABLE_DIRECTORY="$(CDPATH= cd "${'.$variable.'%/*}" 2>/dev/null && pwd -P)" || CAPSTAN_EXECUTABLE_DIRECTORY=\'\'; '.
-                'if [ -n "$CAPSTAN_EXECUTABLE_DIRECTORY" ]; then '.$variable.'="$CAPSTAN_EXECUTABLE_DIRECTORY/${'.$variable.'##*/}"; else '.$variable.'=\'\'; fi ;;',
-            '        *) '.$variable.'=\'\' ;;',
-            '    esac',
-            'fi',
-            'unset CAPSTAN_EXECUTABLE_DIRECTORY',
-            '[ -z "$'.$variable.'" ] || { [ -f "$'.$variable.'" ] && [ -x "$'.$variable.'" ]; } || '.$variable.'=\'\'',
         ]);
     }
 

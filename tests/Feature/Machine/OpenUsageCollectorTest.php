@@ -58,6 +58,7 @@ function runUsageCollector(string $directory, string $curlBody, ?string $cliBody
         $curl,
         $openusage,
         $directory.'/usage-cache.json',
+        $directory,
     ]);
     $process->run();
     expect($process->isSuccessful())->toBeTrue($process->getErrorOutput());
@@ -86,6 +87,7 @@ function runCustomUsageCollector(string $directory, string $curlScript, ?string 
         $curl,
         $openusage,
         $cache,
+        $directory,
     ]);
     $process->run();
     expect($process->isSuccessful())->toBeTrue($process->getErrorOutput());
@@ -229,6 +231,70 @@ test('the CLI adapter uses the exact export command and conservatively collapses
             ->and($encoded)->not->toContain($canary)
             ->and($encoded)->not->toContain('private@example.test')
             ->and($encoded)->not->toContain('/secret/path');
+    } finally {
+        File::deleteDirectory($directory);
+    }
+});
+
+test('an existing collector discovers a CLI installed later without reinstalling Capstan', function (): void {
+    $directory = usageCollectorDirectory();
+    $home = $directory.'/home';
+    $bin = $home.'/.local/bin';
+    File::makeDirectory($bin, 0700, true);
+    $curl = $directory.'/curl';
+    $cache = $directory.'/usage-cache.json';
+    File::put($curl, "#!/bin/sh\nexit 7\n");
+    chmod($curl, 0700);
+    $run = function (string $homeArgument) use ($curl, $cache, $home): Process {
+        $process = new Process([
+            PHP_BINARY, '-d', 'auto_prepend_file=', resource_path('installers/openusage-collector.php'),
+            $curl, '', $cache, $homeArgument,
+        ], null, ['HOME' => $home.'/ignored-environment-home']);
+        $process->run();
+
+        return $process;
+    };
+
+    try {
+        $before = $run($home);
+        expect($before->isSuccessful())->toBeTrue($before->getErrorOutput())
+            ->and(json_decode($before->getOutput(), true, flags: JSON_THROW_ON_ERROR)['source'])->toBe('none');
+
+        $cli = json_encode([
+            'schema_version' => '1',
+            'openusage_version' => '0.26.1',
+            'snapshots' => [[
+                'provider_id' => 'codex',
+                'account_id' => 'private-account',
+                'timestamp' => '2026-10-19T17:59:55Z',
+                'status' => 'ok',
+                'metrics' => ['rate_limit_primary' => [
+                    'unit' => '%', 'limit' => 100, 'used' => 25, 'remaining' => 75, 'window' => '1h30m',
+                ]],
+                'resets' => ['rate_limit_primary' => '2026-10-19T19:00:00+01:00'],
+                'attributes' => [],
+            ]],
+        ], JSON_THROW_ON_ERROR);
+        File::put($bin.'/openusage', "#!/bin/sh\nprintf '%s' ".escapeshellarg($cli)."\n");
+        chmod($bin.'/openusage', 0700);
+        File::put($cache, json_encode(['attempted_at' => 0], JSON_THROW_ON_ERROR));
+
+        $relativeHome = $run('relative-home');
+        expect($relativeHome->isSuccessful())->toBeTrue($relativeHome->getErrorOutput())
+            ->and(json_decode($relativeHome->getOutput(), true, flags: JSON_THROW_ON_ERROR)['source'])->toBe('none');
+
+        File::put($cache, json_encode(['attempted_at' => 0], JSON_THROW_ON_ERROR));
+        $oversizedHome = $run('/'.str_repeat('x', 4096));
+        expect($oversizedHome->isSuccessful())->toBeTrue($oversizedHome->getErrorOutput())
+            ->and(json_decode($oversizedHome->getOutput(), true, flags: JSON_THROW_ON_ERROR)['source'])->toBe('none');
+
+        File::put($cache, json_encode(['attempted_at' => 0], JSON_THROW_ON_ERROR));
+        $after = $run($home);
+        $report = json_decode($after->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+        expect($after->isSuccessful())->toBeTrue($after->getErrorOutput())
+            ->and($report['source'])->toBe('openusage-sh')
+            ->and($report['providers'][0]['provider'])->toBe('codex')
+            ->and($after->getOutput())->not->toContain('private-account');
     } finally {
         File::deleteDirectory($directory);
     }
@@ -424,6 +490,7 @@ test('the fixed loopback request never reaches a configured HTTP proxy', functio
             $curl,
             '',
             $directory.'/usage-cache.json',
+            $directory,
         ], null, [
             'http_proxy' => $proxyUrl,
             'HTTP_PROXY' => $proxyUrl,
@@ -454,6 +521,10 @@ test('the collector pins the fixed loopback and execution bounds', function (): 
         ->and($source)->toContain("'--noproxy', '*'")
         ->and($source)->toContain("'http://127.0.0.1:6736/v1/limits'")
         ->and($source)->toContain('[$openusage, \'export\', \'--output\', \'-\', \'--format\', \'json\', \'--source\', \'auto\'], 30')
+        ->and($source)->toContain('strlen($home) <= 4096')
+        ->and($source)->not->toContain('$_SERVER')
+        ->and($source)->not->toContain('$_ENV')
+        ->and($source)->not->toContain('getenv(')
         ->and($source)->not->toContain('https://api.anthropic.com')
         ->and($source)->not->toContain('api.openai.com')
         ->and($source)->not->toContain('Illuminate\\')

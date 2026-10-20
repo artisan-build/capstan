@@ -202,6 +202,36 @@ namespace App\Models{
 /**
  * @property int $id
  * @property int $spoke_id
+ * @property string $finding_code
+ * @property bool $active
+ * @property string|null $transition_key
+ * @property CarbonImmutable|null $opened_at
+ * @property CarbonImmutable|null $closed_at
+ * @property-read Spoke $spoke
+ * @property \Carbon\CarbonImmutable|null $created_at
+ * @property \Carbon\CarbonImmutable|null $updated_at
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineConditionState newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineConditionState newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineConditionState query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineConditionState whereActive($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineConditionState whereClosedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineConditionState whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineConditionState whereFindingCode($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineConditionState whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineConditionState whereOpenedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineConditionState whereSpokeId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineConditionState whereTransitionKey($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineConditionState whereUpdatedAt($value)
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperMachineConditionState {}
+}
+
+namespace App\Models{
+/**
+ * @property int $id
+ * @property int $spoke_id
  * @property int $team_id
  * @property bool $enabled
  * @property list<string> $roles
@@ -277,6 +307,7 @@ namespace App\Models{
  * @property CarbonImmutable|null $collected_at
  * @property CarbonImmutable $last_attempt_at
  * @property CarbonImmutable|null $last_success_received_at
+ * @property CarbonImmutable|null $unavailable_since
  * @property string|null $failure_code
  * @property-read Spoke $spoke
  * @property-read Collection<int, MachineUsageProvider> $providers
@@ -296,6 +327,7 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineUsageReport whereSource($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineUsageReport whereSourceVersion($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineUsageReport whereSpokeId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineUsageReport whereUnavailableSince($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineUsageReport whereUpdatedAt($value)
  * @mixin \Eloquent
  */
@@ -354,6 +386,7 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineWorkPresence newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineWorkPresence newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineWorkPresence query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineWorkPresence whereAvailableCapacity($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineWorkPresence whereCapabilities($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineWorkPresence whereConcurrencyCeiling($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|MachineWorkPresence whereCreatedAt($value)
@@ -544,6 +577,8 @@ namespace App\Models{
  * @property CarbonImmutable $created_at
  * @property CarbonImmutable $updated_at
  * @property-read int|null $inboxes_count
+ * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\MachineConditionState> $conditionStates
+ * @property-read int|null $condition_states_count
  * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\Inbox> $inboxes
  * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\SpokeProbe> $probes
  * @property-read int|null $probes_count

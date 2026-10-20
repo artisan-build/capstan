@@ -2,25 +2,21 @@
 
 namespace App\Livewire\Postmaster;
 
-use App\Enums\SpokeLiveness;
-use App\Enums\SpokeMapStatus;
 use App\Features\Postmaster;
 use App\Machine\InitialMachineWorkProfile;
+use App\Machine\MachineBudgetProjection;
 use App\Machine\MachineWorkProfiles;
-use App\Models\MachineTeamWorkSetting;
+use App\Machine\TeamMemberships;
 use App\Models\Spoke;
 use App\Models\Team;
 use App\Postmaster\PendingInstallLinks;
 use App\Postmaster\RetireSpoke;
 use ArtisanBuild\BuiltForCloud\Contracts\IdentityContext;
-use ArtisanBuild\BuiltForCloud\RolePolicy;
 use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
-use Carbon\CarbonInterface;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\View\View;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\RateLimiter;
 use InvalidArgumentException;
 use Laravel\Pennant\Feature;
@@ -51,27 +47,34 @@ class SpokeMap extends Component
 
     public int $workConcurrencyCeiling = 1;
 
-    public function mount(): void
+    public function mount(TeamMemberships $memberships): void
     {
         $this->guardFeature();
-        $teams = Team::query()->orderByDesc('is_default')->orderBy('name')->orderBy('id')->get(['id', 'name']);
+        $user = request()->user();
+        abort_unless($user instanceof User, 401);
+        $teams = $memberships->teamsFor($user)->orderByDesc('is_default')->orderBy('name')->orderBy('id')->get(['id', 'name']);
         foreach ($teams as $team) {
             $this->workTeams[] = ['id' => $team->id, 'name' => $team->name];
         }
         $this->selectedTeamId = $this->workTeams[0]['id'] ?? null;
     }
 
-    public function render(): View
+    public function render(MachineBudgetProjection $budgets): View
     {
         $this->guardFeature();
 
         $selectedTeam = collect($this->workTeams)->firstWhere('id', $this->selectedTeamId);
         abort_unless(is_array($selectedTeam), 404);
+        $user = request()->user();
+        abort_unless($user instanceof User, 401);
+
+        $machineBudgets = $budgets->forTeam($user, $selectedTeam['id'], CarbonImmutable::now());
 
         return view('livewire.postmaster.spoke-map', [
             'teams' => $this->workTeams,
             'selectedTeam' => $selectedTeam,
-            'spokes' => collect($this->spokes($selectedTeam['id'])),
+            'spokes' => collect($machineBudgets['machines']),
+            'machineBudgets' => $machineBudgets,
         ]);
     }
 
@@ -142,11 +145,17 @@ class SpokeMap extends Component
         }
     }
 
-    public function beginEditingWorkProfile(int $spokeId, InitialMachineWorkProfile $defaults): void
-    {
+    public function beginEditingWorkProfile(
+        int $spokeId,
+        InitialMachineWorkProfile $defaults,
+        MachineWorkProfiles $profiles,
+    ): void {
         $this->guardFeature();
-        $spoke = $this->manageableWorkSpoke($spokeId);
         $team = $this->selectedTeam();
+        $spoke = Spoke::query()->whereNull('retired_at')->findOrFail($spokeId);
+        $actor = request()->user();
+        abort_unless($actor instanceof User, 401);
+        $profiles->authorize($spoke, $team, $actor);
         $setting = $spoke->workSettings()->where('team_id', $team->id)->first();
         $profile = $setting === null ? $defaults->default() : [
             'enabled' => $setting->enabled,
@@ -176,8 +185,9 @@ class SpokeMap extends Component
     public function saveWorkProfile(int $spokeId, MachineWorkProfiles $profiles): void
     {
         $this->guardFeature();
-        $spoke = $this->manageableWorkSpoke($spokeId);
-        abort_unless($this->editingWorkSpokeId === $spoke->id && $this->editingWorkTeamId !== null, 409);
+        $team = $this->selectedTeam();
+        abort_unless($this->editingWorkSpokeId === $spokeId && $this->editingWorkTeamId === $team->id, 409);
+        $spoke = Spoke::query()->whereNull('retired_at')->findOrFail($spokeId);
         $validated = $this->validate([
             'workEnabled' => ['required', 'boolean'],
             'workRoles' => ['present', 'string', 'max:1624'],
@@ -193,7 +203,6 @@ class SpokeMap extends Component
             }
             $actor = request()->user();
             abort_unless($actor instanceof User, 401);
-            $team = Team::query()->findOrFail($this->editingWorkTeamId);
             /** @var array<string, string> $providers */
             $profiles->put($spoke, $team, $actor, [
                 'enabled' => $validated['workEnabled'],
@@ -211,128 +220,6 @@ class SpokeMap extends Component
         $this->cancelEditingWorkProfile();
     }
 
-    /**
-     * @return list<array{
-     *     id: int,
-     *     name: string,
-     *     device_name: string|null,
-     *     owner_name: string,
-     *     can_rename: bool,
-     *     can_manage_work: bool,
-     *     work_setting: MachineTeamWorkSetting|null,
-     *     last_polled_at: CarbonImmutable|null,
-     *     inboxes_count: int,
-     *     probe_status: SpokeLiveness,
-     *     status: SpokeMapStatus
-     * }>
-     */
-    private function spokes(int $teamId): array
-    {
-        /** @var Collection<int, Spoke> $spokes */
-        $spokes = Spoke::query()->whereNull('retired_at')
-            ->with(['workSettings' => fn ($query) => $query->where('team_id', $teamId)])
-            ->withCount('inboxes')->orderBy('id')->get();
-        $ownerNames = $this->ownerNames($spokes);
-        $baseNames = $spokes->mapWithKeys(fn (Spoke $spoke): array => [
-            $spoke->id => $this->baseDisplayName($spoke),
-        ]);
-        $duplicateNames = $spokes
-            ->groupBy(fn (Spoke $spoke): string => $spoke->actor_id."\0".$baseNames[$spoke->id])
-            ->map->count()
-            ->all();
-        $user = request()->user();
-        $actorId = $user instanceof User ? (string) $user->getKey() : null;
-        $canManageAny = $user instanceof User && RolePolicy::canManageMembers($user->role);
-
-        $staleAfter = max(60, (int) config('capstan.postmaster.map.stale_after_seconds', 300));
-        $staleBefore = now()->subSeconds($staleAfter);
-
-        return array_values($spokes
-            ->map(fn (Spoke $spoke): array => [
-                'id' => $spoke->id,
-                'name' => $this->displayName($spoke, $baseNames, $duplicateNames),
-                'device_name' => $this->deviceName($spoke),
-                'owner_name' => $ownerNames[$spoke->actor_id] ?? __('Unknown user'),
-                'can_rename' => $actorId !== null && hash_equals($actorId, $spoke->actor_id),
-                'can_manage_work' => $actorId !== null && ($canManageAny || hash_equals($actorId, $spoke->actor_id)),
-                'work_setting' => $spoke->workSettings->first(),
-                'last_polled_at' => $spoke->last_polled_at,
-                'inboxes_count' => (int) $spoke->inboxes_count,
-                'probe_status' => $spoke->probe_status,
-                'status' => $this->mapStatus($spoke, $staleBefore),
-            ])
-            ->all());
-    }
-
-    private function mapStatus(Spoke $spoke, CarbonInterface $staleBefore): SpokeMapStatus
-    {
-        if ($spoke->last_polled_at === null || $spoke->last_polled_at->lt($staleBefore)) {
-            return SpokeMapStatus::Red;
-        }
-
-        return match ($spoke->probe_status) {
-            SpokeLiveness::Green => SpokeMapStatus::Green,
-            SpokeLiveness::Red => SpokeMapStatus::Red,
-            SpokeLiveness::Unknown => SpokeMapStatus::Pending,
-        };
-    }
-
-    /**
-     * @param  Collection<int, string>  $baseNames
-     * @param  array<int|string, int>  $duplicateNames
-     */
-    private function displayName(Spoke $spoke, Collection $baseNames, array $duplicateNames): string
-    {
-        $name = $baseNames[$spoke->id];
-
-        return $duplicateNames[$spoke->actor_id."\0".$name] > 1
-            ? $name.' (#'.$spoke->id.')'
-            : $name;
-    }
-
-    private function baseDisplayName(Spoke $spoke): string
-    {
-        foreach ([$spoke->name, $this->deviceName($spoke)] as $name) {
-            if (is_string($name) && trim($name) !== '') {
-                return trim($name);
-            }
-        }
-
-        return __('Spoke #:id', ['id' => $spoke->id]);
-    }
-
-    private function deviceName(Spoke $spoke): ?string
-    {
-        $deviceName = $spoke->getAttribute('device_name');
-
-        return is_string($deviceName) ? $deviceName : null;
-    }
-
-    /**
-     * @param  Collection<int, Spoke>  $spokes
-     * @return array<string, string>
-     */
-    private function ownerNames(Collection $spokes): array
-    {
-        $actorIds = $spokes->pluck('actor_id')
-            ->unique()
-            ->filter(fn (mixed $actorId): bool => is_string($actorId)
-                && filter_var($actorId, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) !== false)
-            ->values()
-            ->all();
-
-        return User::query()
-            ->whereIn('id', $actorIds)
-            ->get(['id', 'name', 'email'])
-            ->mapWithKeys(function (User $user): array {
-                $name = trim($user->name);
-                $email = trim($user->email);
-
-                return [(string) $user->getKey() => $name !== '' ? $name : ($email !== '' ? $email : __('Unknown user'))];
-            })
-            ->all();
-    }
-
     private function ownedSpoke(int $spokeId): Spoke
     {
         $user = request()->user();
@@ -344,18 +231,12 @@ class SpokeMap extends Component
         return $spoke;
     }
 
-    private function manageableWorkSpoke(int $spokeId): Spoke
+    private function selectedTeam(): Team
     {
         $user = request()->user();
         abort_unless($user instanceof User, 401);
-        $spoke = Spoke::query()->whereNull('retired_at')->findOrFail($spokeId);
-        abort_unless(hash_equals((string) $user->getKey(), $spoke->actor_id) || RolePolicy::canManageMembers($user->role), 403);
+        abort_unless($this->selectedTeamId !== null && resolve(TeamMemberships::class)->belongsTo($user, $this->selectedTeamId), 404);
 
-        return $spoke;
-    }
-
-    private function selectedTeam(): Team
-    {
         return Team::query()->findOrFail($this->selectedTeamId);
     }
 

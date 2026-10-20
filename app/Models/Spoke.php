@@ -121,4 +121,10 @@ class Spoke extends Model
     {
         return $this->hasMany(MachineWorkPresence::class);
     }
+
+    /** @return HasMany<MachineConditionState, $this> */
+    public function conditionStates(): HasMany
+    {
+        return $this->hasMany(MachineConditionState::class);
+    }
 }

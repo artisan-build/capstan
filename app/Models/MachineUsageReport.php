@@ -18,6 +18,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property CarbonImmutable|null $collected_at
  * @property CarbonImmutable $last_attempt_at
  * @property CarbonImmutable|null $last_success_received_at
+ * @property CarbonImmutable|null $unavailable_since
  * @property string|null $failure_code
  * @property-read Spoke $spoke
  * @property-read Collection<int, MachineUsageProvider> $providers
@@ -35,6 +36,7 @@ class MachineUsageReport extends Model
         'collected_at',
         'last_attempt_at',
         'last_success_received_at',
+        'unavailable_since',
         'failure_code',
     ];
 
@@ -45,6 +47,7 @@ class MachineUsageReport extends Model
             'collected_at' => 'immutable_datetime',
             'last_attempt_at' => 'immutable_datetime',
             'last_success_received_at' => 'immutable_datetime',
+            'unavailable_since' => 'immutable_datetime',
         ];
     }
 

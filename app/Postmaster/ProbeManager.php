@@ -4,6 +4,7 @@ namespace App\Postmaster;
 
 use App\Enums\ProbeStatus;
 use App\Enums\SpokeLiveness;
+use App\Machine\MachineConditionNotifier;
 use App\Models\Spoke;
 use App\Models\SpokeProbe;
 use Carbon\CarbonImmutable;
@@ -12,6 +13,8 @@ use Illuminate\Support\Str;
 class ProbeManager
 {
     public const int MIN_TIMEOUT_SECONDS = 60;
+
+    public function __construct(private readonly MachineConditionNotifier $conditions) {}
 
     /**
      * @param  array{probe_id: string, digest: string}|null  $response
@@ -35,10 +38,14 @@ class ProbeManager
         }
 
         if (hash_equals(hash('sha256', $probe->nonce), $response['digest'])) {
+            $wasRed = $spoke->probe_status === SpokeLiveness::Red;
             $probe->forceFill([
                 'status' => ProbeStatus::Passed,
                 'responded_at' => $now,
             ])->save();
+            if ($wasRed) {
+                $this->conditions->recover($spoke, MachineConditionNotifier::PROBE_FAILURE, $now);
+            }
             $spoke->forceFill([
                 'probe_status' => SpokeLiveness::Green,
                 'probe_failed_at' => null,

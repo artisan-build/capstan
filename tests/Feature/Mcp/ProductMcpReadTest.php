@@ -2,13 +2,16 @@
 
 use App\Enums\MessageStatus;
 use App\Enums\MessageType;
+use App\Machine\MachineBudgetProjection;
 use App\Mcp\CapstanServer;
 use App\Mcp\OwnerSubjectResolver;
 use App\Mcp\SignedCursor;
 use App\Mcp\Tools\PostmasterSpokesTool;
 use App\Models\Envelope;
 use App\Models\Inbox;
+use App\Models\MachineTeamWorkSetting;
 use App\Models\Spoke;
+use App\Models\Team;
 use App\Support\JsonCanonicalizer;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Credential;
@@ -22,6 +25,7 @@ use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\McpDelegatedTools;
 use ArtisanBuild\BuiltForCloud\Testing\McpProductAdmission;
 use ArtisanBuild\BuiltForCloud\User;
+use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Http\Request as HttpRequest;
 use Illuminate\Support\Facades\Date;
@@ -168,10 +172,11 @@ test('keeps the exact read-effect tools on the read door when the write door is 
         ->and($meta->json('endpoints'))->toBe(['mcp' => '/mcp', 'mcp_write' => '/mcp/write']);
 
     $tools = collect(capstanMcpReadList($token)->assertOk()->json('result.tools'))->keyBy('name');
-    expect($tools->keys()->sort()->values()->all())->toBe(['get_brand_kit', 'get_page', 'get_task', 'get_team_work_policy', 'list_escalations', 'list_layouts', 'list_pages', 'list_work', 'postmaster_messages', 'postmaster_spokes', 'preview_brand_draft']);
+    expect($tools->keys()->sort()->values()->all())->toBe(['get_brand_kit', 'get_page', 'get_task', 'get_team_work_policy', 'list_escalations', 'list_layouts', 'list_pages', 'list_work', 'machine_budgets', 'postmaster_messages', 'postmaster_spokes', 'preview_brand_draft']);
 
     foreach ([
         'postmaster_spokes' => 'metadata',
+        'machine_budgets' => 'metadata',
         'postmaster_messages' => 'content',
     ] as $name => $classification) {
         $tool = $tools->get($name);
@@ -207,6 +212,7 @@ test('keeps the exact read-effect tools on the read door when the write door is 
             'list_layouts',
             'list_pages',
             'list_work',
+            'machine_budgets',
             'orchestrate',
             'postmaster_messages',
             'postmaster_spokes',
@@ -312,7 +318,7 @@ test('spoke tool uses device fallback and disambiguates duplicate display names'
     foreach ($spokes as $spoke) {
         expect($items[$spoke->id]['name'])->toBe("Shared Mac (#{$spoke->id})")
             ->and($items[$spoke->id]['device_name'])->toBe('Shared Mac')
-            ->and($items[$spoke->id]['owner_name'])->toBe('tool-owner@example.test');
+            ->and($items[$spoke->id]['owner_name'])->toBe('Member');
     }
 });
 
@@ -699,7 +705,7 @@ test('feature gating and unsupported subject types fail closed without changing 
 
     config(['capstan.features.postmaster' => false]);
     Feature::flushCache();
-    expect(capstanMcpReadList($token)->json('result.tools.*.name'))->toHaveCount(11);
+    expect(capstanMcpReadList($token)->json('result.tools.*.name'))->toHaveCount(12);
     capstanMcpReadCall('postmaster_spokes', (object) [], $token)
         ->assertOk()
         ->assertJsonPath('result.isError', true)
@@ -759,4 +765,71 @@ test('unknown argument diagnostics remain bounded for a maximum request id', fun
     expect(capstanMcpReadError($response))->toBe('Unknown tool argument.')
         ->and(strlen($response->getContent()))->toBeLessThan(1_048_576)
         ->and($response->getContent())->not->toContain($property);
+});
+
+test('machine budgets MCP returns the shared team-scoped projection', function (): void {
+    Date::setTestNow('2026-10-20 12:00:00');
+    try {
+        $viewer = capstanUser(['name' => 'Budget viewer', 'role' => UserRole::Admin->value]);
+        $owner = capstanUser(['name' => 'Budget owner', 'email' => 'private-budget@example.test']);
+        $foreignOwner = capstanUser(['name' => 'Foreign budget owner']);
+        $team = Team::query()->create(['name' => 'MCP non-default team', 'slug' => 'mcp-non-default-team']);
+        foreach ([$viewer, $owner] as $member) {
+            DB::table('team_user')->insert([
+                'team_id' => $team->id,
+                'user_id' => $member->id,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+        $machine = Spoke::query()->create([
+            'actor_id' => (string) $owner->id,
+            'credential_id' => (string) Str::uuid(),
+            'name' => 'Budget machine',
+            'last_polled_at' => now(),
+            'probe_status' => 'green',
+        ]);
+        $legacy = Spoke::query()->create([
+            'actor_id' => (string) $owner->id,
+            'credential_id' => (string) Str::uuid(),
+            'credential_backed' => true,
+            'name' => 'Legacy budget machine',
+        ]);
+        $foreign = Spoke::query()->create([
+            'actor_id' => (string) $foreignOwner->id,
+            'credential_id' => (string) Str::uuid(),
+            'credential_backed' => true,
+            'name' => 'Foreign unconfigured budget machine',
+        ]);
+        $synthetic = Spoke::query()->create([
+            'actor_id' => (string) $owner->id,
+            'credential_id' => (string) Str::uuid(),
+            'credential_backed' => false,
+            'name' => 'Synthetic delegated budget spoke',
+        ]);
+        MachineTeamWorkSetting::query()->create([
+            'spoke_id' => $machine->id,
+            'team_id' => $team->id,
+            'enabled' => true,
+            'roles' => ['builder'],
+            'capabilities' => [],
+            'role_providers' => ['builder' => 'codex'],
+            'concurrency_ceiling' => 1,
+            'updated_by_actor' => (string) $owner->id,
+        ]);
+        $token = capstanMcpReadToken($viewer);
+
+        $actual = capstanMcpReadStructured(capstanMcpReadCall('machine_budgets', ['team_id' => $team->id], $token));
+        $expected = resolve(MachineBudgetProjection::class)->forTeam($viewer, $team->id, now());
+        expect($actual)->toBe($expected)
+            ->and(array_column($actual['machines'], 'name'))->toBe(['Budget machine', 'Legacy budget machine'])
+            ->and(collect($actual['machines'])->pluck('machine_id'))->toContain($legacy->id)
+            ->and(data_get(collect($actual['machines'])->firstWhere('machine_id', $legacy->id), 'can_manage_work'))->toBeTrue()
+            ->and(collect($actual['machines'])->pluck('machine_id'))->not->toContain($foreign->id)
+            ->and(collect($actual['machines'])->pluck('machine_id'))->not->toContain($synthetic->id)
+            ->and(json_encode($actual, JSON_THROW_ON_ERROR))->not->toContain('private-budget@example.test')
+            ->and(json_encode($actual, JSON_THROW_ON_ERROR))->not->toContain($machine->credential_id);
+    } finally {
+        Date::setTestNow();
+    }
 });

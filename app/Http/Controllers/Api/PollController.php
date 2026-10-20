@@ -11,6 +11,8 @@ use App\Http\Controllers\Controller;
 use App\Http\Middleware\AuthenticateBoundCredential;
 use App\Machine\ApplyPendingMachineProfile;
 use App\Machine\IngestMachineUsage;
+use App\Machine\MachineConditionNotifier;
+use App\Machine\MachineFindingPayload;
 use App\Machine\MachineUsagePayload;
 use App\Models\Envelope;
 use App\Models\Inbox;
@@ -61,6 +63,8 @@ class PollController extends Controller
         ApplyPendingMachineProfile $pendingProfiles,
         MachineUsagePayload $usagePayload,
         IngestMachineUsage $usageIngest,
+        MachineFindingPayload $findingPayload,
+        MachineConditionNotifier $conditionNotifier,
     ): JsonResponse {
         $credential = AuthenticateBoundCredential::credential($request);
         $actorId = AuthenticateBoundCredential::actorId($request);
@@ -86,6 +90,9 @@ class PollController extends Controller
             }
         }
 
+        $hasFindings = property_exists($payload, 'findings');
+        $findings = $findingPayload->parse($hasFindings ? $payload->findings : null);
+
         $validation = $this->validatePayload($payload);
 
         if ($validation instanceof JsonResponse) {
@@ -110,13 +117,16 @@ class PollController extends Controller
         $serverId = $identity->id();
 
         try {
-            /** @var array{payload: array{inbound: list<array<string, mixed>>, cursor: string|null, probe_challenge?: array{probe_id: string, nonce: string, algorithm: string}}, failure: array{Spoke, SpokeProbe}|null, spoke: Spoke} $result */
-            $result = DB::transaction(function () use ($credential, $actorId, $validation, $envelopes, $serverId, $probeManager, $sender, $acknowledger, $spokes, $pendingProfiles): array {
+            /** @var array{payload: array{inbound: list<array<string, mixed>>, cursor: string|null, probe_challenge?: array{probe_id: string, nonce: string, algorithm: string}}, spoke: Spoke} $result */
+            $result = DB::transaction(function () use ($credential, $actorId, $validation, $envelopes, $serverId, $probeManager, $probeFailureNotifier, $sender, $acknowledger, $spokes, $pendingProfiles): array {
                 $now = CarbonImmutable::now();
                 $spoke = $spokes->resolve($actorId, $credential->id, $now, deviceName: $validation['device_name']);
                 $pendingProfiles->apply($spoke, $actorId, $credential->id);
                 $readyInboxes = array_values(array_unique($validation['ready_inboxes']));
                 $failedProbe = $probeManager->respond($spoke, $validation['probe_response'], $now);
+                if ($failedProbe instanceof SpokeProbe) {
+                    $probeFailureNotifier->notify($spoke, $failedProbe);
+                }
 
                 $this->refreshRouting($spoke, $actorId, $readyInboxes, $validation['cursor'], $now);
                 $this->assertSendersOwned($actorId, $envelopes, $serverId);
@@ -141,24 +151,11 @@ class PollController extends Controller
 
                 return [
                     'payload' => $payload,
-                    'failure' => $failedProbe === null ? null : [$spoke, $failedProbe],
                     'spoke' => $spoke,
                 ];
             });
         } catch (ApiErrorException $rejection) {
             return $rejection->toResponse($request);
-        }
-
-        if ($result['failure'] !== null) {
-            try {
-                $probeFailureNotifier->notify(...$result['failure']);
-            } catch (Throwable $exception) {
-                Log::error('Postmaster probe failure notification failed.', [
-                    'spoke_id' => $result['failure'][0]->id,
-                    'probe_id' => $result['failure'][1]->probe_id,
-                    'exception' => $exception,
-                ]);
-            }
         }
 
         if ($hasUsage) {
@@ -175,6 +172,31 @@ class PollController extends Controller
                 }
             }
             $result['payload']['usage_status'] = $usageStatus;
+        }
+
+        if ($hasFindings) {
+            $accepted = 0;
+            foreach ($findings['accepted'] as $finding) {
+                try {
+                    // observed_at orders the bounded client events; the consequential
+                    // transition timestamp remains server-authored at processing time.
+                    $changed = $finding['recovered']
+                        ? $conditionNotifier->recover($result['spoke'], $finding['code'], CarbonImmutable::now())
+                        : $conditionNotifier->open($result['spoke'], $finding['code'], CarbonImmutable::now());
+                    $accepted += $changed ? 1 : 0;
+                } catch (Throwable $exception) {
+                    Log::warning('Machine finding transition was ignored.', [
+                        'spoke_id' => $result['spoke']->id,
+                        'finding_code' => $finding['code'],
+                        'exception_class' => $exception::class,
+                    ]);
+                }
+            }
+            $result['payload']['findings_status'] = [
+                'accepted_transitions' => $accepted,
+                'ignored_unknown' => $findings['ignored_unknown'],
+                'ignored_invalid' => $findings['ignored_invalid'],
+            ];
         }
 
         return new JsonResponse($result['payload']);

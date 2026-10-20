@@ -125,24 +125,47 @@ test('machine owners and Owners or Admins write bounded audited profiles while M
         ->and(MachineWorkSettingChange::query()->count())->toBe(2);
 });
 
-test('profile writes stay keyed to the selected team while reusing global Owner and Admin authority', function (): void {
+test('profile writes require target-team membership and a same-team owner for manager creation', function (): void {
     $owner = capstanUser();
     $machine = routingMachine(user: $owner);
     $otherTeam = Team::query()->create(['name' => 'Other profile team', 'slug' => 'other-profile-team']);
     $admin = capstanUser(['role' => 'owner']);
-
-    resolve(MachineWorkProfiles::class)->put($machine['spoke'], $otherTeam, $admin, [
+    $foreignOwner = capstanUser();
+    $foreignMachine = routingMachine(user: $foreignOwner)['spoke'];
+    $sameTeamOwner = capstanUser();
+    $sameTeamMachine = Spoke::query()->create([
+        'actor_id' => (string) $sameTeamOwner->id,
+        'credential_id' => (string) Str::uuid(),
+        'credential_backed' => true,
+    ]);
+    $profile = [
         'enabled' => false,
         'roles' => ['reviewer'],
         'capabilities' => [],
         'role_providers' => [],
         'concurrency_ceiling' => 1,
-    ], CarbonImmutable::now());
+    ];
+
+    $profiles = resolve(MachineWorkProfiles::class);
+    expect(fn () => $profiles->put($machine['spoke'], $otherTeam, $owner, $profile, CarbonImmutable::now()))
+        ->toThrow(AuthorizationException::class);
+
+    DB::table('team_user')->insert([
+        ['team_id' => $otherTeam->id, 'user_id' => $owner->id, 'created_at' => now(), 'updated_at' => now()],
+        ['team_id' => $otherTeam->id, 'user_id' => $admin->id, 'created_at' => now(), 'updated_at' => now()],
+        ['team_id' => $otherTeam->id, 'user_id' => $sameTeamOwner->id, 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    expect($profiles->put($machine['spoke'], $otherTeam, $owner, $profile, CarbonImmutable::now()))->toBeTrue()
+        ->and($profiles->put($machine['spoke'], $otherTeam, $admin, [...$profile, 'enabled' => true], CarbonImmutable::now()))->toBeTrue()
+        ->and($profiles->put($sameTeamMachine, $otherTeam, $admin, $profile, CarbonImmutable::now()))->toBeTrue();
+    expect(fn () => $profiles->put($foreignMachine, $otherTeam, $admin, $profile, CarbonImmutable::now()))
+        ->toThrow(AuthorizationException::class);
 
     expect(MachineTeamWorkSetting::query()->where('spoke_id', $machine['spoke']->id)->count())->toBe(2)
-        ->and(MachineTeamWorkSetting::query()->where('team_id', $machine['team']->id)->sole()->enabled)->toBeTrue()
-        ->and(MachineTeamWorkSetting::query()->where('team_id', $otherTeam->id)->sole()->enabled)->toBeFalse()
-        ->and(MachineWorkSettingChange::query()->sole()->team_id)->toBe($otherTeam->id);
+        ->and(MachineTeamWorkSetting::query()->where('spoke_id', $machine['spoke']->id)->where('team_id', $machine['team']->id)->sole()->enabled)->toBeTrue()
+        ->and(MachineTeamWorkSetting::query()->where('spoke_id', $machine['spoke']->id)->where('team_id', $otherTeam->id)->sole()->enabled)->toBeTrue()
+        ->and(MachineTeamWorkSetting::query()->where('spoke_id', $foreignMachine->id)->where('team_id', $otherTeam->id)->doesntExist())->toBeTrue()
+        ->and(MachineWorkSettingChange::query()->where('team_id', $otherTeam->id)->count())->toBe(3);
 });
 
 test('claim requires the exact configured active machine and atomically records bounded effective presence', function (): void {

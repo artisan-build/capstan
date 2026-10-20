@@ -3,7 +3,8 @@
 namespace App\Providers;
 
 use App\Http\Middleware\AuthenticateBoundCredential;
-use App\Postmaster\LogProbeFailureNotifier;
+use App\Machine\TeamMemberships;
+use App\Postmaster\DatabaseProbeFailureNotifier;
 use App\Postmaster\ProbeFailureNotifier;
 use App\Support\PostmasterClock;
 use App\Support\ServerIdentity;
@@ -30,7 +31,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->singleton(ServerIdentity::class);
-        $this->app->bind(ProbeFailureNotifier::class, LogProbeFailureNotifier::class);
+        $this->app->bind(ProbeFailureNotifier::class, DatabaseProbeFailureNotifier::class);
         $this->app->bind(WorkNotifier::class, LogWorkNotifier::class);
         $this->app->bind(function (): IdentityContext {
             $user = auth()->user();
@@ -46,6 +47,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        User::created(fn (User $user) => resolve(TeamMemberships::class)->joinDefault($user));
         $this->configureDefaults();
 
         // Fork-and-deploy footgun: a non-UTC APP_TIMEZONE breaks every envelope signature.

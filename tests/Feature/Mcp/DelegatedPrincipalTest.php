@@ -17,6 +17,7 @@ use App\Mcp\Tools\ListEscalationsTool;
 use App\Mcp\Tools\ListLayoutsTool;
 use App\Mcp\Tools\ListPagesTool;
 use App\Mcp\Tools\ListWorkTool;
+use App\Mcp\Tools\MachineBudgetsTool;
 use App\Mcp\Tools\OrchestrateTool;
 use App\Mcp\Tools\PostmasterMessagesTool;
 use App\Mcp\Tools\PostmasterSpokesTool;
@@ -356,7 +357,7 @@ test('the delegated enforcement harness reaches every tool through the canonical
         issuer: 'https://bfc-enforcement.test',
         connectionId: $connectionId,
     );
-    delegatedPrincipalUser(
+    $secondary = delegatedPrincipalUser(
         'bfc-enforcement-secondary',
         UserRole::Admin,
         issuer: 'https://bfc-enforcement.test',
@@ -366,6 +367,10 @@ test('the delegated enforcement harness reaches every tool through the canonical
         'name' => 'Every delegated tool team',
         'slug' => 'every-delegated-tool-team',
         'pool_work' => true,
+    ]);
+    DB::table('team_user')->insert([
+        ['team_id' => $team->id, 'user_id' => $user->getKey()],
+        ['team_id' => $team->id, 'user_id' => $secondary->getKey()],
     ]);
     Inbox::query()->create(['actor_id' => (string) $user->getKey(), 'local_part' => 'relay']);
     resolve(BrandKitService::class)->updateDraft($user, ['display_name' => 'Delegated brand']);
@@ -414,6 +419,7 @@ test('the delegated enforcement harness reaches every tool through the canonical
         ListLayoutsTool::class => [],
         ListPagesTool::class => [],
         ListWorkTool::class => ['team_id' => $team->id],
+        MachineBudgetsTool::class => ['team_id' => $team->id],
         OrchestrateTool::class => ['team_id' => $team->id, 'task_id' => $orchestrationTask['task']['id'], 'seat_fence' => $seat['seat']['seat_fence'], 'session_ref' => 'all-tools-session', 'action' => 'create_child', 'input' => ['under_task_id' => $orchestrationTask['task']['id'], 'title' => 'Harness child', 'brief' => 'Created by delegated enforcement.'], 'idempotency_key' => 'all-tools-orchestrate'],
         PostmasterMessagesTool::class => ['inbox' => 'relay'],
         PostmasterSpokesTool::class => [],
@@ -436,6 +442,7 @@ test('the delegated enforcement harness reaches every tool through the canonical
         QueueItemTool::class,
         CancelItemTool::class,
         ListWorkTool::class,
+        MachineBudgetsTool::class,
         GetTaskTool::class,
         SteerTool::class,
         CancelTaskTool::class,
@@ -600,7 +607,7 @@ test('the delegated enforcement harness reaches every tool through the canonical
     $delegated = $report->families['mcp_delegated'];
 
     expect($delegated->applicability)->toBe('applicable')
-        ->and($delegated->visited)->toBe(30)
+        ->and($delegated->visited)->toBe(31)
         ->and($delegated->expected)->toBe($sortedExpected)
         ->and($delegated->discovered)->toBe($sortedExpected)
         ->and($delegated->violations)->toBe([]);

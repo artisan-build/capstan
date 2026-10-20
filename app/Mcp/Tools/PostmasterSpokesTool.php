@@ -5,10 +5,14 @@ namespace App\Mcp\Tools;
 use App\Enums\SpokeLiveness;
 use App\Enums\SpokeMapStatus;
 use App\Features\Postmaster;
+use App\Machine\MachineUsageFreshness;
 use App\Mcp\OwnerSubjectResolver;
 use App\Mcp\SignedCursor;
 use App\Mcp\ToolResponse;
+use App\Models\MachineUsageProvider;
+use App\Models\MachineUsageWindow;
 use App\Models\Spoke;
+use App\Postmaster\MachineLifecycle;
 use ArtisanBuild\BuiltForCloud\Mcp\AdvertisesToolClassification;
 use ArtisanBuild\BuiltForCloud\Mcp\AdvertisesToolEffect;
 use ArtisanBuild\BuiltForCloud\Mcp\Classification;
@@ -40,6 +44,11 @@ final class PostmasterSpokesTool extends CapstanTool
     use AdvertisesToolEffect;
 
     public const int MAX_LIMIT = 25;
+
+    public function __construct(
+        private readonly MachineLifecycle $lifecycle,
+        private readonly MachineUsageFreshness $freshness,
+    ) {}
 
     public function schema(JsonSchema $schema): array
     {
@@ -117,6 +126,7 @@ final class PostmasterSpokesTool extends CapstanTool
 
         $candidates = $query
             ->with(['inboxes' => fn ($query) => $query->where('actor_id', $owner->actorId)->orderBy('local_part')])
+            ->with('usageReport.providers.windows')
             ->orderBy('id')
             ->limit($limit + 1)
             ->get();
@@ -131,6 +141,7 @@ final class PostmasterSpokesTool extends CapstanTool
 
             $item = [
                 'id' => $spoke->id,
+                'machine_id' => $spoke->id,
                 'name' => $this->displayName($spoke, $baseNames, $duplicateNames),
                 'device_name' => $this->deviceName($spoke),
                 'owner_name' => $ownerName,
@@ -139,6 +150,8 @@ final class PostmasterSpokesTool extends CapstanTool
                 'inboxes' => $spoke->inboxes->pluck('local_part')->values()->all(),
                 'probe_status' => $spoke->probe_status->value,
                 'status' => $this->mapStatus($spoke, $staleBefore)->value,
+                'lifecycle_state' => $this->lifecycle->state($spoke, now()->toImmutable())->value,
+                'usage' => $this->usage($spoke, $this->freshness),
             ];
 
             if ($includeRetired) {
@@ -225,8 +238,36 @@ final class PostmasterSpokesTool extends CapstanTool
         }
 
         $name = trim($user->name);
-        $email = trim($user->email);
 
-        return $name !== '' ? $name : ($email !== '' ? $email : 'Unknown user');
+        return $name !== '' ? $name : 'Member';
+    }
+
+    /** @return array<string, mixed> */
+    private function usage(Spoke $spoke, MachineUsageFreshness $freshness): array
+    {
+        $report = $spoke->usageReport;
+        if ($report === null) {
+            return ['availability' => 'unknown', 'source' => null, 'collected_at' => null, 'providers' => []];
+        }
+
+        $now = now()->toImmutable();
+
+        return [
+            'availability' => $report->availability,
+            'source' => $report->source,
+            'collected_at' => $report->collected_at?->toJSON(),
+            'providers' => $report->providers->sortBy('provider')->values()->map(fn (MachineUsageProvider $provider): array => [
+                'provider' => $provider->provider,
+                'plan' => $provider->plan,
+                'freshness' => $freshness->providerIsFresh($report, $provider, $now) ? 'fresh' : 'stale',
+                'windows' => $provider->windows->sortBy('window_identity')->values()->map(fn (MachineUsageWindow $window): array => [
+                    'slot' => $window->slot,
+                    'kind' => $window->kind,
+                    'window_seconds' => $window->window_seconds,
+                    'remaining_percent' => (float) $window->remaining_percent,
+                    'resets_at' => $window->resets_at?->toJSON(),
+                ])->all(),
+            ])->all(),
+        ];
     }
 }
