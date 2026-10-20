@@ -2,22 +2,14 @@
 
 namespace Tests\Feature;
 
+use App\Auth\CapstanCredentialDeclaration;
 use App\Features\Artifacts;
-use App\Features\Work;
-use Illuminate\Support\Env;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use Laravel\Pennant\Feature;
 use Tests\TestCase;
 
 class FeatureFlagsTest extends TestCase
 {
-    /**
-     * The artifacts feature resolves from the flag AND a usable render origin,
-     * so both cases below configure a separate render host explicitly. Without
-     * that, these tests would be asserting the flag's effect while silently
-     * depending on whatever render origin the environment happened to supply.
-     * The render-origin half of the contract is covered in
-     * tests/Feature/Artifacts/FeatureRequiresRenderOriginTest.php.
-     */
     protected function setUp(): void
     {
         parent::setUp();
@@ -28,55 +20,34 @@ class FeatureFlagsTest extends TestCase
         ]);
     }
 
-    public function test_artifacts_feature_resolves_from_config_when_enabled(): void
+    public function test_artifacts_remains_gated_only_by_its_runtime_requirements(): void
     {
-        config(['capstan.features.artifacts' => true]);
+        config(['capstan.features.artifacts' => false]);
         Feature::flushCache();
 
         $this->assertTrue(Feature::active(Artifacts::class));
     }
 
-    public function test_artifacts_feature_resolves_from_config_when_disabled(): void
+    public function test_obsolete_feature_config_is_not_declared(): void
     {
-        config(['capstan.features.artifacts' => false]);
-        Feature::flushCache();
+        /** @var array<string, mixed> $freshConfig */
+        $freshConfig = require config_path('capstan.php');
 
-        $this->assertFalse(Feature::active(Artifacts::class));
+        $this->assertArrayNotHasKey('features', $freshConfig);
     }
 
-    public function test_work_feature_has_a_false_code_default_without_inheriting_the_environment(): void
+    public function test_public_credential_purpose_surfaces_only_offer_artifact_ingest_and_machine(): void
     {
-        $environment = Env::getRepository();
-        $original = $environment->get('CAPSTAN_FEATURE_WORK');
-        $environment->clear('CAPSTAN_FEATURE_WORK');
+        /** @var array<string, mixed> $freshConfig */
+        $freshConfig = require config_path('built-for-cloud.php');
 
-        try {
-            /** @var array{features: array{work: bool}} $freshConfig */
-            $freshConfig = require config_path('capstan.php');
-
-            $this->assertFalse($freshConfig['features']['work']);
-        } finally {
-            if ($original !== null) {
-                $environment->set('CAPSTAN_FEATURE_WORK', $original);
-            }
-        }
-    }
-
-    public function test_work_feature_respects_explicit_config(): void
-    {
-        config(['capstan.features.work' => false]);
-        Feature::flushCache();
-
-        $this->assertFalse(Feature::active(Work::class));
-
-        config(['capstan.features.work' => true]);
-        Feature::flushCache();
-
-        $this->assertTrue(Feature::active(Work::class));
-
-        config(['capstan.features.work' => false]);
-        Feature::flushCache();
-
-        $this->assertFalse(Feature::active(Work::class));
+        $this->assertSame([
+            CapstanCredentialDeclaration::ARTIFACT_INGEST => CredentialPurpose::Consumption->value,
+            CapstanCredentialDeclaration::MACHINE => CredentialPurpose::Mcp->value,
+        ], $freshConfig['credentials']['app_purposes']);
+        $this->assertSame([
+            CapstanCredentialDeclaration::ARTIFACT_INGEST,
+            CapstanCredentialDeclaration::MACHINE,
+        ], $freshConfig['ui']['credential_purposes']);
     }
 }

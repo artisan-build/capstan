@@ -17,57 +17,38 @@ use Tests\TestCase;
 
 uses(TestCase::class);
 
-/** @return array{connection: array<string, mixed>, database: string, sqlitePath: string|null, original: string} */
+beforeEach(function (): void {
+    if (DB::getDriverName() !== 'pgsql') {
+        $this->markTestSkipped('The real-process replacement races require PostgreSQL row locks.');
+    }
+});
+
+/** @return array{connection: array<string, mixed>, database: string, original: string} */
 function provisionSpokeReplacementRaceDatabase(): array
 {
     $original = DB::getDefaultConnection();
     /** @var array<string, mixed> $base */
     $base = config("database.connections.$original");
-    $driver = $base['driver'] ?? null;
-    expect($driver)->toBeIn(['sqlite', 'pgsql']);
+    expect($base['driver'] ?? null)->toBe('pgsql');
+    expect($base['host'] ?? null)->toBeIn(['127.0.0.1', 'localhost']);
     $name = 'capstan_spoke_replace_'.Str::lower(Str::random(12));
-    $sqlitePath = null;
-
-    if ($driver === 'sqlite') {
-        $sqlitePath = storage_path("framework/testing/$name.sqlite");
-        touch($sqlitePath);
-        $database = $sqlitePath;
-        $connection = array_replace($base, [
-            'database' => $database,
-            'busy_timeout' => 15_000,
-            'journal_mode' => 'WAL',
-            'synchronous' => 'NORMAL',
-        ]);
-    } else {
-        expect($base['host'] ?? null)->toBeIn(['127.0.0.1', 'localhost']);
-        $database = $name;
-        DB::connection($original)->statement('CREATE DATABASE "'.$database.'"');
-        $connection = array_replace($base, ['database' => $database]);
-    }
+    $database = $name;
+    DB::connection($original)->statement('CREATE DATABASE "'.$database.'"');
+    $connection = array_replace($base, ['database' => $database]);
 
     config(['database.connections.spoke_replace_race' => $connection]);
     DB::setDefaultConnection('spoke_replace_race');
     DB::purge('spoke_replace_race');
     Artisan::call('migrate:fresh', ['--database' => 'spoke_replace_race', '--force' => true]);
 
-    return compact('connection', 'database', 'sqlitePath', 'original');
+    return compact('connection', 'database', 'original');
 }
 
-/** @param array{connection: array<string, mixed>, database: string, sqlitePath: string|null, original: string} $database */
+/** @param array{connection: array<string, mixed>, database: string, original: string} $database */
 function cleanupSpokeReplacementRaceDatabase(array $database): void
 {
     DB::purge('spoke_replace_race');
     DB::setDefaultConnection($database['original']);
-
-    if ($database['sqlitePath'] !== null) {
-        foreach ([$database['sqlitePath'], $database['sqlitePath'].'-shm', $database['sqlitePath'].'-wal'] as $file) {
-            if (is_file($file)) {
-                unlink($file);
-            }
-        }
-
-        return;
-    }
 
     $admin = DB::connection($database['original']);
     $admin->statement('SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ? AND pid <> pg_backend_pid()', [$database['database']]);
@@ -155,10 +136,10 @@ test('two real replacement processes leave one live credential on the original s
             'capstan.postmaster.server_id' => $serverId,
         ]);
         $user = capstanUser();
-        $old = capstanBoundBearer($user, CapstanCredentialDeclaration::POSTMASTER_POLL);
+        $old = capstanBoundBearer($user, CapstanCredentialDeclaration::MACHINE);
         $new = [
-            capstanBoundBearer($user, CapstanCredentialDeclaration::POSTMASTER_POLL),
-            capstanBoundBearer($user, CapstanCredentialDeclaration::POSTMASTER_POLL),
+            capstanBoundBearer($user, CapstanCredentialDeclaration::MACHINE),
+            capstanBoundBearer($user, CapstanCredentialDeclaration::MACHINE),
         ];
         $spoke = Spoke::query()->create([
             'actor_id' => (string) $user->id,
@@ -209,9 +190,7 @@ test('two real replacement processes leave one live credential on the original s
         $winnerCredential = $spoke->fresh()?->credential_id;
         $newCredentialIds = array_map(fn (array $issued): string => $issued['credential']->id, $new);
         expect(collect($results)->pluck('driver')->unique()->values()->all())->toBe([$database['connection']['driver']])
-            ->and(collect($results)->pluck('busy_timeout')->unique()->values()->all())->toBe(
-                $database['connection']['driver'] === 'sqlite' ? [60_000] : [null],
-            )
+            ->and(collect($results)->pluck('busy_timeout')->unique()->values()->all())->toBe([null])
             ->and(collect($results)->pluck('conflict')->sort()->values()->all())->toBe([false, true])
             ->and($spoke->fresh()?->id)->toBe($spoke->id)
             ->and($winnerCredential)->toBeIn($newCredentialIds)

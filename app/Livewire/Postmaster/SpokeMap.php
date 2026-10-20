@@ -2,7 +2,6 @@
 
 namespace App\Livewire\Postmaster;
 
-use App\Features\Postmaster;
 use App\Machine\InitialMachineWorkProfile;
 use App\Machine\MachineBudgetProjection;
 use App\Machine\MachineWorkProfiles;
@@ -12,6 +11,7 @@ use App\Models\Team;
 use App\Postmaster\PendingInstallLinks;
 use App\Postmaster\RetireSpoke;
 use ArtisanBuild\BuiltForCloud\Contracts\IdentityContext;
+use ArtisanBuild\BuiltForCloud\RolePolicy;
 use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
 use DomainException;
@@ -19,7 +19,6 @@ use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\View\View;
 use Illuminate\Support\Facades\RateLimiter;
 use InvalidArgumentException;
-use Laravel\Pennant\Feature;
 use Livewire\Component;
 
 class SpokeMap extends Component
@@ -49,7 +48,6 @@ class SpokeMap extends Component
 
     public function mount(TeamMemberships $memberships): void
     {
-        $this->guardFeature();
         $user = request()->user();
         abort_unless($user instanceof User, 401);
         $teams = $memberships->teamsFor($user)->orderByDesc('is_default')->orderBy('name')->orderBy('id')->get(['id', 'name']);
@@ -61,20 +59,23 @@ class SpokeMap extends Component
 
     public function render(MachineBudgetProjection $budgets): View
     {
-        $this->guardFeature();
-
         $selectedTeam = collect($this->workTeams)->firstWhere('id', $this->selectedTeamId);
         abort_unless(is_array($selectedTeam), 404);
         $user = request()->user();
         abort_unless($user instanceof User, 401);
 
         $machineBudgets = $budgets->forTeam($user, $selectedTeam['id'], CarbonImmutable::now());
+        $showUsageToolGuidance = RolePolicy::canManageMembers($user->role)
+            && collect($machineBudgets['machines'])->contains(
+                fn (array $machine): bool => in_array($machine['usage']['availability'], ['unknown', 'unavailable'], true),
+            );
 
         return view('livewire.postmaster.spoke-map', [
             'teams' => $this->workTeams,
             'selectedTeam' => $selectedTeam,
             'spokes' => collect($machineBudgets['machines']),
             'machineBudgets' => $machineBudgets,
+            'showUsageToolGuidance' => $showUsageToolGuidance,
         ]);
     }
 
@@ -85,7 +86,6 @@ class SpokeMap extends Component
 
     public function generateOnboardingSnippet(PendingInstallLinks $links, IdentityContext $identity): void
     {
-        $this->guardFeature();
         abort_unless($identity->canUseProduct(), 403);
 
         $user = request()->user();
@@ -107,7 +107,6 @@ class SpokeMap extends Component
 
     public function beginRenaming(int $spokeId): void
     {
-        $this->guardFeature();
         $spoke = $this->ownedSpoke($spokeId);
 
         $this->renamingSpokeId = $spoke->id;
@@ -116,13 +115,11 @@ class SpokeMap extends Component
 
     public function cancelRenaming(): void
     {
-        $this->guardFeature();
         $this->reset('renamingSpokeId', 'spokeName');
     }
 
     public function renameSpoke(int $spokeId): void
     {
-        $this->guardFeature();
         $spoke = $this->ownedSpoke($spokeId);
         $validated = $this->validate([
             'spokeName' => ['string', 'max:64'],
@@ -135,7 +132,6 @@ class SpokeMap extends Component
 
     public function retireSpoke(int $spokeId, RetireSpoke $retire): void
     {
-        $this->guardFeature();
         $spoke = $this->ownedSpoke($spokeId);
 
         try {
@@ -150,7 +146,6 @@ class SpokeMap extends Component
         InitialMachineWorkProfile $defaults,
         MachineWorkProfiles $profiles,
     ): void {
-        $this->guardFeature();
         $team = $this->selectedTeam();
         $spoke = Spoke::query()->whereNull('retired_at')->findOrFail($spokeId);
         $actor = request()->user();
@@ -184,7 +179,6 @@ class SpokeMap extends Component
 
     public function saveWorkProfile(int $spokeId, MachineWorkProfiles $profiles): void
     {
-        $this->guardFeature();
         $team = $this->selectedTeam();
         abort_unless($this->editingWorkSpokeId === $spokeId && $this->editingWorkTeamId === $team->id, 409);
         $spoke = Spoke::query()->whereNull('retired_at')->findOrFail($spokeId);
@@ -246,10 +240,5 @@ class SpokeMap extends Component
         $entries = array_values(array_filter(array_map(trim(...), explode(',', $value)), fn (string $entry): bool => $entry !== ''));
 
         return array_values(array_unique($entries));
-    }
-
-    private function guardFeature(): void
-    {
-        abort_unless(Feature::active(Postmaster::class), 404);
     }
 }

@@ -2,7 +2,6 @@
 
 namespace App\Livewire\Work;
 
-use App\Features\Work;
 use App\Models\Team;
 use App\Models\WorkEscalation;
 use App\Models\WorkItem;
@@ -16,7 +15,6 @@ use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\View\View;
 use Illuminate\Support\Str;
-use Laravel\Pennant\Feature;
 use Livewire\Attributes\Layout;
 use Livewire\Component;
 
@@ -93,7 +91,6 @@ class Index extends Component
 
     private function guardAccess(): void
     {
-        abort_unless(Feature::active(Work::class), 404);
         $user = request()->user();
         abort_unless($user instanceof User && $user->status === 'active'
             && ! OffboardedSubject::userIsOffboarded((string) $user->getKey())

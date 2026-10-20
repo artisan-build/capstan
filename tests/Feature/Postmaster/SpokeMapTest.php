@@ -6,6 +6,7 @@ use App\Enums\SpokeMapStatus;
 use App\Livewire\Postmaster\SpokeMap;
 use App\Models\Inbox;
 use App\Models\MachineTeamWorkSetting;
+use App\Models\MachineUsageReport;
 use App\Models\MachineWorkSettingChange;
 use App\Models\Spoke;
 use App\Models\Team;
@@ -20,16 +21,13 @@ use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
-use Laravel\Pennant\Feature;
 use Livewire\Livewire;
 
 beforeEach(function (): void {
     config([
         'app.key' => 'base64:'.base64_encode(str_repeat('m', 32)),
-        'capstan.features.postmaster' => true,
         'capstan.postmaster.map.stale_after_seconds' => 300,
     ]);
-    Feature::flushCache();
     Date::setTestNow('2026-08-17 12:00:00');
 });
 
@@ -87,6 +85,82 @@ test('the authenticated map page renders registered spoke data', function (): vo
     $row = (new DOMXPath($document))->query('//*[@data-testid="postmaster-onboarding-row"]')->item(0);
     expect($row)->not->toBeNull()
         ->and((new DOMXPath($document))->query('.//button', $row)->length)->toBe(1);
+});
+
+test('usage tool guidance is limited to owners and admins when selected-team usage is unknown or unavailable', function (UserRole $role, ?string $availability, bool $visible): void {
+    $viewer = capstanUser(['role' => $role->value]);
+    $machine = createMapSpoke($viewer, 'usage-unknown', now(), SpokeLiveness::Green);
+    if ($availability !== null) {
+        MachineUsageReport::query()->create([
+            'spoke_id' => $machine->id,
+            'source' => 'none',
+            'availability' => $availability,
+            'last_attempt_at' => now(),
+            'unavailable_since' => now(),
+            'failure_code' => 'not_found',
+        ]);
+    }
+
+    $component = Livewire::actingAs($viewer)->test(SpokeMap::class);
+
+    if ($visible) {
+        $component->assertSeeHtml('data-testid="machine-usage-tool-guidance"');
+    } else {
+        $component->assertDontSeeHtml('data-testid="machine-usage-tool-guidance"');
+    }
+
+    MachineUsageReport::query()->updateOrCreate(['spoke_id' => $machine->id], [
+        'source' => 'openusage-sh',
+        'source_version' => '0.26.1',
+        'availability' => 'available',
+        'collected_at' => now(),
+        'last_attempt_at' => now(),
+        'last_success_received_at' => now(),
+        'unavailable_since' => null,
+        'failure_code' => null,
+    ]);
+
+    Livewire::actingAs($viewer)->test(SpokeMap::class)
+        ->assertDontSeeHtml('data-testid="machine-usage-tool-guidance"');
+})->with([
+    'owner with unknown usage' => [UserRole::Owner, null, true],
+    'admin with unavailable usage' => [UserRole::Admin, 'unavailable', true],
+    'member with unavailable usage' => [UserRole::Member, 'unavailable', false],
+]);
+
+test('usage tool guidance renders the pinned verified Linux path and macOS privacy caveat', function (): void {
+    $owner = capstanUser(['role' => UserRole::Owner->value]);
+    createMapSpoke($owner, 'usage-unavailable', now(), SpokeLiveness::Green);
+    $html = Livewire::actingAs($owner)->test(SpokeMap::class)->html();
+    $document = new DOMDocument;
+    @$document->loadHTML($html);
+    $guidance = (new DOMXPath($document))->query('//*[@data-testid="machine-usage-tool-guidance"]')->item(0);
+    expect($guidance)->not->toBeNull();
+    $copy = $guidance?->textContent ?? '';
+
+    expect($copy)
+        ->toContain('This build detects tools but never installs them.')
+        ->toContain('checksums.txt')
+        ->toContain('sha256sum')
+        ->toContain('shasum -a 256')
+        ->toContain('$HOME/.local/bin/openusage')
+        ->toContain('~/bin, /opt/homebrew/bin, /usr/local/bin, and /usr/bin')
+        ->toContain('OpenUsage app v0.7.15 bundles PostHog')
+        ->toContain('cannot prove that its telemetry can be disabled')
+        ->not->toContain('install.sh')
+        ->not->toMatch('/curl[^\n]*\|\s*(?:ba)?sh/');
+
+    preg_match_all('/archive=(openusage_[^\s;]+_linux_(amd64|arm64)\.tar\.gz)/', $copy, $recipeArchives);
+    expect($recipeArchives[1])->toHaveCount(2)
+        ->and($recipeArchives[2])->toBe(['amd64', 'arm64']);
+
+    $manifest = file_get_contents(base_path('tests/Fixtures/openusage-checksums.txt'));
+    expect($manifest)->not->toBeFalse();
+
+    foreach ($recipeArchives[1] as $archive) {
+        expect(preg_match_all('/^[a-f0-9]{64}  '.preg_quote($archive, '/').'$/m', (string) $manifest))
+            ->toBe(1);
+    }
 });
 
 test('map owner names never fall back to email or expose actor ids', function (): void {
@@ -188,7 +262,7 @@ test('a tampered retirement is forbidden through Livewire and the HTTP route', f
 
 test('retirement refuses a live Work lease then hides the spoke revokes its credential and preserves history', function (): void {
     $owner = capstanUser();
-    $issued = capstanBoundBearer($owner, CapstanCredentialDeclaration::POSTMASTER_POLL);
+    $issued = capstanBoundBearer($owner, CapstanCredentialDeclaration::MACHINE);
     $spoke = Spoke::query()->create([
         'actor_id' => (string) $owner->id,
         'credential_id' => $issued['credential']->id,
@@ -250,7 +324,7 @@ test('retirement refuses a live Work lease then hides the spoke revokes its cred
 
 test('retirement refuses an interactive seat lease with no active Work item', function (): void {
     $owner = capstanUser();
-    $issued = capstanBoundBearer($owner, CapstanCredentialDeclaration::POSTMASTER_POLL);
+    $issued = capstanBoundBearer($owner, CapstanCredentialDeclaration::MACHINE);
     $spoke = Spoke::query()->create([
         'actor_id' => (string) $owner->id,
         'credential_id' => $issued['credential']->id,
@@ -378,7 +452,7 @@ test('every package role sees the same installation-wide spoke map', function (U
     'member' => UserRole::Member,
 ]);
 
-test('a disabled postmaster map returns 404 without changing routing state', function (): void {
+test('the postmaster map is available without a product feature gate and does not change routing state', function (): void {
     $owner = capstanUser(['role' => UserRole::Owner->value]);
     $spoke = createMapSpoke($owner, 'disabled-map-spoke', now(), SpokeLiveness::Green, 2);
     $before = [
@@ -386,10 +460,7 @@ test('a disabled postmaster map returns 404 without changing routing state', fun
         Inbox::query()->count(),
         DB::table('spoke_inboxes')->count(),
     ];
-    config(['capstan.features.postmaster' => false]);
-    Feature::flushCache();
-
-    $this->actingAsVersioned($owner)->get(route('postmaster.map'))->assertNotFound();
+    $this->actingAsVersioned($owner)->get(route('postmaster.map'))->assertOk();
 
     expect([
         Spoke::query()->count(),
@@ -399,7 +470,7 @@ test('a disabled postmaster map returns 404 without changing routing state', fun
         ->and($spoke->fresh())->not->toBeNull();
 });
 
-test('disabling postmaster rejects an existing Livewire snapshot', function (): void {
+test('an existing Livewire snapshot remains available', function (): void {
     $owner = capstanUser(['role' => UserRole::Owner->value]);
     $spoke = createMapSpoke($owner, 'snapshot-guarded-spoke', now(), SpokeLiveness::Green, 2);
     $page = $this->actingAsVersioned($owner)
@@ -410,9 +481,6 @@ test('disabling postmaster rejects an existing Livewire snapshot', function (): 
         (string) str($page->getContent())->betweenFirst('wire:snapshot="', '"'),
         ENT_QUOTES | ENT_SUBSTITUTE,
     );
-    config(['capstan.features.postmaster' => false]);
-    Feature::flushCache();
-
     $this->withHeader('X-Livewire', '1')
         ->postJson(route('default-livewire.update'), [
             'components' => [[
@@ -421,8 +489,7 @@ test('disabling postmaster rejects an existing Livewire snapshot', function (): 
                 'calls' => [],
             ]],
         ])
-        ->assertNotFound()
-        ->assertDontSee($spoke->name);
+        ->assertOk();
 });
 
 test('an unauthenticated map request redirects to login', function (): void {

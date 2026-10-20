@@ -719,6 +719,7 @@ class ContractTests(DrainTestCase):
         )
         self.assertIn("{config_dir}/../harness/stub_worker.py", loaded["generic.json"].role_commands["builder"])
         self.assertTrue(all(config.capstan_url.startswith("http://127.0.0.1:") for config in loaded.values()))
+        self.assertTrue(all(str(config.credential_file).endswith("/.config/capstan/<server-id>/token") for config in loaded.values()))
 
     def test_config_requires_role_map_argv_and_rejects_shell_strings(self) -> None:
         self.write_config(role_commands={"builder": "worker --unsafe"})
@@ -735,9 +736,9 @@ class ContractTests(DrainTestCase):
         docs = (ROOT / "docs/work.md").read_text()
         skill = (ROOT / "drain/SKILL.md").read_text()
         workflow = (ROOT / ".github/workflows/tests.yml").read_text()
-        for phrase in ("session_ref", "Solo MCP", "Puck", "feature is off", "cold"):
+        for phrase in ("session_ref", "Solo MCP", "Puck", "capstan.machine", "Pooled Work is off", "cold"):
             self.assertIn(phrase, docs)
-        for phrase in ("--dry-claim", "cron", "launchd", "Do not install", "credential"):
+        for phrase in ("--dry-claim", "cron", "launchd", "Do not install", "~/.config/capstan/<server-id>/token", "actor-id"):
             self.assertIn(phrase, skill)
         self.assertIn("python3 -m unittest discover -s tests/python", workflow)
         postgres = workflow.split("tests-postgres:", 1)[1]

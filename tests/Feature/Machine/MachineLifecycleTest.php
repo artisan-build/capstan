@@ -245,10 +245,7 @@ test('invalid missing ineligible retired and replayed orphan proofs create a fre
     $oldOwner = capstanUser();
     $newOwner = capstanUser();
     $old = machineLifecycleCredential($oldOwner);
-    $newPurpose = $case === 'legacy approver'
-        ? CapstanCredentialDeclaration::POSTMASTER_POLL
-        : CapstanCredentialDeclaration::MACHINE;
-    $new = capstanBoundBearer($newOwner, $newPurpose);
+    $new = capstanBoundBearer($newOwner, CapstanCredentialDeclaration::MACHINE);
     $spoke = Spoke::query()->create([
         'actor_id' => (string) $oldOwner->getKey(),
         'credential_id' => $old['credential']->id,
@@ -276,7 +273,7 @@ test('invalid missing ineligible retired and replayed orphan proofs create a fre
         ->and($spoke->orphaned_at)->not->toBeNull()
         ->and(Spoke::query()->where('actor_id', (string) $newOwner->getKey())->count())->toBe(1);
 
-})->with(['missing', 'invalid', 'no configured team', 'legacy approver', 'retired']);
+})->with(['missing', 'invalid', 'no configured team', 'retired']);
 
 test('an orphan proof cannot be replayed after a successful transfer', function (): void {
     $oldOwner = capstanUser();

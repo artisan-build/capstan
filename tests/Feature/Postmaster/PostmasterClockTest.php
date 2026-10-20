@@ -36,8 +36,8 @@ test('utc is accepted', function (): void {
     expect(clockEnvelope()->signablePayload()['created_at'])->toMatch('/Z$/');
 });
 
-test('booting with the postmaster feature enabled and a non utc timezone fails early', function (): void {
-    config(['capstan.features.postmaster' => true, 'app.timezone' => 'Europe/Paris']);
+test('booting with a non utc timezone always fails early', function (): void {
+    config(['app.timezone' => 'Europe/Paris']);
 
     expect(fn () => (new AppServiceProvider(app()))->boot())->toThrow(RuntimeException::class);
 
@@ -45,5 +45,5 @@ test('booting with the postmaster feature enabled and a non utc timezone fails e
     expect(fn () => (new AppServiceProvider(app()))->boot())->not->toThrow(RuntimeException::class);
 
     config(['capstan.features.postmaster' => false, 'app.timezone' => 'Europe/Paris']);
-    expect(fn () => (new AppServiceProvider(app()))->boot())->not->toThrow(RuntimeException::class);
+    expect(fn () => (new AppServiceProvider(app()))->boot())->toThrow(RuntimeException::class);
 });

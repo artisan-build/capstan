@@ -149,8 +149,8 @@ test('oversized content and disallowed content types are rejected and not stored
         ->and(Artifact::query()->count())->toBe(0);
 });
 
-test('artifact ingest is not usable when the feature flag is off', function (): void {
-    config(['capstan.features.artifacts' => false]);
+test('artifact ingest is not usable when the render origin is absent', function (): void {
+    config(['capstan.artifacts.render_origin' => null]);
     Feature::flushCache();
     $user = capstanUser();
 

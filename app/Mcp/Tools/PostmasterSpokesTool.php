@@ -4,7 +4,6 @@ namespace App\Mcp\Tools;
 
 use App\Enums\SpokeLiveness;
 use App\Enums\SpokeMapStatus;
-use App\Features\Postmaster;
 use App\Machine\MachineUsageFreshness;
 use App\Mcp\OwnerSubjectResolver;
 use App\Mcp\SignedCursor;
@@ -26,12 +25,10 @@ use Illuminate\Support\Collection;
 use Illuminate\Validation\Rule;
 use Laravel\Mcp\Exceptions\JsonRpcException;
 use Laravel\Mcp\Request;
-use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
 use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Attributes\Name;
 use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
-use Laravel\Pennant\Feature;
 
 #[Name('postmaster_spokes')]
 #[Description('Lists the authenticated actor owned Postmaster spokes and currently routed inboxes.')]
@@ -60,13 +57,9 @@ final class PostmasterSpokesTool extends CapstanTool
         ];
     }
 
-    public function handle(Request $request, OwnerSubjectResolver $owners, SignedCursor $cursors): Response|ResponseFactory
+    public function handle(Request $request, OwnerSubjectResolver $owners, SignedCursor $cursors): ResponseFactory
     {
         $this->requireExactArguments($request, ['limit', 'cursor', 'status', 'include_retired']);
-
-        if (! Feature::active(Postmaster::class)) {
-            return Response::error('Postmaster is unavailable.');
-        }
 
         $validated = $request->validate([
             'limit' => ['sometimes', 'required', 'integer', 'min:1', 'max:'.self::MAX_LIMIT],

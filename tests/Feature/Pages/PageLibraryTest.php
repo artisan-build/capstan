@@ -223,12 +223,11 @@ test('library admission failures are opaque and happen before page share or vers
     $responses = [];
     $responses[] = $this->get(route('pages.index'));
 
-    config(['capstan.features.artifacts' => false]);
+    config(['capstan.artifacts.render_origin' => null]);
     Feature::flushCache();
     $responses[] = $this->actingAsVersioned($healthy)->get(route('pages.index'));
 
     config([
-        'capstan.features.artifacts' => true,
         'capstan.artifacts.render_origin' => null,
     ]);
     Feature::flushCache();
@@ -281,7 +280,7 @@ test('pages navigation is feature gated and current in sidebar and header varian
         expect($tag)->toContain('aria-current="page"');
     }
 
-    config(['capstan.features.artifacts' => false]);
+    config(['capstan.artifacts.render_origin' => null]);
     Feature::flushCache();
     $this->actingAsVersioned($user)
         ->get(route('bfc.dashboard'))
@@ -509,12 +508,11 @@ test('delete rejects unavailable principals malformed ids and render-host reques
         $this->actingAsVersioned($owner)->delete('https://render.library.test/pages/'.$page->id),
     ];
 
-    config(['capstan.features.artifacts' => false]);
+    config(['capstan.artifacts.render_origin' => null]);
     Feature::flushCache();
     $responses[] = $this->actingAsVersioned($owner)->delete(route('pages.destroy', ['page' => $page]));
 
     config([
-        'capstan.features.artifacts' => true,
         'capstan.artifacts.render_origin' => null,
     ]);
     Feature::flushCache();

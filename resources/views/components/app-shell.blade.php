@@ -130,12 +130,8 @@
 
                         <nav class="app-shell-nav" aria-label="{{ __('Platform') }}">
                             <a class="app-shell-nav-link" href="{{ route('bfc.dashboard') }}" @if (request()->routeIs('bfc.dashboard')) aria-current="page" @endif>{{ __('Dashboard') }}</a>
-                            @if (\Laravel\Pennant\Feature::active(\App\Features\Postmaster::class))
-                                <a class="app-shell-nav-link" href="{{ route('postmaster.map') }}" @if (request()->routeIs('postmaster.*')) aria-current="page" @endif>{{ __('Postmaster') }}</a>
-                            @endif
-                            @if (\Laravel\Pennant\Feature::active(\App\Features\Work::class))
-                                <a data-testid="work-navigation" class="app-shell-nav-link" href="{{ route('work.index') }}" @if (request()->routeIs('work.*')) aria-current="page" @endif>{{ __('Work') }}</a>
-                            @endif
+                            <a class="app-shell-nav-link" href="{{ route('postmaster.map') }}" @if (request()->routeIs('postmaster.*')) aria-current="page" @endif>{{ __('Postmaster') }}</a>
+                            <a data-testid="work-navigation" class="app-shell-nav-link" href="{{ route('work.index') }}" @if (request()->routeIs('work.*')) aria-current="page" @endif>{{ __('Work') }}</a>
                             @if (\Laravel\Pennant\Feature::active(\App\Features\Artifacts::class))
                                 <a data-testid="pages-navigation" class="app-shell-nav-link" href="{{ route('pages.index') }}" @if (request()->routeIs('pages.*', 'artifacts.share')) aria-current="page" @endif>{{ __('Pages') }}</a>
                                 @if (\ArtisanBuild\BuiltForCloud\RolePolicy::canManageMembers($shellUser->role))

@@ -81,7 +81,7 @@ function poolCreateQueuedItem(Team $team, string $token, array $attributes = [])
 /** Drives the drain claim endpoint as $user and returns the claimed item IDs. */
 function poolDrainClaim(Team $team, User $user): array
 {
-    $drain = capstanBoundBearer($user, CapstanCredentialDeclaration::WORK_DRAIN);
+    $drain = capstanBoundBearer($user, CapstanCredentialDeclaration::MACHINE);
     $spoke = Spoke::query()->create([
         'actor_id' => (string) $user->id,
         'credential_id' => $drain['credential']->id,
@@ -202,16 +202,9 @@ test('an Owner page call with a non-boolean value is refused readably and change
     'null' => [null],
 ]);
 
-test('the page action still requires Work and product admission before any change', function (): void {
+test('the page action still requires product admission before any change', function (): void {
     $owner = capstanUser(['role' => 'owner']);
     $team = Team::default();
-    $component = Livewire::actingAs($owner)->test(Index::class);
-    config(['capstan.features.work' => false]);
-    Feature::flushCache();
-    $component->call('setPoolWork', true)->assertNotFound();
-
-    config(['capstan.features.work' => true]);
-    Feature::flushCache();
     $component = Livewire::actingAs($owner)->test(Index::class);
     $owner->forceFill(['status' => 'inactive'])->save();
     $component->call('setPoolWork', true)->assertForbidden();

@@ -43,7 +43,7 @@ function installerLine(string $snippet, string $prefix): string
 }
 
 test('the generated installer is valid shell and protects local credentials and transport', function (): void {
-    $existing = capstanBoundBearer(capstanUser(), CapstanCredentialDeclaration::POSTMASTER_POLL);
+    $existing = capstanBoundBearer(capstanUser(), CapstanCredentialDeclaration::MACHINE);
     $snippet = installerSnippet($this);
     $syntax = new Process(['/bin/sh', '-n']);
     $syntax->setInput($snippet);

@@ -602,29 +602,11 @@ test('rejects malformed closed inputs before claims or effects', function (): vo
         ->and(Envelope::query()->count())->toBe(0);
 });
 
-test('feature and pre claim failures are bounded and retryable without durable state', function (): void {
+test('pre claim failures are bounded and retryable without durable state', function (): void {
     $user = capstanUser();
     $token = capstanMcpWriteToken($user);
     Inbox::query()->create(['actor_id' => (string) $user->id, 'local_part' => 'sender']);
     $arguments = capstanMcpWriteSendArguments('preclaim');
-    config(['capstan.features.postmaster' => false]);
-    Feature::flushCache();
-
-    capstanMcpWriteCall('send_postmaster_message', $arguments, $token)
-        ->assertOk()
-        ->assertJsonPath('result.isError', true)
-        ->assertJsonPath('result.content.0.text', 'Postmaster is unavailable.');
-    capstanMcpWriteCall('ack_postmaster_messages', [
-        'idempotency_key' => 'disabled-ack',
-        'message_ids' => ['missing'],
-    ], $token)
-        ->assertOk()
-        ->assertJsonPath('result.isError', true)
-        ->assertJsonPath('result.content.0.text', 'Postmaster is unavailable.');
-    expect(DB::table('mcp_write_claims')->count())->toBe(0);
-
-    config(['capstan.features.postmaster' => true]);
-    Feature::flushCache();
     app()->instance(WriteFaultInjector::class, new class extends WriteFaultInjector
     {
         public function beforeClaim(string $tool): void

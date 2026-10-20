@@ -39,8 +39,7 @@ What it does, in order (each step fails loudly):
 2. Reads back `DB_CONNECTION`/`DB_HOST` from the copied `.env` before any write (a copied `.env` can
    point at production), then writes into the WORKTREE `.env`: `DB_CONNECTION=sqlite`,
    `DB_DATABASE=<worktree>/database/verify.sqlite`, `APP_URL=http://<app host>:<port>`,
-   `CAPSTAN_ARTIFACT_RENDER_ORIGIN=http://<render host>:<port>`, and
-   `CAPSTAN_FEATURE_{ARTIFACTS,POSTMASTER,WORK}=true`. Exports would be useless: `artisan serve`
+   and `CAPSTAN_ARTIFACT_RENDER_ORIGIN=http://<render host>:<port>`. Exports would be useless: `artisan serve`
    forwards only a whitelist of variables to its `php -S` worker.
 3. `composer install`; `npm ci && npm run build` when `public/build/manifest.json` is missing (without
    it every authenticated page 500s "Vite manifest not found").
@@ -57,7 +56,7 @@ Paths: state dir `~/Library/Caches/capstan-verify/state-<port>/` (0700: pid, ser
 cookie jar, tokens, drain config). Evidence dir `~/Library/Caches/capstan-verify/evidence/<run-id>/`.
 Both are outside every repo.
 
-Two hosts are not optional. Artifacts, Pages and Brand need the flag AND a render origin whose host
+Two hosts are not optional. Artifacts, Pages and Brand need a render origin whose host
 differs from `APP_URL`'s; with one host, `list_pages` answers "Pages are unavailable." and
 `list_layouts` "Branding is unavailable." `*.localhost` resolves to 127.0.0.1 on macOS. Do not use
 `127.0.0.2`: it is not bindable on macOS without `sudo ifconfig lo0 alias`.
@@ -75,7 +74,7 @@ Run it first, and again whenever anything surprises you. Read-only apart from on
 It proves: the recorded server pid is alive; every listener on the port is in THAT pid's process tree;
 `/up` is 200; `route:list` resolves; **database identity behaviourally** (an anonymous
 `GET /bfc/login` adds a `sessions` row to THIS run's SQLite file — if not, the server is on some
-other database and nothing you drive means anything); both origins and all three flags are in the
+other database and nothing you drive means anything); both origins are in the
 worktree `.env`; the Vite manifest exists; and which credential NAMES (never values) are set in the
 worktree `.env` and in your shell. It does not use `ps eww`: on macOS that cannot read another
 process's environment, so such a check can never fail.
@@ -90,9 +89,8 @@ Three harnesses, one per surface. Feature files give the exact calls.
 **HTTP + MCP — `bin/capstan.py`** (Python stdlib only; run with no args for usage):
 
 ```sh
-"$B/capstan.py" token capstan.work.drain        # device flow → <state>/tokens/<purpose> (0600); prints path
+"$B/capstan.py" token capstan.machine           # shared Postmaster + Work token → <state>/tokens/<purpose> (0600)
 "$B/capstan.py" token capstan.artifact.ingest
-"$B/capstan.py" token capstan.postmaster.poll
 "$B/mcp-token.sh"                               # unbound `mcp` bearer → <state>/tokens/mcp
 "$B/capstan.py" mcp-list read                   # 10 tools
 "$B/capstan.py" mcp-list write                  # 28 tools; marks destructiveHint ones

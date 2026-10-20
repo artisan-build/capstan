@@ -45,9 +45,6 @@ final readonly class WorkOrchestrationMcpService
                 }
                 $seat = $this->seats->take($parent, $actor, $spoke->id, $seat->fence, $sessionRef, true, $now);
             }
-            if (! $seat instanceof WorkOrchestratorSeat) {
-                throw $this->refused('seat_unavailable');
-            }
 
             return $this->context($parent, $seat, $spoke, $after, $now, $decisionsAfter);
         }, 5);
@@ -84,9 +81,6 @@ final readonly class WorkOrchestrationMcpService
                 throw $this->refused('seat_authority_lost');
             }
             $released = $this->seats->release($parent, $actor, $spoke->id, $seatFence, $now);
-            if (! $released instanceof WorkOrchestratorSeat) {
-                throw $this->refused('seat_authority_lost');
-            }
 
             return ['released' => true, 'task_id' => $parent->id, 'seat_fence' => $released->fence];
         }, 5);
@@ -124,9 +118,6 @@ final readonly class WorkOrchestrationMcpService
         try {
             $answered = $this->orchestration->answer($escalation, $actor, $answer, $now);
         } catch (\DomainException) {
-            throw $this->refused('escalation_unavailable');
-        }
-        if (! $answered instanceof WorkEscalation) {
             throw $this->refused('escalation_unavailable');
         }
 

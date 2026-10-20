@@ -2,9 +2,11 @@
 
 use App\Auth\CapstanCredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
+use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationProfile;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
@@ -111,6 +113,58 @@ function capstanBoundBearer(
     ]);
 
     DB::transaction(fn () => $credential->saveWithOriginatorBinding($profile->scope));
+
+    return ['token' => $token, 'credential' => $credential];
+}
+
+/**
+ * Create a historical credential for negative and migration fixtures only.
+ *
+ * @return array{token: string, credential: Credential}
+ */
+function capstanLegacyBoundBearer(User $user, string $appPurpose): array
+{
+    expect($appPurpose)->toBeIn([
+        CapstanCredentialDeclaration::POSTMASTER_POLL,
+        CapstanCredentialDeclaration::WORK_DRAIN,
+    ]);
+    $request = Request::create('/api/v1/machine', 'POST', server: [
+        'HTTP_X_CAPSTAN_ACTOR_ID' => (string) $user->getKey(),
+    ]);
+    $machine = collect(resolve(CapstanCredentialDeclaration::class)->credentialAuthorizationProfiles($request))
+        ->sole(fn (CredentialAuthorizationProfile $profile): bool => $profile->appPurpose === CapstanCredentialDeclaration::MACHINE);
+    $scope = new BoundCredentialScope(
+        appPurpose: $appPurpose,
+        subject: $machine->scope->subject,
+        installation: $machine->scope->installation,
+        application: $machine->scope->application,
+        audience: $appPurpose === CapstanCredentialDeclaration::POSTMASTER_POLL ? '/api/v1/poll' : '/api/v1/work',
+    );
+    $token = 'capstan-legacy-test-'.bin2hex(random_bytes(24));
+    $purposes = config('built-for-cloud.credentials.app_purposes');
+    expect($purposes)->toBeArray()->not->toHaveKey($appPurpose);
+    config(['built-for-cloud.credentials.app_purposes' => array_replace($purposes, [
+        $appPurpose => CredentialPurpose::Mcp->value,
+    ])]);
+
+    try {
+        $credential = new Credential;
+        $credential->forceFill([
+            'kind' => CredentialKind::Bearer,
+            'purpose' => resolve(AppPurposeRegistry::class)->purpose($appPurpose),
+            'subject_type' => $scope->subject->type,
+            'subject_ref' => $scope->subject->ref,
+            'name' => 'Capstan historical test credential',
+            'abilities' => [],
+            'user_id' => (string) $user->getKey(),
+            'secret_hash' => hash('sha256', $token),
+            'status' => CredentialStatus::Active,
+            'expires_at' => null,
+        ]);
+        DB::transaction(fn () => $credential->saveWithOriginatorBinding($scope));
+    } finally {
+        config(['built-for-cloud.credentials.app_purposes' => $purposes]);
+    }
 
     return ['token' => $token, 'credential' => $credential];
 }

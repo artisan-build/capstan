@@ -30,7 +30,7 @@ test('every package role can complete bound artifact ingest and Postmaster poll'
         ->assertCreated()
         ->assertJsonPath('artifact.actor_id', (string) $user->getKey());
 
-    $this->withHeaders(capstanBearerHeaders($user, CapstanCredentialDeclaration::POSTMASTER_POLL))
+    $this->withHeaders(capstanBearerHeaders($user, CapstanCredentialDeclaration::MACHINE))
         ->postJson(route('api.postmaster.poll'), [
             'presence' => ['ready_inboxes' => []],
         ])
@@ -69,7 +69,7 @@ test('package role changes preserve Capstan product access at the new role', fun
                 'content_type' => 'text/html',
             ])
             ->assertCreated();
-        $this->withHeaders(capstanBearerHeaders($user, CapstanCredentialDeclaration::POSTMASTER_POLL))
+        $this->withHeaders(capstanBearerHeaders($user, CapstanCredentialDeclaration::MACHINE))
             ->postJson(route('api.postmaster.poll'), [
                 'presence' => ['ready_inboxes' => []],
             ])

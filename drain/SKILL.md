@@ -48,20 +48,19 @@ relative to `drain/examples`, so a copy in the private directory must repoint th
   `/absolute/path/to/drain/harness/stub_worker.py`.
 
 `--check-config` reports a missing prompt template but does not check a script path inside a role command;
-a wrong one fails only when a worker launches. The `./credentials` and `./var` paths are meant to resolve
-inside the private directory and need no change.
+a wrong one fails only when a worker launches. The `./var` paths are meant to resolve inside the private
+directory and need no change.
 
-The credential file must already contain one `capstan.work.drain` bound bearer and nothing else. Put it
-under the private directory with mode `0600`. If it is missing, stop and tell the user which credential
-file is required and that the bearer comes only from the device flow in the README's "Getting a token"
-section (`/bfc/device-authorizations` with `app_purpose` `capstan.work.drain`, approve at `/bfc/device`,
-collect from `/bfc/device/token`), with the `access_token` value alone written to that file. A token minted
-on `/settings/credentials/personal` or `/settings/credentials/installation` is rejected with `401`; do not
-send the user there. Do not ask the user to set an environment variable, paste the bearer into chat, or
-pass it as a command argument.
+Use the machine identity installed from `/postmaster` under **Connect a local agent**. If it is missing,
+stop and ask the user to generate the installer in a signed-in browser, run it on this target machine, and
+approve the waiting request in that browser. The approving person becomes the machine owner. Do not create
+a separate Work credential or send the user to a credential page.
 
-Verify the file exists and inspect its permission bits without printing its contents. Also confirm the
-configured actor id is the owner of that bound credential; the server rejects a mismatch.
+Set `credential_file` to `~/.config/capstan/<server-id>/token`. Read the adjacent `actor-id` file without
+printing it into the report, and copy its numeric contents as the quoted JSON scalar `actor_id` in the config.
+Do not copy the bearer itself. Verify both installed files exist and inspect their permission bits without
+printing their contents; both must be mode `0600` or stricter. The server rejects an actor id that does not
+belong to the installed `capstan.machine` credential.
 
 ## 3. Validate without HTTP
 
@@ -88,8 +87,8 @@ python3 /absolute/path/to/drain/capstan_drain.py \
 ```
 
 The command calls the real team-scoped claim endpoint with capacity `0`. It authenticates the bearer and
-actor header and validates the URL, team, endpoint, and Work feature without taking an item. A 404 usually
-means Work is off or the URL/team is wrong. A 401 means the credential, purpose, actor binding, or product
+actor header and validates the URL, team, and endpoint without taking an item. A 404 usually
+means the URL or team is wrong. A 401 means the credential, purpose, actor binding, or product
 admission is wrong. Report the status and safe error code only. Never include the bearer or a signed URL.
 
 ## 5. Prepare the scheduler

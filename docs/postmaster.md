@@ -153,8 +153,7 @@ successful probe. Each transition into red invokes the rebindable `App\Postmaste
 exactly once. Its default implementation logs a warning, and forks may bind it to email or Slack.
 Notifier exceptions are logged without rolling back probe state or stopping the sweep. Implementations
 must remain out-of-band: never send failure notices over the spoke poll channel whose failure they
-report. While Postmaster is disabled, the sweep voids outstanding challenges so re-enabling cannot
-produce alerts from frozen liveness state.
+report.
 
 ## Hub map liveness
 
@@ -184,13 +183,17 @@ Pending is intentional: a newly registered, actively polling spoke has not prove
 a challenge, but presenting it as failed would be misleading. The first successful poll makes a spoke
 pending, not green; it becomes green only after its first probe passes.
 
+When a selected team's machine reports unknown or unavailable provider usage, Owners and Admins see
+installation guidance on the map. Capstan detects supported usage tools on every collection but never
+installs one. The Linux instructions pin and checksum OpenUsage.sh before installing it into a collector
+lookup path. The macOS app is probed automatically, but it is not the default recommendation because
+OpenUsage app v0.7.15 bundles PostHog and this Capstan build cannot prove its telemetry can be disabled.
+
 ### Onboarding a spoke
 
 Every active Owner, Admin, and Member can generate an installer from Connect a local agent on the
 Postmaster map. Opening or polling the page does not start a grant. Generation is limited to 15 attempts
-per minute per source IP. Postmaster's feature flag is checked on the initial page request and every
-Livewire round-trip; disabling it makes both the map and installer generation return 404 without starting
-a device authorization.
+per minute per source IP.
 
 Generation produces one command:
 
@@ -209,8 +212,9 @@ install's configured application name, immutable server id, absolute poll and de
 verification URL and user code, a random device code, and the literal once-a-minute cron entry. The device
 and user codes belong to the package `/bfc/device` authorization flow. They expire after ten minutes, and
 the device code can be exchanged only once after the signed-in member who started it approves the request
-at the verification URL. The fixed package profile mints a bound personal `capstan.postmaster.poll` bearer
-credential; the installer never contains an existing durable bearer credential or signing-root secret.
+at the verification URL. That browser approver becomes the machine owner. The fixed package profile mints
+a bound personal `capstan.machine` bearer used for polling, replacement, and Work; the installer never
+contains an existing durable bearer credential or signing-root secret.
 
 Running the command requires curl 7.76 or newer, `php`, and `crontab`. The installer resolves and checks the
 absolute paths to curl and PHP, then records both in the poll script so cron does not need them on its minimal
@@ -269,5 +273,5 @@ installer.
 
 Postmaster requires `app.timezone` to be `UTC` (the value shipped in `config/app.php`; do not change it
 in a fork). Envelope timestamps are signed as UTC and stored naively; any other application timezone
-would silently invalidate every signature, so the application refuses to boot with the feature enabled
-under a non-UTC timezone.
+would silently invalidate every signature, so the application always refuses to boot under a non-UTC
+timezone.

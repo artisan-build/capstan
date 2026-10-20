@@ -2,7 +2,6 @@
 
 namespace App\Mcp\Tools;
 
-use App\Features\Postmaster;
 use App\Http\Controllers\Api\PollController;
 use App\Mcp\DurableWriteCoordinator;
 use App\Mcp\OwnerSubjectResolver;
@@ -17,14 +16,12 @@ use ArtisanBuild\BuiltForCloud\Mcp\ToolEffect;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\Validation\ValidationException;
 use Laravel\Mcp\Request;
-use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
 use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Attributes\Name;
 use Laravel\Mcp\Server\Tools\Annotations\IsDestructive;
 use Laravel\Mcp\Server\Tools\Annotations\IsIdempotent;
 use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
-use Laravel\Pennant\Feature;
 
 #[Name('ack_postmaster_messages')]
 #[Description('Acknowledges a bounded list of messages addressed to inboxes owned by this actor.')]
@@ -56,12 +53,8 @@ final class AckPostmasterMessagesTool extends CapstanTool
         OwnerSubjectResolver $owners,
         DurableWriteCoordinator $writes,
         MessageAcknowledger $acknowledger,
-    ): Response|ResponseFactory {
+    ): ResponseFactory {
         $this->requireExactArguments($request, ['idempotency_key', 'message_ids']);
-
-        if (! Feature::active(Postmaster::class)) {
-            return Response::error('Postmaster is unavailable.');
-        }
 
         $validated = $request->validate([
             'idempotency_key' => ['required', 'string', 'min:1', 'max:255'],

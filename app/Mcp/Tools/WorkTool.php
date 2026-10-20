@@ -3,7 +3,6 @@
 namespace App\Mcp\Tools;
 
 use App\Enums\WorkItemState;
-use App\Features\Work;
 use App\Http\ApiErrorException;
 use App\Mcp\DurableWriteCoordinator;
 use App\Mcp\OwnerSubjectResolver;
@@ -24,7 +23,6 @@ use Illuminate\Validation\ValidationException;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
-use Laravel\Pennant\Feature;
 
 abstract class WorkTool extends CapstanTool
 {
@@ -98,10 +96,6 @@ abstract class WorkTool extends CapstanTool
 
     public function handle(Request $request, OwnerSubjectResolver $owners, DurableWriteCoordinator $writes, WorkToolService $work, TeamWorkPolicy $policy): Response|ResponseFactory
     {
-        // Feature-off calls, even malformed ones, must not resolve principals or touch Work data.
-        if (! Feature::active(Work::class)) {
-            return Response::error('Work is unavailable.');
-        }
         $schema = $this->schema(new JsonSchemaTypeFactory);
         $this->requireExactArguments($request, array_keys($schema));
         $rules = [];

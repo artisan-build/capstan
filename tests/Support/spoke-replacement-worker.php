@@ -51,7 +51,7 @@ try {
         }
         try {
             $oldCredential = resolve(BoundBearerCredentialAuthenticator::class)
-                ->authenticate($request, CapstanCredentialDeclaration::POSTMASTER_POLL);
+                ->authenticate($request, CapstanCredentialDeclaration::MACHINE);
         } finally {
             flock($authenticationLock, LOCK_UN);
             fclose($authenticationLock);
@@ -94,7 +94,7 @@ try {
         $oldCredential,
         CarbonImmutable::now(),
         $mode === 'orphan' ? (string) getenv('REPLACEMENT_OLD_TOKEN') : null,
-        $mode === 'orphan' ? CapstanCredentialDeclaration::MACHINE : CapstanCredentialDeclaration::POSTMASTER_POLL,
+        CapstanCredentialDeclaration::MACHINE,
     );
     $recoveredFromLock = false;
     $result = null;

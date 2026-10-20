@@ -54,7 +54,7 @@ test('a fresh poll holding the machine lock cannot be overwritten by the inactiv
         $appKey = 'base64:'.base64_encode(str_repeat('i', 32));
         config(['app.key' => $appKey]);
         $owner = capstanUser();
-        $issued = capstanBoundBearer($owner, CapstanCredentialDeclaration::POSTMASTER_POLL);
+        $issued = capstanBoundBearer($owner, CapstanCredentialDeclaration::MACHINE);
         $now = CarbonImmutable::parse('2026-10-20T12:00:00Z');
         $machine = Spoke::query()->create([
             'actor_id' => (string) $owner->id,

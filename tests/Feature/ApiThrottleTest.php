@@ -15,9 +15,9 @@ use Laravel\Pennant\Feature;
 test('product api routes authenticate their endpoint purposes before applying the api throttle', function (): void {
     $routes = [
         '/api/v1/artifacts' => CapstanCredentialDeclaration::ARTIFACT_INGEST,
-        '/api/v1/poll' => CapstanCredentialDeclaration::MACHINE.','.CapstanCredentialDeclaration::POSTMASTER_POLL,
-        '/api/v1/postmaster/replace' => CapstanCredentialDeclaration::MACHINE.','.CapstanCredentialDeclaration::POSTMASTER_POLL,
-        '/api/v1/work/1/claim' => CapstanCredentialDeclaration::MACHINE.','.CapstanCredentialDeclaration::WORK_DRAIN,
+        '/api/v1/poll' => CapstanCredentialDeclaration::MACHINE,
+        '/api/v1/postmaster/replace' => CapstanCredentialDeclaration::MACHINE,
+        '/api/v1/work/1/claim' => CapstanCredentialDeclaration::MACHINE,
     ];
 
     foreach ($routes as $uri => $appPurpose) {

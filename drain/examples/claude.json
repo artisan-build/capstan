@@ -3,7 +3,7 @@
   "capstan_url": "http://127.0.0.1:8000",
   "team": 1,
   "actor_id": "1",
-  "credential_file": "./credentials/work-drain.token",
+  "credential_file": "~/.config/capstan/<server-id>/token",
   "max_concurrent": 2,
   "max_load_1m": 6.0,
   "max_memory_percent": 90.0,

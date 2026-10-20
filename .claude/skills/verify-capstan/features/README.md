@@ -5,8 +5,9 @@
 Every recipe assumes, in this order:
 1. `bin/launch.sh` printed `READY` and `bin/doctor.sh` printed `DOCTOR PASS` for THIS run's port.
 2. `B` and the `CAPSTAN_VERIFY_*` variables from `SKILL.md` are exported in your shell.
-3. Tokens you need are minted: `"$B/capstan.py" token <purpose>` for the bound APIs,
-   `"$B/mcp-token.sh"` for the MCP doors.
+3. Tokens you need are minted: `"$B/capstan.py" token capstan.machine` once for Postmaster and Work,
+   `"$B/capstan.py" token capstan.artifact.ingest` when driving Artifacts, and `"$B/mcp-token.sh"` for
+   the MCP doors.
 4. The owner is user id 1 on team 1 (`source <state>/owner.env` gives `OWNER_ID`).
 5. The server id (for Postmaster addresses) is
    `sqlite3 "$CAPSTAN_VERIFY_WORKTREE/database/verify.sqlite" "select server_id from server_identity"`.

@@ -3,7 +3,6 @@
 use App\Auth\CapstanCredentialDeclaration;
 use App\Enums\ProbeStatus;
 use App\Enums\SpokeLiveness;
-use App\Features\Postmaster;
 use App\Machine\MachineConditionNotifier;
 use App\Models\Envelope;
 use App\Models\Inbox;
@@ -23,7 +22,6 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
-use Laravel\Pennant\Feature;
 
 const PROBE_SERVER_ID = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
 
@@ -40,22 +38,19 @@ class RecordingProbeFailureNotifier implements ProbeFailureNotifier
 
 beforeEach(function (): void {
     config([
-        'capstan.features.postmaster' => true,
         'capstan.postmaster.server_id' => PROBE_SERVER_ID,
         'capstan.postmaster.signing_key' => 'probe-test-signing-key',
         'capstan.postmaster.probe.interval_seconds' => 300,
         'capstan.postmaster.probe.timeout_seconds' => 900,
         'capstan.postmaster.probe.backoff_seconds' => 1800,
     ]);
-    Feature::flushCache();
-
     $this->notifier = new RecordingProbeFailureNotifier;
     $this->app->instance(ProbeFailureNotifier::class, $this->notifier);
 });
 
 function probeToken(User $user): string
 {
-    return capstanBoundBearer($user, CapstanCredentialDeclaration::POSTMASTER_POLL)['token'];
+    return capstanBoundBearer($user, CapstanCredentialDeclaration::MACHINE)['token'];
 }
 
 function createProbeNotificationsTable(): void
@@ -729,30 +724,6 @@ test('the probe sweep runs with system authority and never synthesizes a human p
         ->and(auth()->user())->toBeNull();
 });
 
-test('disabling Postmaster voids outstanding probes before re-enable', function (): void {
-    $user = capstanUser();
-    $token = probeToken($user);
-    $this->withToken($token)->postJson('/api/v1/poll', [
-        'presence' => ['ready_inboxes' => []],
-    ])->assertOk();
-
-    config(['capstan.features.postmaster' => false]);
-    Feature::flushCache();
-    $this->artisan('postmaster:probe-sweep')
-        ->expectsOutput('Postmaster disabled; voided 1 outstanding probe(s).')
-        ->assertSuccessful();
-
-    expect(SpokeProbe::query()->count())->toBe(0)
-        ->and(Spoke::query()->firstOrFail()->probe_status)->toBe(SpokeLiveness::Unknown)
-        ->and($this->notifier->notifications)->toBe([]);
-
-    config(['capstan.features.postmaster' => true]);
-    Feature::flushCache();
-    $this->withToken($token)->postJson('/api/v1/poll', [
-        'presence' => ['ready_inboxes' => []],
-    ])->assertOk()->assertJsonPath('probe_challenge.algorithm', 'sha256');
-});
-
 test('probe timeouts are clamped to the sweep cadence', function (): void {
     config(['capstan.postmaster.probe.timeout_seconds' => 0]);
     Date::setTestNow('2026-08-17 12:00:00');
@@ -765,16 +736,13 @@ test('probe timeouts are clamped to the sweep cadence', function (): void {
     expect($probe->expires_at->diffInSeconds($probe->issued_at, true))->toBe(60.0);
 });
 
-test('a disabled feature never issues a probe or creates a spoke', function (): void {
-    config(['capstan.features.postmaster' => false]);
-    Feature::flushCache();
+test('scheduled probe support is available without a product feature gate', function (): void {
     $user = capstanUser();
 
     $this->withToken(probeToken($user))->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
-    ])->assertNotFound()->assertJsonPath('error.code', 'not_found');
+    ])->assertOk()->assertJsonPath('probe_challenge.algorithm', 'sha256');
 
-    expect(Feature::active(Postmaster::class))->toBeFalse()
-        ->and(Spoke::query()->count())->toBe(0)
-        ->and(SpokeProbe::query()->count())->toBe(0);
+    expect(Spoke::query()->count())->toBe(1)
+        ->and(SpokeProbe::query()->count())->toBe(1);
 });

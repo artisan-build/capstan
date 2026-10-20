@@ -197,12 +197,12 @@ test('artifact serving does not expose storage urls or call temporary disk urls'
     expect($source)->not->toContain('temporaryUrl(')->not->toContain('->url(');
 });
 
-test('artifact serving routes fail closed when the feature is off', function (): void {
+test('artifact serving routes fail closed when the render origin is absent', function (): void {
     $artifact = storedArtifact('<html><body>feature off artifact</body></html>', ArtifactVisibility::SignedUrl, now()->addHour());
     $shareUrl = resolve(ArtifactRenderOrigin::class)->signedViewerUrl($artifact);
     $contentUrl = resolve(ArtifactRenderOrigin::class)->signedContentUrl($artifact);
 
-    config(['capstan.features.artifacts' => false]);
+    config(['capstan.artifacts.render_origin' => null]);
     Feature::flushCache();
 
     $this->get($shareUrl)

@@ -21,13 +21,13 @@
 - MCP write door: `create_task`, `revise_brief`, `queue_item`, `cancel_item`, `cancel_task`, `steer`,
   `take_seat`, `release_seat`, `orchestrate`, `answer_escalation`, `list_work`, `get_task`, `list_escalations`.
 - MCP read door: `list_work`, `get_task`, `list_escalations`.
-- Drain host: `drain/capstan_drain.py` (cron-style, one process per minute) with a `capstan.work.drain` token.
+- Drain host: `drain/capstan_drain.py` (cron-style, one process per minute) with the shared `capstan.machine` token.
 - Worker: the signed brief/milestone/steers/orchestration links the drain writes into the item dir
   (`/api/v1/work/items/{item}/…`).
 
 ## Driving it with capstan.py, the reference drain and Playwright
 
-Preconditions: baseline; `"$B/capstan.py" token capstan.work.drain`; `"$B/mcp-token.sh"`;
+Preconditions: baseline; `"$B/capstan.py" token capstan.machine`; `"$B/mcp-token.sh"`;
 `C=$("$B/drain-config.sh")`. For seat/escalation: a Postmaster spoke exists (one `POST /api/v1/poll`,
 see `postmaster.md`); spoke id 1 on a fresh DB.
 

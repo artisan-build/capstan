@@ -18,14 +18,11 @@ use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Str;
-use Laravel\Pennant\Feature;
 
 beforeEach(function (): void {
     config([
-        'capstan.features.work' => true,
         'capstan.work.lease_seconds' => 300,
     ]);
-    Feature::flushCache();
 });
 
 /** @param array<string, mixed> $attributes */
@@ -61,7 +58,7 @@ function workDrainItem(WorkTask $task, array $attributes = []): WorkItem
 /** @return array{token: string, credential: Credential, spoke: Spoke, headers: array<string, string>} */
 function workDrainCredential(User $user): array
 {
-    $issued = capstanBoundBearer($user, CapstanCredentialDeclaration::WORK_DRAIN);
+    $issued = capstanBoundBearer($user, CapstanCredentialDeclaration::MACHINE);
     $spoke = Spoke::query()->create([
         'actor_id' => (string) $user->getKey(),
         'credential_id' => $issued['credential']->id,
@@ -640,32 +637,24 @@ test('mixed renew results preserve input order and commit every valid renewal', 
         ->and($second->fresh()?->lease_until?->toISOString())->toBe('2026-10-17T14:01:30.000000Z');
 });
 
-test('work off hides authenticated routes and other bound purposes cannot authorize them', function (): void {
+test('work is available without a product feature gate and other bound purposes cannot authorize it', function (): void {
     $team = workDrainTeam();
     $user = capstanUser();
     $work = workDrainCredential($user);
-    config(['capstan.features.work' => false]);
-    Feature::flushCache();
-
     foreach (['claim', 'transition', 'renew'] as $action) {
         $this->withHeaders($work['headers'])
             ->postJson(route("api.work.$action", $team), [])
-            ->assertNotFound()
-            ->assertJsonPath('error.code', 'not_found');
+            ->assertUnprocessable()
+            ->assertJsonPath('error.code', 'validation_failed');
     }
 
-    config(['capstan.features.work' => true]);
-    Feature::flushCache();
-
-    foreach ([CapstanCredentialDeclaration::ARTIFACT_INGEST, CapstanCredentialDeclaration::POSTMASTER_POLL] as $purpose) {
-        $issued = capstanBoundBearer($user, $purpose);
-        $this->withHeaders([
-            'Authorization' => 'Bearer '.$issued['token'],
-            CapstanCredentialDeclaration::ACTOR_HEADER => (string) $user->getKey(),
-        ])->postJson(route('api.work.claim', $team), workDrainClaimPayload())
-            ->assertUnauthorized()
-            ->assertJsonPath('error.code', 'unauthenticated');
-    }
+    $artifact = capstanBoundBearer($user, CapstanCredentialDeclaration::ARTIFACT_INGEST);
+    $this->withHeaders([
+        'Authorization' => 'Bearer '.$artifact['token'],
+        CapstanCredentialDeclaration::ACTOR_HEADER => (string) $user->getKey(),
+    ])->postJson(route('api.work.claim', $team), workDrainClaimPayload())
+        ->assertUnauthorized()
+        ->assertJsonPath('error.code', 'unauthenticated');
 });
 
 test('work credentials remain bound to the presented active product actor', function (): void {

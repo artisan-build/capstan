@@ -13,9 +13,8 @@ account, and deploys the fork. After each deploy it runs `php artisan migrate --
 `php artisan bfc:signing-root:ensure --local`, so the schema and Postmaster's signing key are in place
 without any work from you.
 
-The install sets two variables. `CAPSTAN_FEATURE_ARTIFACTS` is `true`, and
-`CAPSTAN_ARTIFACT_RENDER_ORIGIN` holds the environment's own `laravel.cloud` address. Everything else
-starts at its default, which means Postmaster and Work are off.
+The install sets `CAPSTAN_ARTIFACT_RENDER_ORIGIN` to the environment's own `laravel.cloud` address.
+Postmaster and Work are available immediately. Pooled Work starts off and remains an explicit team policy.
 
 ## 2. Create the first account
 
@@ -41,7 +40,7 @@ Artifacts, Pages and the Brand kit all need a second hostname. Capstan keeps the
 produce safe by serving it from a separate origin that never sees your login cookie, not by sanitizing
 it, so without a second host there is nowhere safe to serve it from.
 
-The check is in `app/Features/Artifacts.php`. The feature is on only when the flag is on and
+The check is in `app/Features/Artifacts.php`. Artifact surfaces are available only when
 `ArtifactRenderOrigin::isConfigured()` finds a render origin whose host differs from `APP_URL`'s. On
 Laravel Cloud, `APP_URL` is the environment's `laravel.cloud` address until a custom domain is attached.
 That is the same address Scalpels put in `CAPSTAN_ARTIFACT_RENDER_ORIGIN`, so a fresh install cannot pass
@@ -59,36 +58,19 @@ different host from `APP_URL`.
 Leave `SESSION_DOMAIN` unset. A session cookie shared across both hostnames hands your login to the
 artifact origin and undoes the isolation.
 
-## 4. Turn on the features you want
+## 4. Connect this machine
 
-The three feature flags are environment variables read through `config()`. There is no switch for them
-in the app.
-
-| Variable | Scalpels default | Turns on |
-| --- | --- | --- |
-| `CAPSTAN_FEATURE_ARTIFACTS` | `true` | Artifacts, Pages and the Brand kit, once step 3 is done |
-| `CAPSTAN_FEATURE_POSTMASTER` | `false` | The signed agent message bus |
-| `CAPSTAN_FEATURE_WORK` | `false` | The Work queue and its drain API |
-
-When a feature is off, its routes return `404` and its MCP tools refuse with a message such as
-`Work is unavailable.` The rest of Capstan keeps working. For this guide you need Work, so set it on
-the environment and redeploy:
-
-```bash
-cloud environment:variables --json -n --action=set --key=CAPSTAN_FEATURE_WORK --value=true
-cloud deploy -n
-```
-
-If you turn on Postmaster, open `/postmaster` after the deploy and use **Connect a local agent**. Generate
-the installer, copy its one-line `curl -sSL --fail-with-body '…' | sh` command, and run it on the computer
+Open `/postmaster` and use **Connect a local agent**. Generate the installer, copy its one-line
+`curl -sSL --fail-with-body '…' | sh` command, and run it on the computer
 that will poll Capstan. The command needs curl 7.76 or newer, `php`, and `crontab`. It prints the
 verification address and code and opens that address when the operating system supports it. Approve the
-code while signed in as the same
-member who generated the installer. The new spoke appears as Pending after its first poll and turns Green
-after its first probe passes.
+code in the browser that generated it. The approving person becomes the machine owner. The new spoke appears
+as Pending after its first poll and turns Green after its first probe passes.
 
 The install link works once and expires with the device authorization after ten minutes. Generating another
 one invalidates the previous unused link. You can expand **Show full script** before running the command.
+The installer writes one `capstan.machine` token and its non-secret actor id under
+`~/.config/capstan/<server-id>/`; polling and Work share that identity.
 
 ## 5. Connect your agent over MCP
 
@@ -102,74 +84,32 @@ read-only. Capstan also serves the same MCP server itself at `/mcp` and `/mcp/wr
 | Pages and artifacts | `list_pages`, `get_page` | `publish_page`, `update_page`, `create_artifact_share` |
 | Brand kit | `get_brand_kit`, `list_layouts`, `preview_brand_draft` | `update_brand_draft`, `upload_brand_asset`, `apply_brand_draft` |
 
-The Pages, artifacts and Brand kit tools stay unavailable until step 3 is done. Each area's tools also
-need that area's flag from step 4.
+The Pages, artifacts and Brand kit tools stay unavailable until step 3 is done. Postmaster and Work have
+no separate product flag.
 
 `list_escalations` and `answer_escalation` are how a person handles a blocked worker without opening
 Capstan. Answering one wakes the orchestrator and hands it the answer. The next turn's
 context carries an `answered_escalations` list holding the question, the options and the answer text.
 
-## 6. Mint a drain token with the device flow
+## 6. Prepare the installed machine identity for Work
 
-A drain authenticates with a `capstan.work.drain` bearer. Get it through the device flow. Do not use
-`/settings/credentials/personal` or `/settings/credentials/installation`: both offer to issue a token, but
-`POST /api/v1/work/{team}/claim` rejects a token minted there with `401 unauthenticated`. The same
-purpose, person and endpoint return `200` with a device-flow token. This was last checked on 2026-10-18
-against Built for Cloud v0.20.0, and it applies to all three of Capstan's purposes.
-
-Read your actor id first. The drain sends it in `X-Capstan-Actor-ID`, and it must belong to the person
-who approves the token.
-
-```bash
-cloud tinker <env> --code='echo ArtisanBuild\BuiltForCloud\User::query()->where("email","you@example.com")->value("id");'
-```
-
-Then run the flow. The cookie jar holds a live session for your account, so keep it out of any repository
-and let the `trap` delete it.
-
-```bash
-CAPSTAN_URL=https://<your-app-host>
-JAR=$(mktemp -t capstan-cookies)
-trap 'rm -f "$JAR"' EXIT
-
-# 1. Sign in.
-CSRF=$(curl -s -c "$JAR" "$CAPSTAN_URL/bfc/login" \
-  | grep -o 'name="_token" value="[^"]*"' | cut -d'"' -f4)
-curl -s -b "$JAR" -c "$JAR" -X POST "$CAPSTAN_URL/bfc/login" \
-  -d "_token=$CSRF" -d "email=you@example.com" -d "password=<your password>"
-
-# 2. Ask for a token. Prints device_code, user_code and verification_uri.
-CSRF=$(curl -s -b "$JAR" -c "$JAR" "$CAPSTAN_URL/settings" \
-  | grep -o 'name="_token" value="[^"]*"' | cut -d'"' -f4)
-curl -s -b "$JAR" -c "$JAR" -X POST "$CAPSTAN_URL/bfc/device-authorizations" \
-  -H "Content-Type: application/json" -H "Accept: application/json" -H "X-CSRF-TOKEN: $CSRF" \
-  -d '{"app_purpose":"capstan.work.drain","label":"drain on this machine"}'
-
-# 3. Open the verification_uri in a browser signed in as the same person and press Approve.
-
-# 4. Collect the token. Repeat until it stops returning authorization_pending.
-curl -s -X POST "$CAPSTAN_URL/bfc/device/token" \
-  -H "Content-Type: application/json" -H "Accept: application/json" \
-  -d '{"device_code":"<device_code from step 2>"}'
-
-rm -f "$JAR"
-```
-
-Step 4 returns `{"access_token":"tok_…","token_type":"Bearer",…}`. The authorization expires ten minutes
-after step 2, and a device code can be exchanged once. More detail is in the README's
-[Getting a token](../README.md#getting-a-token).
+Use the files created in step 4. Set `credential_file` to
+`~/.config/capstan/<server-id>/token`. Read the adjacent `actor-id` file locally and copy that numeric value
+as the quoted JSON scalar `actor_id` when preparing the drain config. Do not copy the bearer itself into the
+config, an environment variable, a command line, or chat. If either installed file is missing, reconnect the
+machine from `/postmaster` rather than minting a separate drain credential.
 
 ## 7. Drain your first Work item
 
-Make a private directory for the drain, with mode `0700`, and write the `access_token` value alone into
-a file in it with mode `0600`. Never put the bearer in the repository, a command line or an environment
-variable.
+Make a private directory for the drain config with mode `0700`. Keep using the installer's mode-`0600`
+token file; do not duplicate it into the project or config directory.
 
 For the first run use `drain/examples/generic.json`, whose only role, `builder`, runs
 `drain/harness/stub_worker.py`. The stub reads its prompt, posts `started` and then `done`, and does
 nothing else, so nothing on your machine or in your repositories is at risk. Copy the example into your
 private directory and set `capstan_url` to your app's `https://` address, `team` to `1`, `actor_id` to the
-id you read in step 6, and `credential_file` to the token file. The example's other paths, including the
+JSON scalar copied from the installed `actor-id` file, and `credential_file` to the installed `token` path.
+The example's other paths, including the
 prompt templates and the stub's command, are relative to the example's own directory, so make them
 absolute paths into your checkout. Every key is described in [docs/work.md](work.md#configuration).
 
@@ -180,9 +120,8 @@ python3 drain/capstan_drain.py --config /absolute/path/to/config.json --check-co
 python3 drain/capstan_drain.py --config /absolute/path/to/config.json --dry-claim
 ```
 
-A `404` from the dry claim usually means Work is off or the URL or team is wrong. A `401` means the
-credential, its purpose or the actor id is wrong, and a token minted from a credentials page gets one
-too. A `403`
+A `404` from the dry claim usually means the URL or team is wrong. A `401` means the machine credential,
+its binding, or the actor id is wrong. A `403`
 with `error code: 1010` comes from Cloudflare in front of Laravel Cloud and means the drain sent
 Python's default User-Agent. The reference drain sends its own, so this only affects a drain you have
 adapted, and it never shows up against localhost.
@@ -215,7 +154,7 @@ recovery and limits.
 
 ## 8. Publish your first page
 
-With step 3 done and `CAPSTAN_FEATURE_ARTIFACTS` on, call `publish_page` from your MCP client. It takes
+With step 3 done, call `publish_page` from your MCP client. It takes
 an `idempotency_key`, a `title`, a `recipe` describing how to rebuild the page, a `layout` of `report`,
 `dashboard`, `brief` or `plain`, the `content`, and a `content_type` of `text/html` or
 `application/xhtml+xml`. A `description` is optional.

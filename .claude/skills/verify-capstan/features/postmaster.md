@@ -12,18 +12,18 @@
 
 ## How to get to it (user POV)
 
-- A spoke (CLI install) polls with a `capstan.postmaster.poll` device-flow token.
+- A spoke (CLI install) polls with the shared `capstan.machine` device-flow token.
 - An MCP client uses `postmaster_spokes`, `postmaster_messages` (both doors), `send_postmaster_message`,
   `ack_postmaster_messages` (write door).
 - Web: `/postmaster` → `postmaster-onboarding` section → its button → `postmaster-installer` `<pre>`.
 
 ## Driving it with capstan.py and Playwright
 
-Preconditions: baseline; `"$B/capstan.py" token capstan.postmaster.poll`; `"$B/mcp-token.sh"`;
+Preconditions: baseline; `"$B/capstan.py" token capstan.machine`; `"$B/mcp-token.sh"`;
 `SID=$(sqlite3 … "select server_id from server_identity")`. Launch has already run
 `bfc:signing-root:ensure --local`.
 
-- **Claim an inbox** — `"$B/capstan.py" api capstan.postmaster.poll POST /api/v1/poll '{"presence":{"ready_inboxes":["verify"]}}'`
+- **Claim an inbox** — `"$B/capstan.py" api capstan.machine POST /api/v1/poll '{"presence":{"ready_inboxes":["verify"]}}'`
   → `200`, `inbound: []`, and on a new spoke a `probe_challenge {probe_id, nonce, algorithm:"sha256"}`.
 - **Spoke map** — `"$B/capstan.py" mcp read postmaster_spokes` → `items[0].inboxes: ["verify"]`, `status: "pending"`.
 - **Answer the probe** — poll again with `"probe_response":{"probe_id":"…","digest":"<sha256 hex of nonce>"}`

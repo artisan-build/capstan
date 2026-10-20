@@ -13,7 +13,6 @@ use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\RateLimiter;
-use Laravel\Pennant\Feature;
 use Livewire\Livewire;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 use Symfony\Component\Process\Process;
@@ -25,10 +24,8 @@ beforeEach(function (): void {
         'app.key' => 'base64:'.base64_encode(str_repeat('o', 32)),
         'app.name' => 'Capstan',
         'app.url' => 'https://capstan.example',
-        'capstan.features.postmaster' => true,
         'capstan.postmaster.server_id' => ONBOARDING_SERVER_ID,
     ]);
-    Feature::flushCache();
     RateLimiter::clear('postmaster-onboarding:127.0.0.1');
     app()->forgetInstance(ServerIdentity::class);
     request()->setLaravelSession(resolve('session')->driver());
@@ -46,7 +43,7 @@ function onboardingSnippetFor(object $test, User $user): string
 
 test('the snippet starts the fixed package device flow without disclosing durable secrets', function (): void {
     $operator = capstanUser();
-    $existing = capstanBoundBearer($operator, CapstanCredentialDeclaration::POSTMASTER_POLL);
+    $existing = capstanBoundBearer($operator, CapstanCredentialDeclaration::MACHINE);
     $snippet = onboardingSnippetFor($this, $operator);
     $authorization = DB::table('credential_authorizations')->sole();
 
@@ -96,16 +93,14 @@ test('every active package role can see and generate onboarding', function (User
         ->and(DB::table('credential_authorizations')->count())->toBe(1);
 })->with(UserRole::cases());
 
-test('onboarding requires authentication and an enabled feature', function (): void {
+test('onboarding requires authentication and is available without a product feature gate', function (): void {
     $this->get(route('postmaster.map'))->assertRedirect(route('bfc.login'));
     expect(DB::table('credential_authorizations')->count())->toBe(0);
 
     $operator = capstanUser();
-    config(['capstan.features.postmaster' => false]);
-    Feature::flushCache();
-
-    $this->actingAsVersioned($operator)->get(route('postmaster.map'))->assertNotFound();
-    expect(DB::table('credential_authorizations')->count())->toBe(0);
+    $this->actingAsVersioned($operator)->get(route('postmaster.map'))->assertOk();
+    expect(onboardingSnippetFor($this, $operator))->toContain("CAPSTAN_ACTOR_ID='".$operator->getKey()."'")
+        ->and(DB::table('credential_authorizations')->count())->toBe(1);
 });
 
 test('an empty app url cannot start a device authorization', function (): void {
@@ -142,7 +137,7 @@ test('onboarding generation is limited to fifteen attempts per minute per ip', f
 
 test('the first poll is pending and the first passing probe turns the same spoke green', function (): void {
     $operator = capstanUser();
-    $token = capstanBoundBearer($operator, CapstanCredentialDeclaration::POSTMASTER_POLL)['token'];
+    $token = capstanBoundBearer($operator, CapstanCredentialDeclaration::MACHINE)['token'];
     $first = $this->withToken($token)->postJson(route('api.postmaster.poll'), [
         'presence' => ['ready_inboxes' => []],
     ])->assertOk();
