@@ -461,10 +461,13 @@ test('conditional claim guard survives a real multiprocess race and the unsafe c
 });
 
 test('simultaneous pooled contenders cannot bypass the deterministic machine winner on SQLite', function (): void {
+    if (DB::getDriverName() !== 'sqlite') {
+        $this->markTestSkipped('Dedicated SQLite deterministic machine routing race proof.');
+    }
+
     $database = provisionWorkRaceDatabase();
 
     try {
-        expect(DB::getDriverName())->toBe('sqlite');
         $team = Team::query()->create([
             'name' => 'Deterministic routing race',
             'slug' => 'deterministic-routing-race',
