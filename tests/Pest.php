@@ -6,6 +6,7 @@ use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationProfile;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
@@ -140,20 +141,30 @@ function capstanLegacyBoundBearer(User $user, string $appPurpose): array
         audience: $appPurpose === CapstanCredentialDeclaration::POSTMASTER_POLL ? '/api/v1/poll' : '/api/v1/work',
     );
     $token = 'capstan-legacy-test-'.bin2hex(random_bytes(24));
-    $credential = new Credential;
-    $credential->forceFill([
-        'kind' => CredentialKind::Bearer,
-        'purpose' => resolve(AppPurposeRegistry::class)->purpose($appPurpose),
-        'subject_type' => $scope->subject->type,
-        'subject_ref' => $scope->subject->ref,
-        'name' => 'Capstan historical test credential',
-        'abilities' => [],
-        'user_id' => (string) $user->getKey(),
-        'secret_hash' => hash('sha256', $token),
-        'status' => CredentialStatus::Active,
-        'expires_at' => null,
-    ]);
-    DB::transaction(fn () => $credential->saveWithOriginatorBinding($scope));
+    $purposes = config('built-for-cloud.credentials.app_purposes');
+    expect($purposes)->toBeArray()->not->toHaveKey($appPurpose);
+    config(['built-for-cloud.credentials.app_purposes' => array_replace($purposes, [
+        $appPurpose => CredentialPurpose::Mcp->value,
+    ])]);
+
+    try {
+        $credential = new Credential;
+        $credential->forceFill([
+            'kind' => CredentialKind::Bearer,
+            'purpose' => resolve(AppPurposeRegistry::class)->purpose($appPurpose),
+            'subject_type' => $scope->subject->type,
+            'subject_ref' => $scope->subject->ref,
+            'name' => 'Capstan historical test credential',
+            'abilities' => [],
+            'user_id' => (string) $user->getKey(),
+            'secret_hash' => hash('sha256', $token),
+            'status' => CredentialStatus::Active,
+            'expires_at' => null,
+        ]);
+        DB::transaction(fn () => $credential->saveWithOriginatorBinding($scope));
+    } finally {
+        config(['built-for-cloud.credentials.app_purposes' => $purposes]);
+    }
 
     return ['token' => $token, 'credential' => $credential];
 }
