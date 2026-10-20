@@ -38,7 +38,6 @@ use InvalidArgumentException;
  * @property-read WorkBriefRevision|null $fetchedBriefRevision
  * @property-read Collection<int, WorkItemTransition> $transitions
  * @property-read Collection<int, WorkMilestone> $milestones
- *
  * @mixin IdeHelperWorkItem
  */
 class WorkItem extends Model

@@ -24,7 +24,6 @@ use Illuminate\Support\Carbon;
  * @property Carbon $updated_at
  * @property-read Page $page
  * @property-read User|null $internalRecipient
- *
  * @mixin IdeHelperPageShare
  */
 class PageShare extends Model

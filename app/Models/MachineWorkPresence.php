@@ -19,7 +19,6 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property CarbonImmutable $observed_at
  * @property-read Spoke $spoke
  * @property-read Team $team
- *
  * @mixin IdeHelperMachineWorkPresence
  */
 class MachineWorkPresence extends Model

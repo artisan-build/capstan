@@ -24,7 +24,6 @@ use Illuminate\Support\Carbon;
  * @property Carbon $created_at
  * @property Carbon $updated_at
  * @property-read Page $page
- *
  * @mixin IdeHelperPageVersion
  */
 class PageVersion extends Model

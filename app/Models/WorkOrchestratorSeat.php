@@ -25,7 +25,6 @@ use Illuminate\Database\Eloquent\Model;
  * @property int $turns_started
  * @property int $children_created
  * @property CarbonImmutable|null $stopped_at
- *
  * @mixin IdeHelperWorkOrchestratorSeat
  */
 class WorkOrchestratorSeat extends Model

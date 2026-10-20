@@ -9,7 +9,6 @@ namespace App\Models;
  * @property string $decision
  * @property string $rationale
  * @property array<string, mixed> $evidence
- *
  * @mixin IdeHelperWorkOrchestrationDecision
  */
 class WorkOrchestrationDecision extends WorkAppendOnlyRecord

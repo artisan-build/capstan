@@ -15,7 +15,6 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property bool $new_pool_work
  * @property CarbonImmutable $created_at
  * @property-read Team $team
- *
  * @mixin IdeHelperTeamWorkPolicyChange
  */
 class TeamWorkPolicyChange extends Model

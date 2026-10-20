@@ -10,7 +10,6 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string|null $current_version_id
  * @property int $current_version_number
  * @property array<string, mixed>|null $draft
- *
  * @mixin IdeHelperBrandKit
  */
 class BrandKit extends Model

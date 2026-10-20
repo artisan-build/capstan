@@ -35,7 +35,6 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property-read Collection<int, WorkItem> $items
  * @property-read Collection<int, WorkMilestone> $milestones
  * @property-read Collection<int, WorkSteer> $steers
- *
  * @mixin IdeHelperWorkTask
  */
 class WorkTask extends Model

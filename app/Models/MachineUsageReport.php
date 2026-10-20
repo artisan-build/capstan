@@ -21,7 +21,6 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string|null $failure_code
  * @property-read Spoke $spoke
  * @property-read Collection<int, MachineUsageProvider> $providers
- *
  * @mixin IdeHelperMachineUsageReport
  */
 class MachineUsageReport extends Model
