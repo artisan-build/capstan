@@ -89,9 +89,8 @@ Three harnesses, one per surface. Feature files give the exact calls.
 **HTTP + MCP — `bin/capstan.py`** (Python stdlib only; run with no args for usage):
 
 ```sh
-"$B/capstan.py" token capstan.work.drain        # device flow → <state>/tokens/<purpose> (0600); prints path
+"$B/capstan.py" token capstan.machine           # shared Postmaster + Work token → <state>/tokens/<purpose> (0600)
 "$B/capstan.py" token capstan.artifact.ingest
-"$B/capstan.py" token capstan.postmaster.poll
 "$B/mcp-token.sh"                               # unbound `mcp` bearer → <state>/tokens/mcp
 "$B/capstan.py" mcp-list read                   # 10 tools
 "$B/capstan.py" mcp-list write                  # 28 tools; marks destructiveHint ones

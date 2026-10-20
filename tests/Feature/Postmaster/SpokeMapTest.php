@@ -141,8 +141,6 @@ test('usage tool guidance renders the pinned verified Linux path and macOS priva
     expect($copy)
         ->toContain('This build detects tools but never installs them.')
         ->toContain('v0.26.1')
-        ->toContain('OpenUsage_Linux_x86_64.tar.gz')
-        ->toContain('OpenUsage_Linux_aarch64.tar.gz')
         ->toContain('checksums.txt')
         ->toContain('sha256sum')
         ->toContain('shasum -a 256')
@@ -152,6 +150,20 @@ test('usage tool guidance renders the pinned verified Linux path and macOS priva
         ->toContain('cannot prove that its telemetry can be disabled')
         ->not->toContain('install.sh')
         ->not->toMatch('/curl[^\n]*\|\s*(?:ba)?sh/');
+
+    preg_match_all('/archive=(openusage_[^\s;]+\.tar\.gz)/', $copy, $recipeArchives);
+    expect($recipeArchives[1])->toBe([
+        'openusage_0.26.1_linux_amd64.tar.gz',
+        'openusage_0.26.1_linux_arm64.tar.gz',
+    ]);
+
+    $manifest = file_get_contents(base_path('tests/Fixtures/openusage-v0.26.1-checksums.txt'));
+    expect($manifest)->not->toBeFalse();
+
+    foreach ($recipeArchives[1] as $archive) {
+        expect(preg_match_all('/^[a-f0-9]{64}  '.preg_quote($archive, '/').'$/m', (string) $manifest))
+            ->toBe(1);
+    }
 });
 
 test('map owner names never fall back to email or expose actor ids', function (): void {

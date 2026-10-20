@@ -1,0 +1,3 @@
+bfdf46d25d2968d7aa648366c0ed7d7b2d2e78c3f1d31e68d5e9d4411e5ab6f9  openusage_0.26.1_linux_amd64.tar.gz
+4df9645c54bd8a2945c8f5fd83d9a1e091d2bf9418dc8a4485e7fb32dc740c23  openusage_0.26.1_linux_arm64.tar.gz
+2e613fecc3429147082bd63598107972d1d3cc611e77ddb468221318c29f4a64  openusage_0.26.1_windows_amd64.zip

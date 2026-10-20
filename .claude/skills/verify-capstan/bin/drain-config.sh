@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Write a private reference-drain config (stub worker, role "builder", team 1) under the state dir,
-# outside every repo. Needs ${STATE}/tokens/capstan.work.drain (bin/capstan.py token capstan.work.drain).
+# outside every repo. Needs ${STATE}/tokens/capstan.machine (bin/capstan.py token capstan.machine).
 # Prints the config path.
 source "$(dirname "$0")/_env.sh"
 # shellcheck disable=SC1091
 source "${STATE}/owner.env"
-tok="${STATE}/tokens/capstan.work.drain"
-[[ -s "${tok}" ]] || die "no ${tok}; run: bin/capstan.py token capstan.work.drain"
+tok="${STATE}/tokens/capstan.machine"
+[[ -s "${tok}" ]] || die "no ${tok}; run: bin/capstan.py token capstan.machine"
 umask 077
 dir="${STATE}/drain"
 mkdir -p "${dir}/var"

@@ -4,7 +4,7 @@
 
 - `settings.signin` — `/bfc/login` (no `/login`, no `/register`), sign-out via `/settings/logout` or the user menu.
 - `settings.home` — `/settings` (Built for Cloud UI shell, nav to credentials, members, sessions, transitions).
-- `settings.personal-credentials` — `/settings/credentials/personal`: issue/rotate/revoke bound bearers for the three purposes.
+- `settings.personal-credentials` — `/settings/credentials/personal`: issue/rotate/revoke bound bearers for the two purposes.
 - `settings.installation-credentials` — `/settings/credentials/installation`.
 - `settings.device-flow` — `/bfc/device-authorizations` → `/bfc/device` approve → `/bfc/device/token`.
 - `settings.dashboard` — `/dashboard`, the post-login landing page with app navigation.
@@ -18,7 +18,7 @@
 - `/settings` (`ui-shell`, `ui-navigation`, `ui-nav-personal-credentials`, `ui-nav-installation-credentials`,
   `ui-nav-member-management`, `ui-nav-session-management`, `ui-nav-managed-transitions`, `ui-logout-form`).
 - `/settings/credentials/personal` (`personal-credentials`, `personal-credentials-issue`,
-  `personal-credentials-issue-option` ×3 — one form per purpose, `personal-credentials-list`/`-item`
+  `personal-credentials-issue-option` ×2 — one form per purpose, `personal-credentials-list`/`-item`
   with rotate and DELETE forms).
 - `/settings/credentials/installation` (`installation-credentials`, `-issue`, `-issue-option`, `-list`, `-panel`).
 - CLI/agent: the device flow, approved by a signed-in human at `/bfc/device`.
@@ -30,15 +30,14 @@ Preconditions: baseline.
 - **Sign in** — `"$B/capstan.py" get /settings` → `200 http://<app host>/settings` (it signs in once,
   then reuses `<state>/owner-cookies.txt`). Raw: `POST /bfc/login` → 302 to `/dashboard`.
 - **Absent routes** — `curl -s -o /dev/null -w '%{http_code}' "$U/login"` / `/register` / `/bfc/ui` → 404 each.
-- **Device flow, each purpose** — `"$B/capstan.py" token capstan.work.drain` (and
-  `capstan.artifact.ingest`, `capstan.postmaster.poll`) → prints `<state>/tokens/<purpose>`, mode 0600.
-  Side effect: `select purpose, user_id from credentials` gains a row per purpose (`mcp`/`consumption`/`mcp`,
-  user 1) and `credential_protocol_bindings` binds each to its `/api/v1/*` audience.
-- **Token works where bound** — the drain's `--dry-claim` with the `capstan.work.drain` token →
-  `dry claim succeeded with capacity=0` (see `work.md`); the artifact and poll tokens are exercised in
-  `artifacts.md` and `postmaster.md`.
+- **Device flow, each purpose** — `"$B/capstan.py" token capstan.machine` and
+  `"$B/capstan.py" token capstan.artifact.ingest` → each prints `<state>/tokens/<purpose>`, mode 0600.
+  Side effect: `select purpose, user_id from credentials` gains one row per purpose for user 1, and
+  `credential_protocol_bindings` binds each credential to its API audience.
+- **Token works where bound** — the shared machine token drives the drain's `--dry-claim` and the
+  Postmaster poll in `work.md` and `postmaster.md`; the artifact token is exercised in `artifacts.md`.
 - **Personal credentials page** — `"$B/capstan.py" get /settings/credentials/personal | grep -c 'data-testid="personal-credentials-issue-option"'`
-  → 3; device-flow credentials appear as `personal-credentials-item` rows.
+  → 2; device-flow credentials appear as `personal-credentials-item` rows.
 - **Pages at two viewports** — `"$B/web-script.sh"` pass: `/settings` (`ui-shell`),
   `/settings/credentials/installation`, `/settings/credentials/personal`, `/dashboard` (`work-navigation`)
   all 200, marker 1, `overflowX: false` at 1280 and 390.

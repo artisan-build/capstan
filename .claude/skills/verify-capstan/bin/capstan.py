@@ -11,9 +11,10 @@
   capstan.py fetch <url>                COOKIELESS GET; prints status, CSP/Set-Cookie headers, body
   capstan.py frames <path>              GET as owner; prints each iframe's UNESCAPED src and sandbox
 
-Purposes: capstan.artifact.ingest, capstan.postmaster.poll, capstan.work.drain. Each device-flow token
-is BOUND to its API audience, so none of them opens /mcp. The MCP doors take the unbound `mcp` token
-that bin/mcp-token.sh mints. Tokens are never printed; read them from the file the command names.
+Purposes: capstan.artifact.ingest, capstan.machine. The shared machine token drives Postmaster and Work.
+Each device-flow token is BOUND to its API audience, so neither opens /mcp. The MCP doors take the
+unbound `mcp` token that bin/mcp-token.sh mints. Tokens are never printed; read them from the file the
+command names.
 """
 import html
 import http.cookiejar

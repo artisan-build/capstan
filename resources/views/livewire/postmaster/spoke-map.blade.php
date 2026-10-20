@@ -68,8 +68,8 @@
                 </flux:text>
                 <pre class="mt-3 overflow-auto rounded-lg bg-zinc-950 p-3 text-xs leading-5 text-zinc-100"><code>version=v0.26.1
 case "$(uname -m)" in
-    x86_64) archive=OpenUsage_Linux_x86_64.tar.gz ;;
-    aarch64) archive=OpenUsage_Linux_aarch64.tar.gz ;;
+    x86_64) archive=openusage_0.26.1_linux_amd64.tar.gz ;;
+    aarch64) archive=openusage_0.26.1_linux_arm64.tar.gz ;;
     *) printf '%s\n' 'Unsupported Linux architecture.' >&amp;2; exit 1 ;;
 esac
 base_url="https://github.com/janekbaraniewski/openusage/releases/download/$version"

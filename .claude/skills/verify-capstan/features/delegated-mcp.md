@@ -28,7 +28,7 @@ Preconditions: baseline; `"$B/mcp-token.sh"`.
 - **Write tool on read door is refused** — `"$B/capstan.py" mcp read create_task '{"team_id":1,"idempotency_key":"rd","title":"x","brief":"x"}'`
   → `FAIL: /mcp 400: {… "error":{"code":-32000,"message":"effect_above_ceiling"}}`; side effect:
   `select count(*) from work_tasks` unchanged.
-- **Bound token on the MCP door is refused** — put a device-flow `capstan.postmaster.poll` token in
+- **Bound token on the MCP door is refused** — put a device-flow `capstan.machine` token in
   `<state>/tokens/mcp` and list → `FAIL: /mcp 401: {"message":"Unauthenticated."}` (bound credentials
   only open their own API audience). Re-run `mcp-token.sh` afterwards.
 - **Idempotency** — repeat any write call with the same key → same `structuredContent`, and
@@ -41,7 +41,7 @@ principal. Say so in any verdict about delegated behaviour, and lean on
 
 ## Gotchas
 
-- None of the three device-flow purposes opens `/mcp` — they are bound to `/api/v1/*` audiences and
+- Neither device-flow purpose opens `/mcp` — both are bound to `/api/v1/*` audiences and
   get 401 there. Use `mcp-token.sh`.
 - `bfc:credential:mint` without `--local` runs against a REMOTE Cloud environment. Always `--local`.
 - The doors answer JSON or SSE; `capstan.py` handles both. It needs `Accept: application/json, text/event-stream`.
