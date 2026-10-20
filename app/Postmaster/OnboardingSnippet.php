@@ -214,7 +214,7 @@ PHP;
             '    Darwin) CAPSTAN_DEVICE_NAME="$(scutil --get ComputerName 2>/dev/null || true)" ;;',
             '    *) CAPSTAN_DEVICE_NAME="$(hostname -s 2>/dev/null || hostname 2>/dev/null || true)" ;;',
             'esac',
-            'CAPSTAN_USAGE="$("$CAPSTAN_PHP" "$CAPSTAN_USAGE_COLLECTOR" "$CAPSTAN_CURL" \'\' "$CAPSTAN_USAGE_CACHE" 2>/dev/null || true)"',
+            'CAPSTAN_USAGE="$("$CAPSTAN_PHP" "$CAPSTAN_USAGE_COLLECTOR" "$CAPSTAN_CURL" \'\' "$CAPSTAN_USAGE_CACHE" "$HOME" 2>/dev/null || true)"',
             'CAPSTAN_PAYLOAD="$("$CAPSTAN_PHP" -r '.$this->quote($payloadBuilder).' "$CAPSTAN_INBOX_FILE" "$CAPSTAN_PENDING_FILE" "$CAPSTAN_DEVICE_NAME" "$CAPSTAN_USAGE")"',
             'CAPSTAN_RESPONSE="$(printf \'header = "Authorization: Bearer %s"\nheader = "X-Capstan-Actor-ID: %s"\n\' "$(cat "$CAPSTAN_TOKEN_FILE")" "$(cat "$CAPSTAN_ACTOR_FILE")" | "$CAPSTAN_CURL" --config - --fail --silent --show-error --connect-timeout 5 --max-time 15 --user-agent \'capstan-machine/1\' --request POST --header \'Content-Type: application/json\' --data "$CAPSTAN_PAYLOAD" "$CAPSTAN_POLL_URL")"',
             'rm -f "$CAPSTAN_PENDING_FILE"',

@@ -609,13 +609,13 @@ function capstanWriteCache(string $path, array $cache): void
     @chmod($path, 0600);
 }
 
-function capstanResolveOpenUsage(string $explicit): string
+function capstanResolveOpenUsage(string $explicit, string $home): string
 {
-    $home = $_SERVER['HOME'] ?? $_ENV['HOME'] ?? null;
     $candidates = [$explicit];
-    if (is_string($home) && str_starts_with($home, '/')) {
-        $candidates[] = $home.'/.local/bin/openusage';
-        $candidates[] = $home.'/bin/openusage';
+    if (strlen($home) <= 4096 && str_starts_with($home, '/')) {
+        $boundedHome = rtrim($home, '/');
+        $candidates[] = $boundedHome.'/.local/bin/openusage';
+        $candidates[] = $boundedHome.'/bin/openusage';
     }
     array_push($candidates, '/opt/homebrew/bin/openusage', '/usr/local/bin/openusage', '/usr/bin/openusage');
 
@@ -635,6 +635,7 @@ function capstanResolveOpenUsage(string $explicit): string
 $curl = $argv[1] ?? '';
 $openusage = $argv[2] ?? '';
 $cachePath = $argv[3] ?? '';
+$home = $argv[4] ?? '';
 $cache = [];
 if (is_file($cachePath) && filesize($cachePath) <= 131072) {
     try {
@@ -687,7 +688,10 @@ if (is_string($curl) && str_starts_with($curl, '/') && is_file($curl) && is_exec
 }
 
 if ($report === null) {
-    $openusage = capstanResolveOpenUsage(is_string($openusage) ? $openusage : '');
+    $openusage = capstanResolveOpenUsage(
+        is_string($openusage) ? $openusage : '',
+        is_string($home) ? $home : '',
+    );
 }
 if ($report === null && $openusage !== '') {
     $cli = capstanRun([$openusage, 'export', '--output', '-', '--format', 'json', '--source', 'auto'], 30);

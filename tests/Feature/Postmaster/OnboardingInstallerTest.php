@@ -227,6 +227,7 @@ SH));
             ->and(File::get($install.'/poll.sh'))->toContain('CAPSTAN_CURL='.escapeshellarg($absoluteTools.'/curl'))
             ->and(File::get($install.'/poll.sh'))->not->toContain('CAPSTAN_OPENUSAGE=')
             ->and(File::get($install.'/poll.sh'))->not->toContain($absoluteTools.'/openusage')
+            ->and(File::get($install.'/poll.sh'))->toContain('"$CAPSTAN_USAGE_CACHE" "$HOME"')
             ->and(File::get($install.'/poll.sh'))->toContain("--user-agent 'capstan-machine/1'")
             ->and(File::get($install.'/poll.sh'))->not->toContain('existing-secret-bearer')
             ->and(File::get($crontab))->toContain('# capstan-postmaster:'.INSTALLER_SERVER_ID)
