@@ -27,6 +27,7 @@ use LogicException;
  * @property CarbonImmutable $occurred_at
  * @property-read Spoke $spoke
  * @property-read Team $team
+ *
  * @mixin IdeHelperMachineWorkSettingChange
  */
 class MachineWorkSettingChange extends Model

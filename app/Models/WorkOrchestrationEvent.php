@@ -11,6 +11,7 @@ namespace App\Models;
  * @property array<string, mixed> $evidence
  * @property string|null $author_task_id
  * @property bool $wakes
+ *
  * @mixin IdeHelperWorkOrchestrationEvent
  */
 class WorkOrchestrationEvent extends WorkAppendOnlyRecord

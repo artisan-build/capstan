@@ -18,6 +18,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property string $updated_by_actor
  * @property-read Spoke $spoke
  * @property-read Team $team
+ *
  * @mixin IdeHelperMachineTeamWorkSetting
  */
 class MachineTeamWorkSetting extends Model

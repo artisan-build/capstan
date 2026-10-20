@@ -17,6 +17,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property CarbonImmutable|null $resets_at
  * @property string $window_identity
  * @property-read MachineUsageProvider $provider
+ *
  * @mixin IdeHelperMachineUsageWindow
  */
 class MachineUsageWindow extends Model

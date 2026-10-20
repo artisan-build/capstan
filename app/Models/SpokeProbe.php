@@ -18,6 +18,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property CarbonImmutable|null $responded_at
  * @property CarbonImmutable $created_at
  * @property CarbonImmutable $updated_at
+ *
  * @mixin IdeHelperSpokeProbe
  */
 class SpokeProbe extends Model

@@ -18,6 +18,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property CarbonImmutable $updated_at
  * @property-read WorkTask $workTask
  * @property-read WorkItem|null $workItem
+ *
  * @mixin IdeHelperWorkSteer
  */
 class WorkSteer extends Model

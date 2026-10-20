@@ -14,6 +14,7 @@ use Illuminate\Database\Eloquent\Model;
  * @property string $content_hash
  * @property string $storage_key
  * @property string $created_by_user_id
+ *
  * @mixin IdeHelperBrandAsset
  */
 class BrandAsset extends Model

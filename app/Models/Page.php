@@ -24,6 +24,7 @@ use Illuminate\Support\Carbon;
  * @property-read PageVersion|null $latestVersion
  * @property-read Collection<int, PageVersion> $versions
  * @property-read Collection<int, PageShare> $shares
+ *
  * @mixin IdeHelperPage
  */
 class Page extends Model

@@ -17,6 +17,7 @@ use LogicException;
  * @property array<string, mixed> $payload
  * @property CarbonImmutable $created_at
  * @property-read WorkItem $workItem
+ *
  * @mixin IdeHelperWorkMilestone
  */
 class WorkMilestone extends Model
