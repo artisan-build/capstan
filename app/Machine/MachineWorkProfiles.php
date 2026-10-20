@@ -22,6 +22,72 @@ use InvalidArgumentException;
 final class MachineWorkProfiles
 {
     /**
+     * @return array{
+     *     machines: Collection<int, Spoke>,
+     *     owners: Collection<string, User>,
+     *     permissions: array<int, bool>,
+     *     truncated: bool
+     * }
+     */
+    public function projectionCandidates(Team $team, User $actor, bool $actorAdmitted, int $limit): array
+    {
+        /** @var Collection<int, Spoke> $selected */
+        $selected = collect();
+        /** @var Collection<string, User> $selectedOwners */
+        $selectedOwners = collect();
+        /** @var array<int, bool> $selectedPermissions */
+        $selectedPermissions = [];
+        $afterId = 0;
+        $batchSize = $limit + 1;
+
+        do {
+            /** @var Collection<int, Spoke> $batch */
+            $batch = Spoke::query()
+                ->where('credential_backed', true)
+                ->whereNull('retired_at')
+                ->where('id', '>', $afterId)
+                ->with(['workSettings' => fn ($query) => $query->where('team_id', $team->id)])
+                ->orderBy('id')
+                ->limit($batchSize)
+                ->get();
+            if ($batch->isEmpty()) {
+                break;
+            }
+
+            $afterId = (int) $batch->last()->id;
+            $owners = $this->owners($batch);
+            $decisions = $this->decisions($team, $actor, $batch, $owners, $actorAdmitted);
+
+            foreach ($batch as $machine) {
+                if (! ($decisions['candidates'][$machine->id] ?? false)) {
+                    continue;
+                }
+
+                $selected->push($machine);
+                $selectedPermissions[$machine->id] = $decisions['permissions'][$machine->id] ?? false;
+                $owner = $owners->get($machine->actor_id);
+                if ($owner instanceof User) {
+                    $selectedOwners->put($machine->actor_id, $owner);
+                }
+
+                if ($selected->count() > $limit) {
+                    break 2;
+                }
+            }
+        } while ($batch->count() === $batchSize);
+
+        $machines = $selected->take($limit)->values();
+        $machineIds = $machines->pluck('id')->flip()->all();
+
+        return [
+            'machines' => $machines,
+            'owners' => $selectedOwners,
+            'permissions' => array_intersect_key($selectedPermissions, $machineIds),
+            'truncated' => $selected->count() > $limit,
+        ];
+    }
+
+    /**
      * @param  array{
      *     enabled: bool,
      *     roles: list<string>,
@@ -104,6 +170,12 @@ final class MachineWorkProfiles
             ->where('spoke_id', $machine->id)
             ->where('team_id', $team->id)
             ->exists();
+        $ownerAnchorsFirstProfile = $this->ownerAnchorsFirstProfile(
+            $machine,
+            $owner,
+            $owner instanceof User && $this->isAdmitted($owner),
+            $ownerBelongsToTeam,
+        );
 
         if (! $this->permitted(
             $machine,
@@ -111,9 +183,7 @@ final class MachineWorkProfiles
             $this->isAdmitted($actor),
             $actorBelongsToTeam,
             $hasExistingSetting,
-            $owner,
-            $owner instanceof User && $this->isAdmitted($owner),
-            $ownerBelongsToTeam,
+            $ownerAnchorsFirstProfile,
         )) {
             throw new AuthorizationException('Only a target-team machine owner or manager may change its Work profile.');
         }
@@ -122,9 +192,9 @@ final class MachineWorkProfiles
     /**
      * @param  Collection<int, Spoke>  $machines
      * @param  Collection<string, User>  $owners
-     * @return array<int, bool>
+     * @return array{permissions: array<int, bool>, candidates: array<int, bool>}
      */
-    public function permissions(Team $team, User $actor, Collection $machines, Collection $owners, bool $actorAdmitted): array
+    private function decisions(Team $team, User $actor, Collection $machines, Collection $owners, bool $actorAdmitted): array
     {
         $ownerIds = $machines->pluck('actor_id')
             ->filter(fn (mixed $id): bool => is_string($id) && preg_match('/\A[1-9][0-9]{0,18}\z/D', $id) === 1)
@@ -138,27 +208,41 @@ final class MachineWorkProfiles
         /** @var array<string, bool> $ownerAdmission */
         $ownerAdmission = [];
 
-        return $machines->mapWithKeys(function (Spoke $machine) use ($actor, $actorId, $actorAdmitted, $owners, $memberIds, $team, &$ownerAdmission): array {
+        /** @var array<int, bool> $permissions */
+        $permissions = [];
+        /** @var array<int, bool> $candidates */
+        $candidates = [];
+
+        foreach ($machines as $machine) {
             $owner = $owners->get($machine->actor_id);
             $hasExistingSetting = $machine->relationLoaded('workSettings')
                 ? $machine->workSettings->contains('team_id', $team->id)
                 : MachineTeamWorkSetting::query()->where('spoke_id', $machine->id)->where('team_id', $team->id)->exists();
+            $ownerAdmitted = $owner instanceof User
+                ? ($ownerAdmission[$machine->actor_id] ??= hash_equals($machine->actor_id, $actorId)
+                    ? $actorAdmitted
+                    : $this->isAdmitted($owner))
+                : false;
+            $ownerBelongsToTeam = $owner instanceof User && $memberIds->has((string) $owner->getKey());
+            $ownerAnchorsFirstProfile = $this->ownerAnchorsFirstProfile(
+                $machine,
+                $owner,
+                $ownerAdmitted,
+                $ownerBelongsToTeam,
+            );
 
-            return [$machine->id => $this->permitted(
+            $candidates[$machine->id] = $hasExistingSetting || $ownerAnchorsFirstProfile;
+            $permissions[$machine->id] = $this->permitted(
                 $machine,
                 $actor,
                 $actorAdmitted,
                 $memberIds->has($actorId),
                 $hasExistingSetting,
-                $owner,
-                $owner instanceof User
-                    ? ($ownerAdmission[$machine->actor_id] ??= hash_equals($machine->actor_id, $actorId)
-                        ? $actorAdmitted
-                        : $this->isAdmitted($owner))
-                    : false,
-                $owner instanceof User && $memberIds->has((string) $owner->getKey()),
-            )];
-        })->all();
+                $ownerAnchorsFirstProfile,
+            );
+        }
+
+        return ['permissions' => $permissions, 'candidates' => $candidates];
     }
 
     private function permitted(
@@ -167,9 +251,7 @@ final class MachineWorkProfiles
         bool $actorAdmitted,
         bool $actorBelongsToTeam,
         bool $hasExistingSetting,
-        ?User $owner,
-        bool $ownerAdmitted,
-        bool $ownerBelongsToTeam,
+        bool $ownerAnchorsFirstProfile,
     ): bool {
         if ($machine->orphaned_at !== null || ! $actorAdmitted || ! $actorBelongsToTeam) {
             return false;
@@ -183,8 +265,15 @@ final class MachineWorkProfiles
             return false;
         }
 
-        return $hasExistingSetting
-            || ($owner instanceof User && $ownerAdmitted && $ownerBelongsToTeam);
+        return $hasExistingSetting || $ownerAnchorsFirstProfile;
+    }
+
+    private function ownerAnchorsFirstProfile(Spoke $machine, ?User $owner, bool $ownerAdmitted, bool $ownerBelongsToTeam): bool
+    {
+        return $machine->orphaned_at === null
+            && $owner instanceof User
+            && $ownerAdmitted
+            && $ownerBelongsToTeam;
     }
 
     public function isAdmitted(User $actor): bool
@@ -214,6 +303,20 @@ final class MachineWorkProfiles
         $query = User::query()->whereKey($machine->actor_id);
 
         return $lock ? $query->lockForUpdate()->first() : $query->first();
+    }
+
+    /**
+     * @param  Collection<int, Spoke>  $machines
+     * @return Collection<string, User>
+     */
+    private function owners(Collection $machines): Collection
+    {
+        $ids = $machines->pluck('actor_id')
+            ->filter(fn (mixed $id): bool => is_string($id) && preg_match('/\A[1-9][0-9]{0,18}\z/D', $id) === 1)
+            ->unique()->values()->all();
+
+        return User::query()->whereIn('id', $ids)->get()
+            ->keyBy(fn (User $user): string => (string) $user->getKey());
     }
 
     /**

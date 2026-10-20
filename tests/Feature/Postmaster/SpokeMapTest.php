@@ -97,6 +97,16 @@ test('map owner names never fall back to email or expose actor ids', function ()
     $namedSpoke = createMapSpoke($named, 'named-owner', now(), SpokeLiveness::Green);
     $emailSpoke = createMapSpoke($emailOnly, 'email-owner', now(), SpokeLiveness::Green);
     $missingSpoke = createMapSpoke($missing, 'missing-owner', now(), SpokeLiveness::Green);
+    MachineTeamWorkSetting::query()->create([
+        'spoke_id' => $missingSpoke->id,
+        'team_id' => Team::default()->id,
+        'enabled' => false,
+        'roles' => [],
+        'capabilities' => [],
+        'role_providers' => [],
+        'concurrency_ceiling' => 1,
+        'updated_by_actor' => (string) $missing->id,
+    ]);
     $missingId = (string) $missing->id;
     $missing->delete();
 
@@ -562,12 +572,26 @@ test('work profile actions reject a tampered team and a team manager attaching a
 });
 
 test('a selected-team manager creates the first profile for a same-team machine', function (): void {
-    $team = Team::default();
+    $team = Team::query()->create(['name' => 'Non-default Work team', 'slug' => 'non-default-work-team']);
     $owner = capstanUser(['role' => UserRole::Member->value]);
     $manager = capstanUser(['role' => UserRole::Admin->value]);
+    foreach ([$owner, $manager] as $member) {
+        DB::table('team_user')->insert([
+            'team_id' => $team->id,
+            'user_id' => $member->id,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    }
     $machine = createMapSpoke($owner, 'unconfigured team machine', now(), SpokeLiveness::Green);
 
-    Livewire::actingAs($manager)->test(SpokeMap::class)
+    $component = Livewire::actingAs($manager)->test(SpokeMap::class)
+        ->set('selectedTeamId', $team->id);
+    $budget = collect($component->viewData('machineBudgets')['machines'])->firstWhere('machine_id', $machine->id);
+    expect($budget)->not->toBeNull()
+        ->and($budget['can_manage_work'])->toBeTrue();
+
+    $component
         ->call('beginEditingWorkProfile', $machine->id)
         ->assertSet('editingWorkSpokeId', $machine->id)
         ->set('workEnabled', true)

@@ -7,6 +7,8 @@ use App\Models\MachineTeamWorkSetting;
 use App\Models\MachineUsageReport;
 use App\Models\Spoke;
 use App\Models\Team;
+use ArtisanBuild\BuiltForCloud\OffboardedSubject;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -84,10 +86,11 @@ test('one team-scoped projection drives web budgets without cross-team or email 
     $otherOwner = capstanUser(['name' => 'Same Name', 'email' => 'private-other@example.test']);
     $team = Team::default();
     $foreignTeam = Team::query()->create(['name' => 'Foreign', 'slug' => 'foreign-budget']);
+    DB::table('team_user')->where('team_id', $team->id)->where('user_id', $otherOwner->id)->delete();
     $first = budgetMachine($owner, $team, 'First', ['builder' => 'codex']);
     $second = budgetMachine($owner, $team, 'Second', ['builder' => 'codex']);
     $orphan = budgetMachine($otherOwner, $team, 'Orphan', ['builder' => 'codex'], ['orphaned_at' => now()]);
-    budgetMachine($owner, $foreignTeam, 'Foreign machine', ['builder' => 'claude']);
+    budgetMachine($otherOwner, $foreignTeam, 'Foreign machine', ['builder' => 'claude']);
     $legacy = Spoke::query()->create([
         'actor_id' => (string) $owner->id,
         'credential_id' => (string) Str::uuid(),
@@ -137,11 +140,26 @@ test('membership is checked before projection and org administrators receive no 
 });
 
 test('projection and writer share the selected-team Work-profile permission', function (): void {
-    $team = Team::default();
+    $team = Team::query()->create(['name' => 'Selected non-default team', 'slug' => 'selected-non-default']);
     $manager = capstanUser(['role' => UserRole::Admin->value]);
     $sameTeamOwner = capstanUser(['role' => UserRole::Member->value]);
     $foreignOwner = capstanUser(['role' => UserRole::Member->value]);
-    DB::table('team_user')->where('team_id', $team->id)->where('user_id', $foreignOwner->id)->delete();
+    $inactiveOwner = capstanUser(['role' => UserRole::Member->value, 'status' => 'inactive']);
+    $offboardedOwner = capstanUser(['role' => UserRole::Member->value]);
+    foreach ([$manager, $sameTeamOwner, $inactiveOwner, $offboardedOwner] as $member) {
+        DB::table('team_user')->insert([
+            'team_id' => $team->id,
+            'user_id' => $member->id,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    }
+    OffboardedSubject::query()->create([
+        'subject_type' => SubjectType::UserPrincipal,
+        'subject_ref' => 'capstan-user:'.$offboardedOwner->id,
+        'user_id' => (string) $offboardedOwner->id,
+        'offboarded_at' => now(),
+    ]);
     $sameTeamMachine = Spoke::query()->create([
         'actor_id' => (string) $sameTeamOwner->id,
         'credential_id' => (string) Str::uuid(),
@@ -154,6 +172,39 @@ test('projection and writer share the selected-team Work-profile permission', fu
         'credential_backed' => true,
         'name' => 'Foreign unconfigured machine',
     ]);
+    $inactiveOwnerMachine = Spoke::query()->create([
+        'actor_id' => (string) $inactiveOwner->id,
+        'credential_id' => (string) Str::uuid(),
+        'credential_backed' => true,
+        'name' => 'Inactive-owner unconfigured machine',
+    ]);
+    $offboardedOwnerMachine = Spoke::query()->create([
+        'actor_id' => (string) $offboardedOwner->id,
+        'credential_id' => (string) Str::uuid(),
+        'credential_backed' => true,
+        'name' => 'Offboarded-owner unconfigured machine',
+    ]);
+    $orphanedMachine = Spoke::query()->create([
+        'actor_id' => (string) $sameTeamOwner->id,
+        'credential_id' => (string) Str::uuid(),
+        'credential_backed' => true,
+        'name' => 'Orphaned unconfigured machine',
+        'orphaned_at' => now(),
+    ]);
+    $retiredMachine = Spoke::query()->create([
+        'actor_id' => (string) $sameTeamOwner->id,
+        'credential_id' => (string) Str::uuid(),
+        'credential_backed' => true,
+        'name' => 'Retired unconfigured machine',
+        'retired_at' => now(),
+    ]);
+    $syntheticMachine = Spoke::query()->create([
+        'actor_id' => (string) $sameTeamOwner->id,
+        'credential_id' => (string) Str::uuid(),
+        'credential_backed' => false,
+        'name' => 'Synthetic unconfigured machine',
+    ]);
+    $existingMachine = budgetMachine($foreignOwner, $team, 'Existing selected-team machine');
     $profile = [
         'enabled' => true,
         'roles' => ['builder'],
@@ -165,7 +216,11 @@ test('projection and writer share the selected-team Work-profile permission', fu
     $projection = resolve(MachineBudgetProjection::class)->forTeam($manager, $team->id, now());
     $permissions = collect($projection['machines'])->keyBy('machine_id')->map->can_manage_work;
     expect($permissions[$sameTeamMachine->id])->toBeTrue()
-        ->and($permissions[$foreignMachine->id])->toBeFalse();
+        ->and($permissions[$existingMachine->id])->toBeTrue();
+    $projectedIds = collect($projection['machines'])->pluck('machine_id');
+    foreach ([$foreignMachine, $inactiveOwnerMachine, $offboardedOwnerMachine, $orphanedMachine, $retiredMachine, $syntheticMachine] as $excluded) {
+        expect($projectedIds)->not->toContain($excluded->id);
+    }
 
     $profiles = resolve(MachineWorkProfiles::class);
     expect($profiles->put($sameTeamMachine, $team, $manager, $profile, now()))->toBeTrue();

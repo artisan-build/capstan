@@ -12,6 +12,7 @@ use App\Postmaster\MachineLifecycle;
 use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Collection;
 
 final readonly class MachineBudgetProjection
@@ -41,36 +42,16 @@ final readonly class MachineBudgetProjection
         if (! $this->memberships->belongsTo($viewer, $teamId)) {
             throw new AuthorizationException('The selected team is unavailable.');
         }
-        $team = Team::query()->findOrFail($teamId, ['id', 'name', 'is_default']);
-
-        /** @var Collection<int, Spoke> $machines */
-        $machines = Spoke::query()
-            ->where('credential_backed', true)
-            ->whereNull('retired_at')
-            ->where(function ($query) use ($team): void {
-                $query->whereHas('workSettings', fn ($settings) => $settings->where('team_id', $team->id));
-                if ($team->is_default) {
-                    $query->orWhereDoesntHave('workSettings');
-                }
-            })
-            ->with([
-                'workSettings' => fn ($query) => $query->where('team_id', $team->id),
-                'usageReport.providers.windows',
-            ])
-            ->withCount('inboxes')
-            ->orderBy('id')
-            ->limit(self::MAX_MACHINES + 1)
-            ->get();
-
-        $truncated = $machines->count() > self::MAX_MACHINES;
-        $machines = $machines->take(self::MAX_MACHINES);
-
-        $owners = $this->owners($machines);
+        $team = Team::query()->findOrFail($teamId, ['id', 'name']);
+        $selection = $this->workProfiles->projectionCandidates($team, $viewer, true, self::MAX_MACHINES);
+        /** @var EloquentCollection<int, Spoke> $machines */
+        $machines = new EloquentCollection($selection['machines']->all());
+        $machines->load('usageReport.providers.windows')->loadCount('inboxes');
+        $owners = $selection['owners'];
         $baseNames = $machines->mapWithKeys(fn (Spoke $machine): array => [$machine->id => $this->baseDisplayName($machine)]);
         $duplicateNames = $machines->groupBy(
             fn (Spoke $machine): string => $machine->actor_id."\0".$baseNames[$machine->id],
         )->map->count()->all();
-        $workPermissions = $this->workProfiles->permissions($team, $viewer, $machines, $owners, true);
         $items = array_values($machines->map(fn (Spoke $machine): array => $this->machine(
             $machine,
             $this->ownerName($owners->get($machine->actor_id)),
@@ -78,7 +59,7 @@ final readonly class MachineBudgetProjection
                 ? $baseNames[$machine->id].' (#'.$machine->id.')'
                 : $baseNames[$machine->id],
             (string) $viewer->getKey(),
-            $workPermissions[$machine->id] ?? false,
+            $selection['permissions'][$machine->id] ?? false,
             $now,
         ))->values()->all());
         $people = $this->people($items);
@@ -93,7 +74,7 @@ final readonly class MachineBudgetProjection
             'routing_aid_notice' => __('Routing aid only. Percentages are per machine and are never combined into billing totals.'),
             'machines' => $items,
             'people' => $people,
-            'bounds' => ['machines' => self::MAX_MACHINES, 'truncated' => $truncated],
+            'bounds' => ['machines' => self::MAX_MACHINES, 'truncated' => $selection['truncated']],
             'generated_at' => $now->toJSON(),
         ];
     }
@@ -103,20 +84,6 @@ final readonly class MachineBudgetProjection
         if (! $this->workProfiles->isAdmitted($viewer)) {
             throw new AuthorizationException('The selected team is unavailable.');
         }
-    }
-
-    /**
-     * @param  Collection<int, Spoke>  $machines
-     * @return Collection<string, User>
-     */
-    private function owners(Collection $machines): Collection
-    {
-        $ids = $machines->pluck('actor_id')
-            ->filter(fn (mixed $id): bool => is_string($id) && preg_match('/\A[1-9][0-9]{0,18}\z/D', $id) === 1)
-            ->unique()->values()->all();
-
-        return User::query()->whereIn('id', $ids)->get()
-            ->keyBy(fn (User $user): string => (string) $user->getKey());
     }
 
     private function ownerName(?User $owner): string

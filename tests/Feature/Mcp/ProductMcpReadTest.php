@@ -25,6 +25,7 @@ use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\McpDelegatedTools;
 use ArtisanBuild\BuiltForCloud\Testing\McpProductAdmission;
 use ArtisanBuild\BuiltForCloud\User;
+use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Http\Request as HttpRequest;
 use Illuminate\Support\Facades\Date;
@@ -769,9 +770,18 @@ test('unknown argument diagnostics remain bounded for a maximum request id', fun
 test('machine budgets MCP returns the shared team-scoped projection', function (): void {
     Date::setTestNow('2026-10-20 12:00:00');
     try {
-        $viewer = capstanUser(['name' => 'Budget viewer']);
+        $viewer = capstanUser(['name' => 'Budget viewer', 'role' => UserRole::Admin->value]);
         $owner = capstanUser(['name' => 'Budget owner', 'email' => 'private-budget@example.test']);
-        $team = Team::default();
+        $foreignOwner = capstanUser(['name' => 'Foreign budget owner']);
+        $team = Team::query()->create(['name' => 'MCP non-default team', 'slug' => 'mcp-non-default-team']);
+        foreach ([$viewer, $owner] as $member) {
+            DB::table('team_user')->insert([
+                'team_id' => $team->id,
+                'user_id' => $member->id,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
         $machine = Spoke::query()->create([
             'actor_id' => (string) $owner->id,
             'credential_id' => (string) Str::uuid(),
@@ -784,6 +794,12 @@ test('machine budgets MCP returns the shared team-scoped projection', function (
             'credential_id' => (string) Str::uuid(),
             'credential_backed' => true,
             'name' => 'Legacy budget machine',
+        ]);
+        $foreign = Spoke::query()->create([
+            'actor_id' => (string) $foreignOwner->id,
+            'credential_id' => (string) Str::uuid(),
+            'credential_backed' => true,
+            'name' => 'Foreign unconfigured budget machine',
         ]);
         $synthetic = Spoke::query()->create([
             'actor_id' => (string) $owner->id,
@@ -808,6 +824,8 @@ test('machine budgets MCP returns the shared team-scoped projection', function (
         expect($actual)->toBe($expected)
             ->and(array_column($actual['machines'], 'name'))->toBe(['Budget machine', 'Legacy budget machine'])
             ->and(collect($actual['machines'])->pluck('machine_id'))->toContain($legacy->id)
+            ->and(data_get(collect($actual['machines'])->firstWhere('machine_id', $legacy->id), 'can_manage_work'))->toBeTrue()
+            ->and(collect($actual['machines'])->pluck('machine_id'))->not->toContain($foreign->id)
             ->and(collect($actual['machines'])->pluck('machine_id'))->not->toContain($synthetic->id)
             ->and(json_encode($actual, JSON_THROW_ON_ERROR))->not->toContain('private-budget@example.test')
             ->and(json_encode($actual, JSON_THROW_ON_ERROR))->not->toContain($machine->credential_id);
