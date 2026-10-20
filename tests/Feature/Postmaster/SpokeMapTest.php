@@ -21,16 +21,13 @@ use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
-use Laravel\Pennant\Feature;
 use Livewire\Livewire;
 
 beforeEach(function (): void {
     config([
         'app.key' => 'base64:'.base64_encode(str_repeat('m', 32)),
-        'capstan.features.postmaster' => true,
         'capstan.postmaster.map.stale_after_seconds' => 300,
     ]);
-    Feature::flushCache();
     Date::setTestNow('2026-08-17 12:00:00');
 });
 
@@ -446,7 +443,7 @@ test('every package role sees the same installation-wide spoke map', function (U
     'member' => UserRole::Member,
 ]);
 
-test('obsolete feature config cannot disable the postmaster map or change routing state', function (): void {
+test('the postmaster map is available without a product feature gate and does not change routing state', function (): void {
     $owner = capstanUser(['role' => UserRole::Owner->value]);
     $spoke = createMapSpoke($owner, 'disabled-map-spoke', now(), SpokeLiveness::Green, 2);
     $before = [
@@ -454,9 +451,6 @@ test('obsolete feature config cannot disable the postmaster map or change routin
         Inbox::query()->count(),
         DB::table('spoke_inboxes')->count(),
     ];
-    config(['capstan.features.postmaster' => false]);
-    Feature::flushCache();
-
     $this->actingAsVersioned($owner)->get(route('postmaster.map'))->assertOk();
 
     expect([
@@ -467,7 +461,7 @@ test('obsolete feature config cannot disable the postmaster map or change routin
         ->and($spoke->fresh())->not->toBeNull();
 });
 
-test('obsolete feature config cannot reject an existing Livewire snapshot', function (): void {
+test('an existing Livewire snapshot remains available', function (): void {
     $owner = capstanUser(['role' => UserRole::Owner->value]);
     $spoke = createMapSpoke($owner, 'snapshot-guarded-spoke', now(), SpokeLiveness::Green, 2);
     $page = $this->actingAsVersioned($owner)
@@ -478,9 +472,6 @@ test('obsolete feature config cannot reject an existing Livewire snapshot', func
         (string) str($page->getContent())->betweenFirst('wire:snapshot="', '"'),
         ENT_QUOTES | ENT_SUBSTITUTE,
     );
-    config(['capstan.features.postmaster' => false]);
-    Feature::flushCache();
-
     $this->withHeader('X-Livewire', '1')
         ->postJson(route('default-livewire.update'), [
             'components' => [[

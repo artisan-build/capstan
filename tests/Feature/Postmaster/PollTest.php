@@ -3,7 +3,6 @@
 use App\Auth\CapstanCredentialDeclaration;
 use App\Enums\MessageStatus;
 use App\Enums\MessageType;
-use App\Features\Postmaster;
 use App\Http\Controllers\Api\PollController;
 use App\Machine\MachineFindingPayload;
 use App\Models\Envelope;
@@ -19,7 +18,6 @@ use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
-use Laravel\Pennant\Feature;
 
 const POLL_SERVER_ID = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
 const POLL_FOREIGN_SERVER_ID = '01ARZ3NDEKTSV4RRFFQ69G5FAW';
@@ -27,12 +25,10 @@ const POLL_FOREIGN_SERVER_ID = '01ARZ3NDEKTSV4RRFFQ69G5FAW';
 beforeEach(function (): void {
     config([
         'app.key' => 'base64:'.base64_encode(str_repeat('p', 32)),
-        'capstan.features.postmaster' => true,
         'capstan.postmaster.server_id' => POLL_SERVER_ID,
         'capstan.postmaster.signing_key' => 'poll-test-signing-key',
         'capstan.postmaster.poll.max_inbound' => 50,
     ]);
-    Feature::flushCache();
     resolve(SigningRootLifecycle::class)->provision();
 });
 
@@ -330,9 +326,7 @@ test('repeated and unknown acks are successful no ops', function (): void {
     expect(Envelope::query()->firstOrFail()->acked_at?->equalTo($ackedAt))->toBeTrue();
 });
 
-test('obsolete feature config cannot disable polling', function (): void {
-    config(['capstan.features.postmaster' => false]);
-    Feature::flushCache();
+test('polling is available without a product feature gate', function (): void {
     $user = capstanUser();
 
     $this->withToken(spokeToken($user))->postJson('/api/v1/poll', [
@@ -342,8 +336,7 @@ test('obsolete feature config cannot disable polling', function (): void {
 
     expect(Spoke::query()->count())->toBe(1)
         ->and(Inbox::query()->count())->toBe(1)
-        ->and(Envelope::query()->count())->toBe(1)
-        ->and(Feature::active(Postmaster::class))->toBeTrue();
+        ->and(Envelope::query()->count())->toBe(1);
 });
 
 test('poll requires api authentication', function (): void {

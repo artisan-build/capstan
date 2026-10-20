@@ -2,7 +2,6 @@
 
 namespace App\Mcp\Tools;
 
-use App\Features\Postmaster;
 use App\Machine\MachineBudgetProjection;
 use App\Mcp\OwnerSubjectResolver;
 use App\Mcp\ToolResponse;
@@ -21,7 +20,6 @@ use Laravel\Mcp\ResponseFactory;
 use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Attributes\Name;
 use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
-use Laravel\Pennant\Feature;
 
 #[Name('machine_budgets')]
 #[Description('Returns the selected team machine map and per-person inference headroom routing aid.')]
@@ -44,10 +42,6 @@ final class MachineBudgetsTool extends CapstanTool
         MachineBudgetProjection $projection,
     ): Response|ResponseFactory {
         $this->requireExactArguments($request, ['team_id']);
-        if (! Feature::active(Postmaster::class)) {
-            return Response::error('Machine budgets are unavailable.');
-        }
-
         $validated = $request->validate(['team_id' => ['required', 'integer', 'min:1']]);
         $owner = $owners->resolve();
         $viewer = User::query()->findOrFail($owner->actorId);

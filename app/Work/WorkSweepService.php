@@ -3,7 +3,6 @@
 namespace App\Work;
 
 use App\Enums\WorkItemState;
-use App\Features\Work;
 use App\Models\Spoke;
 use App\Models\WorkItem;
 use App\Models\WorkTask;
@@ -11,7 +10,6 @@ use Carbon\CarbonImmutable;
 use Closure;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
-use Laravel\Pennant\Feature;
 
 final readonly class WorkSweepService
 {
@@ -19,10 +17,6 @@ final readonly class WorkSweepService
 
     public function liveness(CarbonImmutable $now, ?Closure $afterIdentified = null): void
     {
-        if (! Feature::active(Work::class)) {
-            return;
-        }
-
         foreach ($this->workers->recoveryQuery()->with('workTask')->get() as $item) {
             $afterIdentified?->__invoke($item);
             DB::transaction(function () use ($item, $now): void {
@@ -78,9 +72,6 @@ final readonly class WorkSweepService
 
     public function failover(CarbonImmutable $now, ?Closure $afterIdentified = null): void
     {
-        if (! Feature::active(Work::class)) {
-            return;
-        }
         $cutoff = $now->subSeconds(max(1, (int) config('capstan.work.failover_after_seconds', 300)));
         $candidates = WorkItem::query()->where('state', 'queued')
             ->whereNotIn('role', [WorkItem::ROLE_HUMAN, WorkItem::ROLE_ORCHESTRATOR])

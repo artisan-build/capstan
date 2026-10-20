@@ -4,7 +4,6 @@ namespace App\Http\Controllers\Api;
 
 use App\Enums\MessageStatus;
 use App\Enums\MessageType;
-use App\Features\Postmaster;
 use App\Http\ApiError;
 use App\Http\ApiErrorException;
 use App\Http\Controllers\Controller;
@@ -35,7 +34,6 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use InvalidArgumentException;
-use Laravel\Pennant\Feature;
 use RuntimeException;
 use stdClass;
 use Throwable;
@@ -68,10 +66,6 @@ class PollController extends Controller
     ): JsonResponse {
         $credential = AuthenticateBoundCredential::credential($request);
         $actorId = AuthenticateBoundCredential::actorId($request);
-
-        if (! Feature::active(Postmaster::class)) {
-            return ApiError::notFound();
-        }
 
         $payload = json_decode($request->getContent(), false);
 

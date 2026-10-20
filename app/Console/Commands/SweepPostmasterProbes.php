@@ -3,7 +3,6 @@
 namespace App\Console\Commands;
 
 use App\Enums\ProbeStatus;
-use App\Features\Postmaster;
 use App\Models\Spoke;
 use App\Models\SpokeProbe;
 use App\Postmaster\ProbeFailureNotifier;
@@ -11,7 +10,6 @@ use App\Postmaster\ProbeManager;
 use ArtisanBuild\BuiltForCloud\Commands\SystemAuthorityCommand;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Laravel\Pennant\Feature;
 use Throwable;
 
 class SweepPostmasterProbes extends SystemAuthorityCommand
@@ -22,15 +20,6 @@ class SweepPostmasterProbes extends SystemAuthorityCommand
 
     public function handle(ProbeManager $manager, ProbeFailureNotifier $notifier): int
     {
-        if (! Feature::active(Postmaster::class)) {
-            $voided = SpokeProbe::query()
-                ->whereIn('status', [ProbeStatus::Issued->value, ProbeStatus::Awaiting->value])
-                ->delete();
-            $this->info("Postmaster disabled; voided {$voided} outstanding probe(s).");
-
-            return self::SUCCESS;
-        }
-
         $failed = 0;
         $now = now();
 

@@ -3,7 +3,6 @@
 namespace App\Work;
 
 use App\Enums\WorkItemState;
-use App\Features\Work;
 use App\Models\Spoke;
 use App\Models\WorkEscalation;
 use App\Models\WorkItem;
@@ -18,7 +17,6 @@ use Closure;
 use DomainException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
-use Laravel\Pennant\Feature;
 
 final readonly class WorkOrchestrationService
 {
@@ -27,12 +25,8 @@ final readonly class WorkOrchestrationService
     /** Source writers call this inside the source transaction, after root-first locking.
      * @param  array<string, mixed>  $evidence
      */
-    public function event(WorkTask $parent, string $sourceKey, string $kind, array $evidence = [], ?string $authorTaskId = null, bool $inheritAuthor = true): ?WorkOrchestrationEvent
+    public function event(WorkTask $parent, string $sourceKey, string $kind, array $evidence = [], ?string $authorTaskId = null, bool $inheritAuthor = true): WorkOrchestrationEvent
     {
-        if (! Feature::active(Work::class)) {
-            return null;
-        }
-
         return DB::transaction(function () use ($parent, $sourceKey, $kind, $evidence, $authorTaskId, $inheritAuthor): WorkOrchestrationEvent {
             $this->locks->tasks($parent->id);
             $seat = $this->locks->seat($parent);
@@ -61,9 +55,6 @@ final readonly class WorkOrchestrationService
     /** Caller holds the parent lock. Queued, claimed, delivered and routed all occupy the slot. */
     public function queue(WorkTask $parent, WorkOrchestratorSeat $seat): void
     {
-        if (! Feature::active(Work::class)) {
-            return;
-        }
         if ($parent->fresh()->cancelled_at !== null || $seat->stopped_at !== null) {
             return;
         }
@@ -91,7 +82,7 @@ final readonly class WorkOrchestrationService
     /** Count a new turn once, not each recovery claim. Also covers directly queued roles. */
     public function startTurn(WorkTask $parent, WorkOrchestratorSeat $seat, WorkItem $item): bool
     {
-        if (! Feature::active(Work::class) || $seat->stopped_at !== null) {
+        if ($seat->stopped_at !== null) {
             return false;
         }
         if ($item->turn_upper_bound === null) {
@@ -110,7 +101,7 @@ final readonly class WorkOrchestrationService
     /** Called after a terminal orchestrator transition, under the parent lock. */
     public function ended(WorkItem $item): void
     {
-        if (! Feature::active(Work::class) || $item->role !== WorkItem::ROLE_ORCHESTRATOR) {
+        if ($item->role !== WorkItem::ROLE_ORCHESTRATOR) {
             return;
         }
         $seat = $this->locks->seat($item->workTask);
@@ -139,12 +130,8 @@ final readonly class WorkOrchestrationService
         ], fn ($value): bool => $value !== null);
     }
 
-    public function turnDone(WorkItem $item, int $itemFence, int $seatFence, string $content, CarbonImmutable $now): ?WorkStateRevision
+    public function turnDone(WorkItem $item, int $itemFence, int $seatFence, string $content, CarbonImmutable $now): WorkStateRevision
     {
-        if (! Feature::active(Work::class)) {
-            return null;
-        }
-
         return DB::transaction(function () use ($item, $itemFence, $seatFence, $content, $now): WorkStateRevision {
             [$locked, $seat] = $this->guardTurn($item, $itemFence, $seatFence, $now);
             $revision = WorkStateRevision::query()->create([
@@ -174,9 +161,6 @@ final readonly class WorkOrchestrationService
     /** @return array{WorkItem, WorkOrchestratorSeat} */
     public function guardTurn(WorkItem $item, int $itemFence, int $seatFence, CarbonImmutable $now): array
     {
-        if (! Feature::active(Work::class)) {
-            throw new DomainException('Work is disabled.');
-        }
         $this->locks->tasks($item->work_task_id);
         $seat = $this->locks->seat($item->workTask);
         $locked = WorkItem::query()->whereKey($item->id)->lockForUpdate()->firstOrFail();
@@ -207,10 +191,6 @@ final readonly class WorkOrchestrationService
      */
     public function authored(WorkItem $turn, int $itemFence, int $seatFence, CarbonImmutable $now, Closure $write): mixed
     {
-        if (! Feature::active(Work::class)) {
-            return null;
-        }
-
         return DB::transaction(function () use ($turn, $itemFence, $seatFence, $now, $write): mixed {
             $this->guardTurn($turn, $itemFence, $seatFence, $now);
 
@@ -235,10 +215,6 @@ final readonly class WorkOrchestrationService
 
     public function queueChild(WorkItem $turn, int $itemFence, int $seatFence, WorkTask $child, string $role, CarbonImmutable $now): ?WorkItem
     {
-        if (! Feature::active(Work::class)) {
-            return null;
-        }
-
         return DB::transaction(function () use ($turn, $itemFence, $seatFence, $child, $role, $now): ?WorkItem {
             [$locked, $seat] = $this->guardTurn($turn, $itemFence, $seatFence, $now);
             $ancestors = $this->locks->tasks($child->id);
@@ -268,12 +244,8 @@ final readonly class WorkOrchestrationService
         return $child->items()->create(['role' => $role]);
     }
 
-    public function requestWake(WorkTask $parent, string $key, CarbonImmutable $dueAt, string $reason): ?WorkWake
+    public function requestWake(WorkTask $parent, string $key, CarbonImmutable $dueAt, string $reason): WorkWake
     {
-        if (! Feature::active(Work::class)) {
-            return null;
-        }
-
         return DB::transaction(function () use ($parent, $key, $dueAt, $reason): WorkWake {
             $this->locks->tasks($parent->id);
 
@@ -284,12 +256,8 @@ final readonly class WorkOrchestrationService
     /** Validate caller-supplied options into a bounded list of nonempty strings.
      * @param  array<array-key, mixed>  $options
      */
-    public function escalate(WorkTask $parent, string $key, string $actor, string $question, array $options, string $recommendation): ?WorkEscalation
+    public function escalate(WorkTask $parent, string $key, string $actor, string $question, array $options, string $recommendation): WorkEscalation
     {
-        if (! Feature::active(Work::class)) {
-            return null;
-        }
-
         if (trim($question) === '' || mb_strlen($question) > 10000 || ! array_is_list($options)
             || count($options) < 1 || count($options) > 10 || trim($recommendation) === '' || mb_strlen($recommendation) > 2000) {
             throw new DomainException('Escalation requires a bounded question, options and recommendation.');
@@ -307,12 +275,8 @@ final readonly class WorkOrchestrationService
         }, 5);
     }
 
-    public function answer(WorkEscalation $escalation, string $actor, string $answer, CarbonImmutable $now): ?WorkEscalation
+    public function answer(WorkEscalation $escalation, string $actor, string $answer, CarbonImmutable $now): WorkEscalation
     {
-        if (! Feature::active(Work::class)) {
-            return null;
-        }
-
         return DB::transaction(function () use ($escalation, $actor, $answer, $now): WorkEscalation {
             $this->locks->tasks($escalation->work_task_id);
             $locked = $escalation->fresh();
@@ -344,9 +308,6 @@ final readonly class WorkOrchestrationService
 
     public function dueWakes(CarbonImmutable $now): void
     {
-        if (! Feature::active(Work::class)) {
-            return;
-        }
         foreach (WorkWake::query()->whereNull('fired_at')->where('due_at', '<=', $now)->get() as $wake) {
             DB::transaction(function () use ($wake, $now): void {
                 $this->locks->tasks($wake->work_task_id);

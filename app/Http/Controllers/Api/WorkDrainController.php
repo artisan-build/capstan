@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\Api;
 
 use App\Enums\WorkItemState;
-use App\Features\Work;
 use App\Http\ApiError;
 use App\Http\ApiErrorException;
 use App\Http\Controllers\Controller;
@@ -18,7 +17,6 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use InvalidArgumentException;
-use Laravel\Pennant\Feature;
 
 final class WorkDrainController extends Controller
 {
@@ -26,10 +24,6 @@ final class WorkDrainController extends Controller
 
     public function claim(Request $request, Team $team, WorkDrainService $drain): JsonResponse
     {
-        if (! Feature::active(Work::class)) {
-            return ApiError::notFound();
-        }
-
         $validator = Validator::make($request->all(), [
             'capacity' => ['required', 'integer', 'min:0', 'max:'.self::MAX_BATCH],
             'roles' => ['required', 'array', 'list', 'min:1', 'max:'.self::MAX_BATCH],
@@ -72,10 +66,6 @@ final class WorkDrainController extends Controller
 
     public function transition(Request $request, Team $team, WorkDrainService $drain): JsonResponse
     {
-        if (! Feature::active(Work::class)) {
-            return ApiError::notFound();
-        }
-
         $validator = Validator::make($request->all(), [
             'item_id' => ['required', 'uuid'],
             'fence' => ['required', 'integer', 'min:1'],
@@ -114,10 +104,6 @@ final class WorkDrainController extends Controller
 
     public function renew(Request $request, Team $team, WorkDrainService $drain): JsonResponse
     {
-        if (! Feature::active(Work::class)) {
-            return ApiError::notFound();
-        }
-
         $validator = Validator::make($request->all(), [
             'items' => ['required', 'array', 'list', 'min:1', 'max:'.self::MAX_BATCH],
             'items.*' => ['required', 'array'],

@@ -3,14 +3,12 @@
 namespace App\Http\Controllers\Api;
 
 use App\Enums\WorkMilestoneKind;
-use App\Features\Work;
 use App\Http\Controllers\Controller;
 use App\Models\WorkItem;
 use App\Work\WorkWorkerService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
-use Laravel\Pennant\Feature;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
@@ -18,7 +16,6 @@ final class WorkWorkerController extends Controller
 {
     public function __invoke(Request $request, string $item, WorkWorkerService $workers): Response
     {
-        abort_unless(Feature::active(Work::class), 404);
         abort_unless($request->hasValidSignature(), 403);
         $fence = (int) $request->query('fence');
 

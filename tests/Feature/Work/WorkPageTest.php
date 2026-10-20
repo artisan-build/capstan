@@ -1,6 +1,5 @@
 <?php
 
-use App\Features\Work;
 use App\Livewire\Postmaster\SpokeMap;
 use App\Livewire\Work\Index;
 use App\Models\Team;
@@ -13,16 +12,10 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\HtmlString;
 use Illuminate\Support\Str;
-use Laravel\Pennant\Feature;
 use Livewire\Livewire;
 
 beforeEach(function (): void {
-    config([
-        'capstan.features.work' => true,
-        'capstan.features.artifacts' => false,
-        'capstan.features.postmaster' => false,
-    ]);
-    Feature::flushCache();
+    config(['capstan.features.artifacts' => false]);
 });
 
 function workPageTask(array $attributes = []): WorkTask
@@ -175,30 +168,11 @@ test('addressed users see escaped escalations and page answers recheck feature a
         ->and($other->fresh()->answered_at)->toBeNull();
 });
 
-test('obsolete Work config changes neither Work nor other surfaces', function (): void {
-    config(['capstan.features.artifacts' => true, 'capstan.features.postmaster' => true]);
-    Feature::flushCache();
+test('Work and Postmaster surfaces are available without product feature gates', function (): void {
     $user = capstanUser();
     $this->actingAsVersioned($user);
 
-    $probe = function (): array {
-        try {
-            Livewire::test(SpokeMap::class)->assertOk();
-            $postmaster = 'ok';
-        } catch (Throwable $exception) {
-            $postmaster = $exception::class;
-        }
-
-        return ['postmaster' => $postmaster, 'health' => $this->get('/up')->getStatusCode()];
-    };
-
-    $withWork = $probe();
-    expect($withWork)->toBe(['postmaster' => 'ok', 'health' => 200]);
-
-    config(['capstan.features.work' => false]);
-    Feature::flushCache();
-
-    expect($probe())->toBe($withWork)
-        ->and(Feature::active(Work::class))->toBeTrue()
-        ->and($this->get(route('work.index'))->assertOk());
+    Livewire::test(SpokeMap::class)->assertOk();
+    $this->get(route('work.index'))->assertOk();
+    $this->get('/up')->assertOk();
 });

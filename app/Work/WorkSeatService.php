@@ -3,7 +3,6 @@
 namespace App\Work;
 
 use App\Enums\WorkItemState;
-use App\Features\Work;
 use App\Models\Spoke;
 use App\Models\WorkItem;
 use App\Models\WorkOrchestratorSeat;
@@ -11,18 +10,13 @@ use App\Models\WorkTask;
 use Carbon\CarbonImmutable;
 use DomainException;
 use Illuminate\Support\Facades\DB;
-use Laravel\Pennant\Feature;
 
 final readonly class WorkSeatService
 {
     public function __construct(private WorkOrchestrationLock $locks, private WorkNotifier $notifier) {}
 
-    public function take(WorkTask $parent, string $actor, int $spoke, int $expectedFence, ?string $sessionRef, bool $interactive, CarbonImmutable $now, int $leaseSeconds = 300): ?WorkOrchestratorSeat
+    public function take(WorkTask $parent, string $actor, int $spoke, int $expectedFence, ?string $sessionRef, bool $interactive, CarbonImmutable $now, int $leaseSeconds = 300): WorkOrchestratorSeat
     {
-        if (! Feature::active(Work::class)) {
-            return null;
-        }
-
         return DB::transaction(function () use ($parent, $actor, $spoke, $expectedFence, $sessionRef, $interactive, $now, $leaseSeconds): WorkOrchestratorSeat {
             $this->activeSpoke($actor, $spoke);
             $this->locks->tasks($parent->id);
@@ -48,12 +42,8 @@ final readonly class WorkSeatService
         }, 5);
     }
 
-    public function renew(WorkTask $parent, string $actor, int $spoke, int $fence, ?string $sessionRef, CarbonImmutable $now, int $leaseSeconds = 300): ?WorkOrchestratorSeat
+    public function renew(WorkTask $parent, string $actor, int $spoke, int $fence, ?string $sessionRef, CarbonImmutable $now, int $leaseSeconds = 300): WorkOrchestratorSeat
     {
-        if (! Feature::active(Work::class)) {
-            return null;
-        }
-
         return DB::transaction(function () use ($parent, $actor, $spoke, $fence, $sessionRef, $now, $leaseSeconds): WorkOrchestratorSeat {
             $this->activeSpoke($actor, $spoke);
             $this->locks->tasks($parent->id);
@@ -64,12 +54,8 @@ final readonly class WorkSeatService
         }, 5);
     }
 
-    public function release(WorkTask $parent, string $actor, int $spoke, int $fence, CarbonImmutable $now): ?WorkOrchestratorSeat
+    public function release(WorkTask $parent, string $actor, int $spoke, int $fence, CarbonImmutable $now): WorkOrchestratorSeat
     {
-        if (! Feature::active(Work::class)) {
-            return null;
-        }
-
         return DB::transaction(function () use ($parent, $actor, $spoke, $fence, $now): WorkOrchestratorSeat {
             $this->activeSpoke($actor, $spoke);
             $this->locks->tasks($parent->id);
@@ -83,12 +69,8 @@ final readonly class WorkSeatService
     }
 
     /** Rotate authority without discarding the holder's opaque session or durable memory. */
-    public function fence(WorkTask $parent, string $actor, int $spoke, int $fence, CarbonImmutable $now): ?WorkOrchestratorSeat
+    public function fence(WorkTask $parent, string $actor, int $spoke, int $fence, CarbonImmutable $now): WorkOrchestratorSeat
     {
-        if (! Feature::active(Work::class)) {
-            return null;
-        }
-
         return DB::transaction(function () use ($parent, $actor, $spoke, $fence, $now): WorkOrchestratorSeat {
             $this->activeSpoke($actor, $spoke);
             $this->locks->tasks($parent->id);
@@ -111,9 +93,6 @@ final readonly class WorkSeatService
         ?string $activeItemId = null,
         ?CarbonImmutable $queuedAt = null,
     ): bool {
-        if (! Feature::active(Work::class)) {
-            return false;
-        }
         if (! Spoke::query()->workEligible()->whereKey($spoke)->where('actor_id', $actor)->exists()) {
             return false;
         }
@@ -144,9 +123,6 @@ final readonly class WorkSeatService
     /** Caller holds parent lock. Also adopts a pre-engine queued orchestrator item. */
     public function forClaim(WorkTask $parent, WorkItem $item, string $actor, int $spoke, CarbonImmutable $now, int $leaseSeconds): ?WorkOrchestratorSeat
     {
-        if (! Feature::active(Work::class)) {
-            return null;
-        }
         $seat = $this->locks->seat($parent);
         if (! $this->eligible($seat, $actor, $spoke, $now, $parent->device_spoke_id, $item->id, $item->updated_at)) {
             return null;
@@ -177,9 +153,6 @@ final readonly class WorkSeatService
 
     public function sweep(CarbonImmutable $now): void
     {
-        if (! Feature::active(Work::class)) {
-            return;
-        }
         $cutoff = $now->subSeconds(max(1, (int) config('capstan.work.failover_after_seconds', 300)));
         foreach (WorkOrchestratorSeat::query()->where(fn ($query) => $query
             ->where('lease_until', '<=', $now)

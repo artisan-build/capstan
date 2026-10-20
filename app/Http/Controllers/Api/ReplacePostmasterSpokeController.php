@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\Api;
 
 use App\Auth\CapstanCredentialDeclaration;
-use App\Features\Postmaster;
 use App\Http\ApiError;
 use App\Http\Controllers\Controller;
 use App\Http\Middleware\AuthenticateBoundCredential;
@@ -12,7 +11,6 @@ use ArtisanBuild\BuiltForCloud\BoundBearerCredentialAuthenticator;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Laravel\Pennant\Feature;
 use RuntimeException;
 
 final class ReplacePostmasterSpokeController extends Controller
@@ -24,10 +22,6 @@ final class ReplacePostmasterSpokeController extends Controller
         BoundBearerCredentialAuthenticator $credentials,
         ReplaceSpokeCredential $replace,
     ): JsonResponse {
-        if (! Feature::active(Postmaster::class)) {
-            return ApiError::notFound();
-        }
-
         $current = AuthenticateBoundCredential::credential($request);
         $actorId = AuthenticateBoundCredential::actorId($request);
         $oldToken = $request->header(self::PREVIOUS_CREDENTIAL_HEADER);

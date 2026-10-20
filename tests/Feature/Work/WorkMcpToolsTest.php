@@ -31,17 +31,13 @@ use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
-use Laravel\Pennant\Feature;
 
 beforeEach(function (): void {
     config([
         'app.key' => 'base64:'.base64_encode(str_repeat('k', 32)),
-        'capstan.features.work' => true,
-        'capstan.features.postmaster' => false,
         'capstan.features.artifacts' => false,
         'capstan.work.lease_seconds' => 300,
     ]);
-    Feature::flushCache();
 });
 
 function workMcpTeam(array $attributes = []): Team
@@ -408,13 +404,12 @@ test('every Work tool rejects non-admitted or non-manager callers without effect
         ->and($team->fresh()->pool_work)->toBeFalse();
 })->with(['member', 'inactive', 'offboarded', 'missing']);
 
-test('obsolete Work config leaves tool definitions available', function (): void {
+test('Work tool definitions are available without a product feature gate', function (): void {
     $token = workMcpToken(capstanUser(['role' => 'owner']));
-    $on = workMcpList($token);
-    config(['capstan.features.work' => false]);
-    Feature::flushCache();
-    expect(workMcpList($token))->toBe($on);
-    expect(workMcpList($token))->toBe($on);
+    $tools = workMcpList($token);
+
+    expect($tools)->not->toBeEmpty()
+        ->and(workMcpList($token))->toBe($tools);
 });
 
 test('interactive MCP seats renew for one credential exclude drains expose bounded events and release with fencing', function (): void {

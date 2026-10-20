@@ -13,7 +13,6 @@ use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\RateLimiter;
-use Laravel\Pennant\Feature;
 use Livewire\Livewire;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 use Symfony\Component\Process\Process;
@@ -25,10 +24,8 @@ beforeEach(function (): void {
         'app.key' => 'base64:'.base64_encode(str_repeat('o', 32)),
         'app.name' => 'Capstan',
         'app.url' => 'https://capstan.example',
-        'capstan.features.postmaster' => true,
         'capstan.postmaster.server_id' => ONBOARDING_SERVER_ID,
     ]);
-    Feature::flushCache();
     RateLimiter::clear('postmaster-onboarding:127.0.0.1');
     app()->forgetInstance(ServerIdentity::class);
     request()->setLaravelSession(resolve('session')->driver());
@@ -96,14 +93,11 @@ test('every active package role can see and generate onboarding', function (User
         ->and(DB::table('credential_authorizations')->count())->toBe(1);
 })->with(UserRole::cases());
 
-test('onboarding requires authentication and obsolete feature config cannot disable it', function (): void {
+test('onboarding requires authentication and is available without a product feature gate', function (): void {
     $this->get(route('postmaster.map'))->assertRedirect(route('bfc.login'));
     expect(DB::table('credential_authorizations')->count())->toBe(0);
 
     $operator = capstanUser();
-    config(['capstan.features.postmaster' => false]);
-    Feature::flushCache();
-
     $this->actingAsVersioned($operator)->get(route('postmaster.map'))->assertOk();
     expect(onboardingSnippetFor($this, $operator))->toContain("CAPSTAN_ACTOR_ID='".$operator->getKey()."'")
         ->and(DB::table('credential_authorizations')->count())->toBe(1);

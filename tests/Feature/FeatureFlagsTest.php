@@ -2,9 +2,9 @@
 
 namespace Tests\Feature;
 
+use App\Auth\CapstanCredentialDeclaration;
 use App\Features\Artifacts;
-use App\Features\Postmaster;
-use App\Features\Work;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use Laravel\Pennant\Feature;
 use Tests\TestCase;
 
@@ -20,18 +20,12 @@ class FeatureFlagsTest extends TestCase
         ]);
     }
 
-    public function test_product_surfaces_are_always_on_and_obsolete_config_cannot_disable_them(): void
+    public function test_artifacts_remains_gated_only_by_its_runtime_requirements(): void
     {
-        config([
-            'capstan.features.artifacts' => false,
-            'capstan.features.postmaster' => false,
-            'capstan.features.work' => false,
-        ]);
+        config(['capstan.features.artifacts' => false]);
         Feature::flushCache();
 
         $this->assertTrue(Feature::active(Artifacts::class));
-        $this->assertTrue(Feature::active(Postmaster::class));
-        $this->assertTrue(Feature::active(Work::class));
     }
 
     public function test_obsolete_feature_config_is_not_declared(): void
@@ -40,5 +34,20 @@ class FeatureFlagsTest extends TestCase
         $freshConfig = require config_path('capstan.php');
 
         $this->assertArrayNotHasKey('features', $freshConfig);
+    }
+
+    public function test_public_credential_purpose_surfaces_only_offer_artifact_ingest_and_machine(): void
+    {
+        /** @var array<string, mixed> $freshConfig */
+        $freshConfig = require config_path('built-for-cloud.php');
+
+        $this->assertSame([
+            CapstanCredentialDeclaration::ARTIFACT_INGEST => CredentialPurpose::Consumption->value,
+            CapstanCredentialDeclaration::MACHINE => CredentialPurpose::Mcp->value,
+        ], $freshConfig['credentials']['app_purposes']);
+        $this->assertSame([
+            CapstanCredentialDeclaration::ARTIFACT_INGEST,
+            CapstanCredentialDeclaration::MACHINE,
+        ], $freshConfig['ui']['credential_purposes']);
     }
 }

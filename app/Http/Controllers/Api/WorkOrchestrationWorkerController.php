@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Features\Work;
 use App\Http\ApiError;
 use App\Http\Controllers\Controller;
 use App\Mcp\DurableWriteCoordinator;
@@ -11,13 +10,11 @@ use App\Work\WorkOrchestrationSurface;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Laravel\Pennant\Feature;
 
 final class WorkOrchestrationWorkerController extends Controller
 {
     public function __invoke(Request $request, string $item, WorkOrchestrationSurface $surface, DurableWriteCoordinator $writes): JsonResponse
     {
-        abort_unless(Feature::active(Work::class), 404);
         abort_unless($request->hasValidSignatureWhileIgnoring(['after', 'decisions_after']), 403);
         $context = $surface->claimed($item, (int) $request->query('fence'));
 

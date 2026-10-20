@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch an isolated local Capstan: own SQLite file, two hosts on one port, all three flags on.
+# Launch an isolated local Capstan with its own SQLite file and two hosts on one port.
 # Prints the owner credentials file path when ready. Exits non-zero on any failure.
 # Usage: CAPSTAN_VERIFY_WORKTREE=/abs/worktree [CAPSTAN_VERIFY_PORT=8412 ...] bin/launch.sh
 source "$(dirname "$0")/_env.sh"
@@ -34,8 +34,6 @@ set_env APP_ENV local
 set_env APP_URL "${U}"
 set_env CAPSTAN_ARTIFACT_RENDER_ORIGIN "${R}"
 set_env CAPSTAN_FEATURE_ARTIFACTS true
-set_env CAPSTAN_FEATURE_POSTMASTER true
-set_env CAPSTAN_FEATURE_WORK true
 grep -qE '^DB_CONNECTION=sqlite$' "${ENV_FILE}" && grep -qE "^DB_DATABASE=${DB}$" "${ENV_FILE}" \
     || die "worktree .env did not take the SQLite settings"
 

@@ -40,7 +40,7 @@ What it does, in order (each step fails loudly):
    point at production), then writes into the WORKTREE `.env`: `DB_CONNECTION=sqlite`,
    `DB_DATABASE=<worktree>/database/verify.sqlite`, `APP_URL=http://<app host>:<port>`,
    `CAPSTAN_ARTIFACT_RENDER_ORIGIN=http://<render host>:<port>`, and
-   `CAPSTAN_FEATURE_{ARTIFACTS,POSTMASTER,WORK}=true`. Exports would be useless: `artisan serve`
+   `CAPSTAN_FEATURE_ARTIFACTS=true`. Exports would be useless: `artisan serve`
    forwards only a whitelist of variables to its `php -S` worker.
 3. `composer install`; `npm ci && npm run build` when `public/build/manifest.json` is missing (without
    it every authenticated page 500s "Vite manifest not found").
@@ -75,7 +75,7 @@ Run it first, and again whenever anything surprises you. Read-only apart from on
 It proves: the recorded server pid is alive; every listener on the port is in THAT pid's process tree;
 `/up` is 200; `route:list` resolves; **database identity behaviourally** (an anonymous
 `GET /bfc/login` adds a `sessions` row to THIS run's SQLite file — if not, the server is on some
-other database and nothing you drive means anything); both origins and all three flags are in the
+other database and nothing you drive means anything); both origins and the Artifacts flag are in the
 worktree `.env`; the Vite manifest exists; and which credential NAMES (never values) are set in the
 worktree `.env` and in your shell. It does not use `ps eww`: on macOS that cannot read another
 process's environment, so such a check can never fail.

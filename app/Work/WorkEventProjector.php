@@ -2,11 +2,9 @@
 
 namespace App\Work;
 
-use App\Features\Work;
 use App\Models\WorkItem;
 use App\Models\WorkMilestone;
 use App\Models\WorkTask;
-use Laravel\Pennant\Feature;
 
 final readonly class WorkEventProjector
 {
@@ -41,9 +39,6 @@ final readonly class WorkEventProjector
 
     private function project(WorkItem $item, string $key, string $kind): void
     {
-        if (! Feature::active(Work::class)) {
-            return;
-        }
         $parentId = $item->workTask->parent_task_id;
         while ($parentId !== null) {
             $parent = WorkTask::query()->findOrFail($parentId);

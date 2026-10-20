@@ -2,11 +2,9 @@
 
 namespace App\Work;
 
-use App\Features\Work;
 use App\Models\WorkOrchestratorSeat;
 use App\Models\WorkTask;
 use Illuminate\Support\Facades\DB;
-use Laravel\Pennant\Feature;
 
 final class WorkOrchestrationLock
 {
@@ -18,9 +16,6 @@ final class WorkOrchestrationLock
      */
     public function tasks(string $taskId): array
     {
-        if (! Feature::active(Work::class)) {
-            return [];
-        }
         if (DB::getDriverName() === 'sqlite') {
             // Reserve the single writer before reading ancestry. Upgrading an old
             // WAL read snapshot cannot wait on busy_timeout and fails immediately.

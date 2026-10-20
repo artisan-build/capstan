@@ -3,7 +3,6 @@
 namespace App\Mcp\Tools;
 
 use App\Enums\MessageType;
-use App\Features\Postmaster;
 use App\Http\ApiErrorException;
 use App\Mcp\DurableWriteCoordinator;
 use App\Mcp\OwnerSubjectResolver;
@@ -24,7 +23,6 @@ use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
 use Laravel\Mcp\Request;
-use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
 use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Attributes\Name;
@@ -32,7 +30,6 @@ use Laravel\Mcp\Server\Tools\Annotations\IsDestructive;
 use Laravel\Mcp\Server\Tools\Annotations\IsIdempotent;
 use Laravel\Mcp\Server\Tools\Annotations\IsOpenWorld;
 use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
-use Laravel\Pennant\Feature;
 use stdClass;
 use Throwable;
 
@@ -69,12 +66,8 @@ final class SendPostmasterMessageTool extends CapstanTool
         OwnerSubjectResolver $owners,
         DurableWriteCoordinator $writes,
         MessageSender $sender,
-    ): Response|ResponseFactory {
+    ): ResponseFactory {
         $this->requireExactArguments($request, ['idempotency_key', 'from', 'to', 'type', 'version', 'message_id', 'body']);
-
-        if (! Feature::active(Postmaster::class)) {
-            return Response::error('Postmaster is unavailable.');
-        }
 
         $validated = $request->validate([
             'idempotency_key' => ['required', 'string', 'min:1', 'max:255'],

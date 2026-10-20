@@ -2,7 +2,6 @@
 
 namespace App\Mcp\Tools;
 
-use App\Features\Postmaster;
 use App\Mcp\OwnerSubjectResolver;
 use App\Mcp\SignedCursor;
 use App\Mcp\ToolResponse;
@@ -19,12 +18,10 @@ use ArtisanBuild\BuiltForCloud\Mcp\ToolEffect;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Laravel\Mcp\Exceptions\JsonRpcException;
 use Laravel\Mcp\Request;
-use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
 use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Attributes\Name;
 use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
-use Laravel\Pennant\Feature;
 
 #[Name('postmaster_messages')]
 #[Description('Reads one owned local inbox without acknowledging messages or changing delivery state.')]
@@ -47,13 +44,9 @@ final class PostmasterMessagesTool extends CapstanTool
         ];
     }
 
-    public function handle(Request $request, OwnerSubjectResolver $owners, SignedCursor $cursors, ServerIdentity $identity): Response|ResponseFactory
+    public function handle(Request $request, OwnerSubjectResolver $owners, SignedCursor $cursors, ServerIdentity $identity): ResponseFactory
     {
         $this->requireExactArguments($request, ['inbox', 'limit', 'cursor']);
-
-        if (! Feature::active(Postmaster::class)) {
-            return Response::error('Postmaster is unavailable.');
-        }
 
         $validated = $request->validate([
             'inbox' => ['required', 'string', 'max:64'],

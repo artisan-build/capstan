@@ -3,7 +3,6 @@
 namespace App\Work;
 
 use App\Enums\WorkItemState;
-use App\Features\Work;
 use App\Http\ApiErrorException;
 use App\Models\Spoke;
 use App\Models\Team;
@@ -23,7 +22,6 @@ use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
-use Laravel\Pennant\Feature;
 
 /** The single auditable boundary for writes made with an orchestrator authority. */
 final readonly class WorkOrchestrationCapability
@@ -259,10 +257,6 @@ final readonly class WorkOrchestrationCapability
      */
     private function authorised(WorkOrchestrationContext $context, CarbonImmutable $now, Closure $write): mixed
     {
-        if (! Feature::active(Work::class)) {
-            throw new ApiErrorException(404, 'work_unavailable', 'Work is unavailable.');
-        }
-
         return DB::transaction(function () use ($context, $now, $write): mixed {
             $spoke = Spoke::query()->workEligible()
                 ->whereKey($context->spokeId)
