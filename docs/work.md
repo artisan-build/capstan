@@ -5,21 +5,20 @@ the command assigned to its role. The reference drain in `drain/capstan_drain.py
 cron starts a new Python process each minute, and that process starts a fresh worker for each item. It is
 a working recipe for an organisation to adapt, not a required runtime or a launcher framework.
 
-Work is off by default. When the Work feature is off, its API, MCP tools, scheduled sweeps, and page are
-not available; the routes return not found and the rest of Capstan keeps working. Turn it on with
-`CAPSTAN_FEATURE_WORK=true` in the environment before testing a drain. There is no switch for it in the
-app.
+Work is available on every installation. Pooled Work is off by default for each team, so new tasks stay
+addressed to their creators unless an Owner or Admin explicitly changes that team policy.
 
 ## The drain credential
 
-The drain authenticates with a `capstan.work.drain` bearer that belongs to the person whose numeric id is
-in `actor_id`. Get it through the device flow in the README's
-[Getting a token](../README.md#getting-a-token) section, with `app_purpose` set to `capstan.work.drain`.
-Do not mint it from `/settings/credentials/personal` or `/settings/credentials/installation`. Those pages
-issue a token, but `POST /api/v1/work/{team}/claim` rejects it with `401 unauthenticated`, while a
-device-flow token for the same purpose, person and endpoint is accepted (last checked 2026-10-18, Built
-for Cloud v0.20.0). Write the `access_token` value alone into the file named by `credential_file` and
-set its mode to `0600`.
+The drain uses the same `capstan.machine` identity as the installed poller. In the browser, open
+`/postmaster`, generate the Connect-this-machine installer, run it on the target machine, and approve the
+request. The approving person becomes the machine owner. The installer writes the bearer to
+`~/.config/capstan/<server-id>/token` and the non-secret owner id to the adjacent `actor-id` file, both with
+mode `0600`.
+
+Set `credential_file` to that installed token path. Read `actor-id` locally and copy its numeric contents
+as the quoted JSON scalar `actor_id` when preparing the config. Do not duplicate or paste the bearer, put it
+in an environment variable, or mint a separate Work credential.
 
 ## Who can claim a task
 
@@ -58,8 +57,8 @@ one argument per element. They are never shell strings.
 | `version` | Config schema version. The current value is `1`. |
 | `capstan_url` | Root URL of the Capstan installation. Use HTTPS except for local development at `localhost` or a loopback IP. Do not include credentials or a query string. |
 | `team` | Team id or route key used by the team-scoped drain endpoints. |
-| `actor_id` | Non-secret numeric actor id sent in `X-Capstan-Actor-ID`. It must match the bound credential. |
-| `credential_file` | File containing only the `capstan.work.drain` bearer. Mode must be `0600` or stricter. |
+| `actor_id` | Non-secret numeric actor id copied as a quoted JSON scalar from `~/.config/capstan/<server-id>/actor-id`. It must match the machine credential. |
+| `credential_file` | Path to `~/.config/capstan/<server-id>/token`, containing only the installed `capstan.machine` bearer. Mode must be `0600` or stricter. |
 | `max_concurrent` | Maximum local workers, from 1 through the server batch cap of 25. |
 | `max_load_1m` | One-minute system load ceiling. A higher measured value blocks claims for that run. |
 | `max_memory_percent` | Used-memory ceiling from greater than 0 through 100. A higher value blocks claims. |
@@ -76,7 +75,8 @@ one argument per element. They are never shell strings.
 Relative paths are resolved from the config file's directory. The examples' `prompt_template`,
 `orchestrator_prompt_template`, and `generic.json`'s `{config_dir}/../harness/stub_worker.py` are relative
 to `drain/examples`, so repoint them to absolute paths when you copy an example out of the repository.
-The `./credentials` and `./var` paths are meant to stay relative to the copied config. The command placeholders are
+The examples already point `credential_file` at the installer directory; replace `<server-id>` with the
+directory created on this machine. The `./var` paths are meant to stay relative to the copied config. The command placeholders are
 `{item_id}`, `{task_id}`, `{brief_url}`, `{milestone_url}`, `{steers_url}`, `{orchestration_url}`,
 `{orchestrate_url}`, `{prompt_file}`, `{links_file}`, `{work_dir}`, `{config_dir}`, `{session_ref}`,
 `{seat_fence}`, and `{prompt}`. Unknown placeholders stop configuration loading. Prefer stdin or
@@ -94,8 +94,8 @@ Check local paths and credential permissions without calling Capstan:
 python3 drain/capstan_drain.py --config /absolute/path/to/config.json --check-config
 ```
 
-Then make one authenticated capacity-zero request. This proves the URL, team, actor, credential binding,
-and feature state without claiming an item:
+Then make one authenticated capacity-zero request. This proves the URL, team, actor, and credential binding
+without claiming an item:
 
 ```sh
 python3 drain/capstan_drain.py --config /absolute/path/to/config.json --dry-claim
@@ -181,8 +181,8 @@ item or seat fences remain invalid.
 ## Scheduling and recovery
 
 Run the script once a minute. The onboarding skill at `drain/SKILL.md` shows cron and launchd forms. Keep
-the config, credential, state, lock, and work paths under a private directory. Use absolute paths in the
-scheduler because cron has a small working environment.
+the config, state, lock, and work paths under a private directory, and keep the credential in the installer's
+mode-protected server directory. Use absolute paths in the scheduler because cron has a small working environment.
 
 If the state file is malformed, the drain leaves it unchanged and makes no claim. Repair it from the
 item directories and Capstan's Work page rather than deleting it blindly. If a transition or renew call
