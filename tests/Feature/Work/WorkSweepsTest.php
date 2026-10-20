@@ -328,16 +328,7 @@ test('failover respects own queued age cancellation reserved roles and a racing 
     }
 });
 
-test('work off commands no op and work schedules run every minute without overlapping', function (): void {
-    $item = sweepItem(['lease_until' => now()->subSecond()]);
-    config(['capstan.features.work' => false]);
-    Feature::flushCache();
-    $notifier = Mockery::mock(WorkNotifier::class);
-    $notifier->shouldNotReceive('stalled', 'missedHeartbeat', 'waitingOnHost');
-    app()->instance(WorkNotifier::class, $notifier);
-    $this->artisan('work:liveness-sweep')->assertSuccessful();
-    $this->artisan('work:failover-sweep')->assertSuccessful();
-    expect($item->fresh()->state)->toBe(WorkItemState::Routed)->and($item->fresh()->attempts)->toBe(0);
+test('work schedules run every minute without overlapping', function (): void {
     $events = collect(resolve(Schedule::class)->events())->filter(fn ($event): bool => str_contains($event->command ?? '', 'work:'));
     expect($events)->toHaveCount(3);
     foreach ($events as $event) {

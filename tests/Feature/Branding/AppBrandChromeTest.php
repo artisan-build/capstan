@@ -346,7 +346,6 @@ test('feature-off or an unconfigured render origin falls back without exposing a
         expect($html)->toContain('data-testid="capstan-app-icon"', 'scalpels.app/img/products/transparent/capstan.png');
     }
 })->with([
-    'feature off' => [['capstan.features.artifacts' => false]],
     'render origin unset' => [['capstan.artifacts.render_origin' => null]],
     'render origin on the app host' => [['capstan.artifacts.render_origin' => 'https://app.chrome-brand.test']],
 ]);

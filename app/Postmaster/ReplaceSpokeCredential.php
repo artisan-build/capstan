@@ -43,7 +43,7 @@ final readonly class ReplaceSpokeCredential
         ?BoundBearerCredential $authenticatedOldCredential,
         CarbonImmutable $now,
         ?string $previousToken = null,
-        string $currentAppPurpose = CapstanCredentialDeclaration::POSTMASTER_POLL,
+        string $currentAppPurpose = CapstanCredentialDeclaration::MACHINE,
     ): array {
         return $this->retrySqliteBusy(fn (): array => DB::transaction(function () use ($actorId, $newCredentialId, $authenticatedOldCredential, $now, $previousToken, $currentAppPurpose): array {
             $alreadyBound = Spoke::query()
@@ -153,10 +153,8 @@ final readonly class ReplaceSpokeCredential
             || ! $this->hasOffboardingRevocation($oldCredential)
             || ! CredentialProtocolBinding::query()
                 ->whereKey($oldCredential->id)
-                ->whereIn('app_purpose', [
-                    CapstanCredentialDeclaration::MACHINE,
-                    CapstanCredentialDeclaration::POSTMASTER_POLL,
-                ])->exists()) {
+                ->where('app_purpose', CapstanCredentialDeclaration::MACHINE)
+                ->exists()) {
             return null;
         }
 

@@ -60,7 +60,9 @@ test('the machine and legacy purpose endpoint matrix is exact', function (
 ): void {
     $user = capstanUser();
     $team = Team::default();
-    $issued = capstanBoundBearer($user, $purpose);
+    $issued = in_array($purpose, [CapstanCredentialDeclaration::POSTMASTER_POLL, CapstanCredentialDeclaration::WORK_DRAIN], true)
+        ? capstanLegacyBoundBearer($user, $purpose)
+        : capstanBoundBearer($user, $purpose);
 
     $response = $this->withHeaders([
         'Authorization' => 'Bearer '.$issued['token'],
@@ -80,10 +82,10 @@ test('the machine and legacy purpose endpoint matrix is exact', function (
     'machine replaces' => [CapstanCredentialDeclaration::MACHINE, 'replace', 200, ''],
     'machine claims Work' => [CapstanCredentialDeclaration::MACHINE, 'work', 200, ''],
     'machine cannot ingest artifacts' => [CapstanCredentialDeclaration::MACHINE, 'artifact', 401, 'unauthenticated'],
-    'legacy Postmaster polls' => [CapstanCredentialDeclaration::POSTMASTER_POLL, 'poll', 200, ''],
-    'legacy Postmaster replaces' => [CapstanCredentialDeclaration::POSTMASTER_POLL, 'replace', 200, ''],
+    'legacy Postmaster cannot poll' => [CapstanCredentialDeclaration::POSTMASTER_POLL, 'poll', 401, 'unauthenticated'],
+    'legacy Postmaster cannot replace' => [CapstanCredentialDeclaration::POSTMASTER_POLL, 'replace', 401, 'unauthenticated'],
     'legacy Postmaster cannot claim Work' => [CapstanCredentialDeclaration::POSTMASTER_POLL, 'work', 401, 'unauthenticated'],
-    'legacy drain claims Work' => [CapstanCredentialDeclaration::WORK_DRAIN, 'work', 200, ''],
+    'legacy drain cannot claim Work' => [CapstanCredentialDeclaration::WORK_DRAIN, 'work', 401, 'unauthenticated'],
     'legacy drain cannot poll' => [CapstanCredentialDeclaration::WORK_DRAIN, 'poll', 401, 'unauthenticated'],
     'legacy drain cannot replace' => [CapstanCredentialDeclaration::WORK_DRAIN, 'replace', 401, 'unauthenticated'],
     'artifact credential reaches artifact validation' => [CapstanCredentialDeclaration::ARTIFACT_INGEST, 'artifact', 422, 'validation_failed'],
@@ -100,14 +102,19 @@ test('the machine authorization profile has the locked purpose audience and brow
     ]);
     $request->setUserResolver(static fn (): User => $owner);
 
-    $profile = collect(resolve(CapstanCredentialDeclaration::class)->credentialAuthorizationProfiles($request))
+    $profiles = collect(resolve(CapstanCredentialDeclaration::class)->credentialAuthorizationProfiles($request));
+    $profile = $profiles
         ->sole(fn ($profile): bool => $profile->appPurpose === CapstanCredentialDeclaration::MACHINE);
 
     expect($profile->appPurpose)->toBe('capstan.machine')
         ->and($profile->scope->appPurpose)->toBe('capstan.machine')
         ->and($profile->scope->audience)->toBe('/api/v1/machine')
         ->and($profile->scope->subject->ref)->toBe('capstan-user:'.$owner->getKey())
-        ->and($profile->scope->subject->ref)->not->toBe('capstan-user:'.$other->getKey());
+        ->and($profile->scope->subject->ref)->not->toBe('capstan-user:'.$other->getKey())
+        ->and($profiles->pluck('appPurpose')->all())->toBe([
+            CapstanCredentialDeclaration::ARTIFACT_INGEST,
+            CapstanCredentialDeclaration::MACHINE,
+        ]);
 });
 
 test('one machine credential resolves the same spoke for poll and Work', function (): void {
@@ -257,7 +264,7 @@ test('a machine credential is isolated from MCP credential management and browse
     expect($issued['credential']->refresh()->last_used_at)->toBeNull();
 });
 
-test('machine purpose authenticates claim renew and transition while Postmaster purpose reaches none', function (): void {
+test('machine purpose authenticates claim renew and transition while both legacy purposes reach none', function (): void {
     $team = Team::default();
     $task = WorkTask::query()->create([
         'team_id' => $team->id,
@@ -300,18 +307,20 @@ test('machine purpose authenticates claim renew and transition while Postmaster 
         'item_id' => $item->id, 'fence' => $fence, 'state' => 'delivered',
     ])->assertOk()->assertJsonPath('item.state', 'delivered');
 
-    $legacy = capstanBoundBearer($owner, CapstanCredentialDeclaration::POSTMASTER_POLL);
-    $legacyHeaders = [
-        'Authorization' => 'Bearer '.$legacy['token'],
-        CapstanCredentialDeclaration::ACTOR_HEADER => (string) $owner->getKey(),
-    ];
-    $this->withHeaders($legacyHeaders)->postJson(route('api.work.claim', $team), [
-        'capacity' => 1, 'roles' => ['builder'], 'capabilities' => [], 'role_providers' => [], 'current_claimed_item_count' => 0,
-    ])->assertStatus(401)->assertJsonPath('error.code', 'unauthenticated');
-    $this->withHeaders($legacyHeaders)->postJson(route('api.work.renew', $team), [
-        'items' => [['item_id' => $item->id, 'fence' => $fence]],
-    ])->assertStatus(401)->assertJsonPath('error.code', 'unauthenticated');
-    $this->withHeaders($legacyHeaders)->postJson(route('api.work.transition', $team), [
-        'item_id' => $item->id, 'fence' => $fence, 'state' => 'routed',
-    ])->assertStatus(401)->assertJsonPath('error.code', 'unauthenticated');
+    foreach ([CapstanCredentialDeclaration::POSTMASTER_POLL, CapstanCredentialDeclaration::WORK_DRAIN] as $legacyPurpose) {
+        $legacy = capstanLegacyBoundBearer($owner, $legacyPurpose);
+        $legacyHeaders = [
+            'Authorization' => 'Bearer '.$legacy['token'],
+            CapstanCredentialDeclaration::ACTOR_HEADER => (string) $owner->getKey(),
+        ];
+        $this->withHeaders($legacyHeaders)->postJson(route('api.work.claim', $team), [
+            'capacity' => 1, 'roles' => ['builder'], 'capabilities' => [], 'role_providers' => [], 'current_claimed_item_count' => 0,
+        ])->assertStatus(401)->assertJsonPath('error.code', 'unauthenticated');
+        $this->withHeaders($legacyHeaders)->postJson(route('api.work.renew', $team), [
+            'items' => [['item_id' => $item->id, 'fence' => $fence]],
+        ])->assertStatus(401)->assertJsonPath('error.code', 'unauthenticated');
+        $this->withHeaders($legacyHeaders)->postJson(route('api.work.transition', $team), [
+            'item_id' => $item->id, 'fence' => $fence, 'state' => 'routed',
+        ])->assertStatus(401)->assertJsonPath('error.code', 'unauthenticated');
+    }
 });

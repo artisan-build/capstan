@@ -81,7 +81,7 @@ test('member guest inactive offboarded feature-off and render-host requests are 
         }
     }
 
-    config(['capstan.features.artifacts' => false]);
+    config(['capstan.artifacts.render_origin' => null]);
     Feature::flushCache();
     $admin = capstanUser(['role' => UserRole::Admin->value]);
     $this->actingAsVersioned($admin)->get('https://app.brand-ui.test'.route('branding.show', [], false))->assertNotFound();

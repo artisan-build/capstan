@@ -255,12 +255,3 @@ test('steers scope unread recent order and first read time', function (): void {
     expect($itemUnread->fresh()->read_at->equalTo($first))->toBeTrue()
         ->and($recent->fresh()->read_at->equalTo(now()->subMinute()->subHour()))->toBeTrue();
 });
-
-test('all signed endpoints hide when work is off', function (): void {
-    $links = resolve(WorkWorkerLinks::class)->forItem(workerLinkItem());
-    config(['capstan.features.work' => false]);
-    Feature::flushCache();
-    $this->getJson($links['brief'])->assertNotFound();
-    $this->getJson($links['steers'])->assertNotFound();
-    $this->postJson($links['milestone'], ['kind' => 'note', 'payload' => (object) []])->assertNotFound();
-});

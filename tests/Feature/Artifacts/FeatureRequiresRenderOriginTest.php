@@ -19,16 +19,10 @@ beforeEach(function (): void {
     Storage::fake();
 });
 
-/**
- * Every case below sets both keys explicitly rather than leaning on `.env`:
- * the feature now resolves from two config values, so a test that names only
- * one of them is a test whose result depends on the developer's environment.
- */
-function originConfig(?string $renderOrigin, bool $flag = true, string $appUrl = 'https://app.capstan.test'): void
+function originConfig(?string $renderOrigin, string $appUrl = 'https://app.capstan.test'): void
 {
     config([
         'app.url' => $appUrl,
-        'capstan.features.artifacts' => $flag,
         'capstan.artifacts.render_origin' => $renderOrigin,
     ]);
     Feature::flushCache();
@@ -61,16 +55,17 @@ test('the feature is inactive when the render origin is unset', function (): voi
     expect(Feature::active(ArtifactsFeature::class))->toBeFalse();
 });
 
-test('the feature is active when the flag is on and the render origin is a separate host', function (): void {
+test('the feature is active when the render origin is a separate host', function (): void {
     originConfig('https://artifacts.capstan.test');
 
     expect(Feature::active(ArtifactsFeature::class))->toBeTrue();
 });
 
-test('the flag remains an independent switch: off stays off with a good render origin', function (): void {
-    originConfig('https://artifacts.capstan.test', flag: false);
+test('obsolete feature config cannot disable a safe render origin', function (): void {
+    config(['capstan.features.artifacts' => false]);
+    originConfig('https://artifacts.capstan.test');
 
-    expect(Feature::active(ArtifactsFeature::class))->toBeFalse();
+    expect(Feature::active(ArtifactsFeature::class))->toBeTrue();
 });
 
 test('the feature is inactive when the render origin matches the app host only after normalisation', function (): void {
@@ -101,7 +96,7 @@ test('ingest is refused when the render origin is unset and nothing is stored', 
         ->and(Storage::disk()->allFiles())->toBe([]);
 });
 
-test('ingest still works when the flag is on and the render origin is a separate host', function (): void {
+test('ingest works when the render origin is a separate host', function (): void {
     originConfig('https://artifacts.capstan.test');
 
     postArtifact()->assertCreated();

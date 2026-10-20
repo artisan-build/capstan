@@ -336,12 +336,11 @@ test('page viewers and content fail closed when the shared feature or isolated o
     $page = ownedPage($owner, $html, 'Closed recipe '.Str::random(8), 'Closed page '.Str::random(8));
     $version = $page->latestVersion()->firstOrFail();
 
-    config(['capstan.features.artifacts' => false]);
+    config(['capstan.artifacts.render_origin' => null]);
     Feature::flushCache();
     $this->actingAsVersioned($owner)->get(route('pages.show', ['page' => $page]))->assertNotFound();
 
     config([
-        'capstan.features.artifacts' => true,
         'capstan.artifacts.render_origin' => 'https://app.pages.test',
     ]);
     Feature::flushCache();

@@ -29,7 +29,6 @@ use App\Work\WorkToolService;
 use App\Work\WorkWorkerLinks;
 use App\Work\WorkWorkerService;
 use Carbon\CarbonImmutable;
-use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -833,23 +832,6 @@ test('signed orchestration links reject stale item and seat fences and cancelled
     expect([$child->items()->count(), DB::table('mcp_write_claims')->count()])->toBe($before);
 })->with(['item_fence', 'seat_fence', 'cancelled_parent', 'expired_lease', 'expired_link']);
 
-test('Work off hides signed orchestration entry points before effects', function (): void {
-    $parent = orchestrationTask();
-    $child = orchestrationTask($parent);
-    orchestrationEvent($parent, 'signed-off');
-    $turn = orchestrationClaims($parent, orchestrationHost('signed-off-host'))[0];
-    $links = resolve(WorkWorkerLinks::class)->forItem($turn);
-    config(['capstan.features.work' => false]);
-    Feature::flushCache();
-    $before = [$child->items()->count(), DB::table('mcp_write_claims')->count()];
-
-    $this->getJson($links['orchestration'])->assertNotFound();
-    $this->postJson($links['orchestrate'], [
-        'action' => 'queue_item', 'input' => ['task_id' => $child->id, 'role' => 'builder'], 'idempotency_key' => 'signed-off',
-    ])->assertNotFound();
-    expect([$child->items()->count(), DB::table('mcp_write_claims')->count()])->toBe($before);
-});
-
 test('records use UUIDv7 and decisions and state revisions reject edits or deletion', function (): void {
     $parent = orchestrationTask();
     $event = orchestrationEvent($parent);
@@ -868,33 +850,6 @@ test('records use UUIDv7 and decisions and state revisions reject edits or delet
         expect(fn () => $record->delete())->toThrow(LogicException::class);
         expect(fn () => $record->forceFill(['work_task_id' => orchestrationTask()->id])->save())->toThrow(LogicException::class);
     }
-});
-
-test('work off engine services and scheduled execution have no durable effects', function (): void {
-    $parent = orchestrationTask();
-    $host = orchestrationHost();
-    orchestrationEvent($parent);
-    $turn = orchestrationClaims($parent, $host)[0];
-    $engine = resolve(WorkOrchestrationService::class);
-    $human = $engine->escalate($parent, 'off', 'supervisor', 'Question', ['Continue'], 'Continue');
-    $engine->requestWake($parent, 'off', CarbonImmutable::now(), 'Due');
-    Date::setTestNow(now()->addMinutes(6));
-    $tables = ['work_items', 'work_orchestrator_seats', 'work_orchestration_events', 'work_orchestration_decisions', 'work_state_revisions', 'work_wakes', 'work_escalations'];
-    $snapshot = fn () => array_map(fn ($table) => DB::table($table)->orderBy('id')->get()->toJson(), $tables);
-    $before = $snapshot();
-    config(['capstan.features.work' => false]);
-    Feature::flushCache();
-    $engine->event($parent, 'off', 'off');
-    $engine->requestWake($parent, 'off-new', CarbonImmutable::now(), 'Off');
-    $engine->escalate($parent, 'off-new', 'supervisor', 'Off', ['Continue'], 'Continue');
-    $engine->answer($human, 'supervisor', 'Off', CarbonImmutable::now());
-    $engine->turnDone($turn, 1, $turn->seat_fence, 'Off', CarbonImmutable::now());
-    resolve(WorkSeatService::class)->renew($parent, $host->actor_id, $host->id, $turn->seat_fence, 'Off', CarbonImmutable::now());
-    resolve(WorkSeatService::class)->release($parent, $host->actor_id, $host->id, $turn->seat_fence, CarbonImmutable::now());
-    $this->artisan('work:orchestration-sweep')->assertSuccessful();
-    expect(orchestrationClaims($parent, $host))->toBe([])->and($snapshot())->toBe($before);
-    $event = collect(resolve(Schedule::class)->events())->first(fn ($event): bool => str_contains($event->command ?? '', 'work:orchestration-sweep'));
-    expect($event)->not->toBeNull()->and($event->expression)->toBe('* * * * *')->and($event->withoutOverlapping)->toBeTrue();
 });
 
 test('terminal milestone and MCP cancellation writers project inside their source transaction', function (): void {

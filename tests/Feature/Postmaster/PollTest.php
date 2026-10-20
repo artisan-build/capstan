@@ -38,7 +38,7 @@ beforeEach(function (): void {
 
 function spokeToken(User $user): string
 {
-    return capstanBoundBearer($user, CapstanCredentialDeclaration::POSTMASTER_POLL)['token'];
+    return capstanBoundBearer($user, CapstanCredentialDeclaration::MACHINE)['token'];
 }
 
 /**
@@ -330,7 +330,7 @@ test('repeated and unknown acks are successful no ops', function (): void {
     expect(Envelope::query()->firstOrFail()->acked_at?->equalTo($ackedAt))->toBeTrue();
 });
 
-test('a disabled feature returns not found without postmaster state changes', function (): void {
+test('obsolete feature config cannot disable polling', function (): void {
     config(['capstan.features.postmaster' => false]);
     Feature::flushCache();
     $user = capstanUser();
@@ -338,12 +338,12 @@ test('a disabled feature returns not found without postmaster state changes', fu
     $this->withToken(spokeToken($user))->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => ['sender']],
         'outbound' => [pollWireEnvelope('receiver@'.POLL_SERVER_ID)],
-    ])->assertNotFound()->assertJsonPath('error.code', 'not_found');
+    ])->assertOk();
 
-    expect(Spoke::query()->count())->toBe(0)
-        ->and(Inbox::query()->count())->toBe(0)
-        ->and(Envelope::query()->count())->toBe(0)
-        ->and(Feature::active(Postmaster::class))->toBeFalse();
+    expect(Spoke::query()->count())->toBe(1)
+        ->and(Inbox::query()->count())->toBe(1)
+        ->and(Envelope::query()->count())->toBe(1)
+        ->and(Feature::active(Postmaster::class))->toBeTrue();
 });
 
 test('poll requires api authentication', function (): void {
@@ -355,7 +355,7 @@ test('poll requires api authentication', function (): void {
 test('poll binds the bearer to the independently presented actor before validation recording or effects', function (): void {
     $owner = capstanUser();
     $other = capstanUser();
-    $issued = capstanBoundBearer($owner, CapstanCredentialDeclaration::POSTMASTER_POLL);
+    $issued = capstanBoundBearer($owner, CapstanCredentialDeclaration::MACHINE);
     $clientIdentity = 'capstan-test/1.0';
 
     $this->withHeaders([
@@ -780,7 +780,7 @@ test('the first delivery time survives redelivery', function (): void {
 
 test('the system-authority sweep retires a revoked credential spoke and routing but preserves attribution', function (): void {
     $user = capstanUser();
-    $issued = capstanBoundBearer($user, CapstanCredentialDeclaration::POSTMASTER_POLL);
+    $issued = capstanBoundBearer($user, CapstanCredentialDeclaration::MACHINE);
     $token = $issued['token'];
 
     $this->withToken($token)->postJson('/api/v1/poll', [

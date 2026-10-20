@@ -80,8 +80,6 @@ final readonly class CapstanCredentialDeclaration implements CredentialDeclarati
         return [
             $this->profile(self::ARTIFACT_INGEST, $subject, $installation, '/api/v1/artifacts'),
             $this->profile(self::MACHINE, $subject, $installation, '/api/v1/machine'),
-            $this->profile(self::POSTMASTER_POLL, $subject, $installation, '/api/v1/poll'),
-            $this->profile(self::WORK_DRAIN, $subject, $installation, '/api/v1/work'),
         ];
     }
 

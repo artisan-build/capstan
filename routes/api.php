@@ -20,18 +20,18 @@ Route::prefix('v1')->group(function (): void {
         ->middleware('throttle:api');
 
     Route::post('poll', PollController::class)
-        ->middleware('capstan.bound_credential:'.CapstanCredentialDeclaration::MACHINE.','.CapstanCredentialDeclaration::POSTMASTER_POLL)
+        ->middleware('capstan.bound_credential:'.CapstanCredentialDeclaration::MACHINE)
         ->middleware('throttle:api')
         ->name('api.postmaster.poll');
 
     Route::post('postmaster/replace', ReplacePostmasterSpokeController::class)
-        ->middleware('capstan.bound_credential:'.CapstanCredentialDeclaration::MACHINE.','.CapstanCredentialDeclaration::POSTMASTER_POLL)
+        ->middleware('capstan.bound_credential:'.CapstanCredentialDeclaration::MACHINE)
         ->middleware('throttle:api')
         ->name('api.postmaster.replace');
 
     Route::prefix('work/{team}')
         ->middleware([
-            'capstan.bound_credential:'.CapstanCredentialDeclaration::MACHINE.','.CapstanCredentialDeclaration::WORK_DRAIN,
+            'capstan.bound_credential:'.CapstanCredentialDeclaration::MACHINE,
             'throttle:api',
         ])
         ->group(function (): void {

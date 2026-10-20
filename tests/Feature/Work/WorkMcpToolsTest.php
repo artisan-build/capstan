@@ -68,7 +68,7 @@ function workMcpToken(User $user): string
  */
 function workMcpDrain(User $user, Team $team, array $roles): array
 {
-    $issued = capstanBoundBearer($user, CapstanCredentialDeclaration::WORK_DRAIN);
+    $issued = capstanBoundBearer($user, CapstanCredentialDeclaration::MACHINE);
     $spoke = Spoke::query()->create([
         'actor_id' => (string) $user->id,
         'credential_id' => $issued['credential']->id,
@@ -408,18 +408,13 @@ test('every Work tool rejects non-admitted or non-manager callers without effect
         ->and($team->fresh()->pool_work)->toBeFalse();
 })->with(['member', 'inactive', 'offboarded', 'missing']);
 
-test('Work OFF errors every new tool without a write and leaves existing tool definitions unchanged', function (): void {
+test('obsolete Work config leaves tool definitions available', function (): void {
     $token = workMcpToken(capstanUser(['role' => 'owner']));
     $on = workMcpList($token);
     config(['capstan.features.work' => false]);
     Feature::flushCache();
     expect(workMcpList($token))->toBe($on);
-    foreach (['create_task', 'revise_brief', 'queue_item', 'cancel_item', 'list_work', 'get_task', 'steer', 'cancel_task', 'take_seat', 'release_seat', 'list_escalations', 'answer_escalation', 'orchestrate', 'get_team_work_policy', 'set_team_work_policy'] as $tool) {
-        workMcpCall($tool, (object) [], $token)->assertOk()
-            ->assertJsonPath('result.isError', true)->assertJsonPath('result.content.0.text', 'Work is unavailable.');
-    }
-    expect(DB::table('mcp_write_claims')->count())->toBe(0)->and(WorkTask::query()->count())->toBe(0);
-    workMcpCall('postmaster_spokes', (object) [], $token)->assertOk()->assertJsonPath('result.content.0.text', 'Postmaster is unavailable.');
+    expect(workMcpList($token))->toBe($on);
 });
 
 test('interactive MCP seats renew for one credential exclude drains expose bounded events and release with fencing', function (): void {

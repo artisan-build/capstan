@@ -288,7 +288,7 @@ test('provider freshness is derived from server receipt and bounded source evide
     expect($freshness->providerIsFresh($report, $provider->refresh(), $now))->toBeFalse();
 });
 
-test('legacy rows four and five upgrade in place to machine credentials without disturbing tombstones', function (): void {
+test('legacy rows four and five stay historical while machine credentials register fresh rows', function (): void {
     $owner = capstanUser();
     $team = Team::default();
     $retiredCredentialId = (string) fake()->uuid();
@@ -302,7 +302,7 @@ test('legacy rows four and five upgrade in place to machine credentials without 
     ]);
     $fixtures = [];
     foreach ([4, 5] as $id) {
-        $old = capstanBoundBearer($owner, CapstanCredentialDeclaration::POSTMASTER_POLL);
+        $old = capstanLegacyBoundBearer($owner, CapstanCredentialDeclaration::POSTMASTER_POLL);
         $new = capstanBoundBearer($owner, CapstanCredentialDeclaration::MACHINE);
         $spoke = Spoke::query()->forceCreate([
             'id' => $id,
@@ -324,10 +324,11 @@ test('legacy rows four and five upgrade in place to machine credentials without 
     foreach ($fixtures as $fixture) {
         $headers = machineUsageHeaders($owner, $fixture['new']);
         $headers[ReplacePostmasterSpokeController::PREVIOUS_CREDENTIAL_HEADER] = $fixture['old']['token'];
-        $this->withHeaders($headers)->postJson('/api/v1/postmaster/replace')
+        $replacement = $this->withHeaders($headers)->postJson('/api/v1/postmaster/replace')
             ->assertOk()
-            ->assertJsonPath('spoke_id', $fixture['id'])
-            ->assertJsonPath('replaced', true);
+            ->assertJsonPath('replaced', false);
+        $machineId = $replacement->json('spoke_id');
+        expect($machineId)->toBeInt()->not->toBe($fixture['id']);
         $this->withHeaders(machineUsageHeaders($owner, $fixture['new']))->postJson('/api/v1/poll', [
             'presence' => ['ready_inboxes' => ['machine-'.$fixture['id']]],
         ])->assertOk();
@@ -336,19 +337,21 @@ test('legacy rows four and five upgrade in place to machine credentials without 
             'role_providers' => [], 'current_claimed_item_count' => 0,
         ])->assertOk();
 
-        $spoke = $fixture['spoke']->refresh();
-        expect($spoke->id)->toBe($fixture['id'])
-            ->and($spoke->actor_id)->toBe((string) $owner->getKey())
-            ->and($spoke->credential_id)->toBe($fixture['new']['credential']->id)
-            ->and($spoke->name)->toBe('Live machine '.$fixture['id'])
-            ->and($spoke->device_name)->toBe('Decorative host '.$fixture['id'])
-            ->and($spoke->inboxes()->sole()->id)->toBe($fixture['inbox']->id)
-            ->and($fixture['old']['credential']->refresh()->revoked_at)->not->toBeNull()
+        $historical = $fixture['spoke']->refresh();
+        $machine = Spoke::query()->findOrFail($machineId);
+        expect($historical->id)->toBe($fixture['id'])
+            ->and($historical->actor_id)->toBe((string) $owner->getKey())
+            ->and($historical->credential_id)->toBe($fixture['old']['credential']->id)
+            ->and($historical->name)->toBe('Live machine '.$fixture['id'])
+            ->and($historical->device_name)->toBe('Decorative host '.$fixture['id'])
+            ->and($historical->inboxes()->sole()->id)->toBe($fixture['inbox']->id)
+            ->and($fixture['old']['credential']->refresh()->revoked_at)->toBeNull()
             ->and($fixture['new']['credential']->refresh()->revoked_at)->toBeNull()
-            ->and($spoke->workSettings()->sole()->enabled)->toBeTrue();
+            ->and($machine->credential_id)->toBe($fixture['new']['credential']->id)
+            ->and($machine->workSettings()->sole()->enabled)->toBeTrue();
     }
 
-    expect(Spoke::query()->whereNull('retired_at')->count())->toBe($activeBefore)
+    expect(Spoke::query()->whereNull('retired_at')->count())->toBe($activeBefore + 2)
         ->and($retired->refresh()->retired_at)->not->toBeNull()
         ->and($retired->credential_id)->toBe($retiredCredentialId);
 });

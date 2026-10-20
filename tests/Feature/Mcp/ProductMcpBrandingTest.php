@@ -353,7 +353,7 @@ test('feature off and malformed brand calls fail without mutation or disclosure'
         ->and(BrandKit::query()->count())->toBe(0)
         ->and(BrandAsset::query()->count())->toBe(0);
 
-    config(['capstan.features.artifacts' => false]);
+    config(['capstan.artifacts.render_origin' => null]);
     Feature::flushCache();
     foreach (['get_brand_kit', 'list_layouts', 'preview_brand_draft'] as $tool) {
         brandMcpCall($tool, (object) [], $token, '/mcp')->assertOk()->assertJsonPath('result.isError', true);

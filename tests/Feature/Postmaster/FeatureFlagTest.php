@@ -3,12 +3,9 @@
 use App\Features\Postmaster;
 use Laravel\Pennant\Feature;
 
-test('postmaster feature resolves from config', function (bool $configured): void {
-    config(['capstan.features.postmaster' => $configured]);
+test('postmaster remains available when obsolete config is false', function (): void {
+    config(['capstan.features.postmaster' => false]);
     Feature::flushCache();
 
-    expect(Feature::active(Postmaster::class))->toBe($configured);
-})->with([
-    'enabled' => true,
-    'disabled' => false,
-]);
+    expect(Feature::active(Postmaster::class))->toBeTrue();
+});

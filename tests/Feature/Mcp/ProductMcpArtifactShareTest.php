@@ -227,7 +227,7 @@ test('normalizes expiry into immutable intent and scopes textual keys by owner',
 test('rejects disabled features and unsupported principals before any durable or blob effect', function (): void {
     $user = capstanUser();
     $token = artifactMcpToken($user);
-    config(['capstan.features.artifacts' => false]);
+    config(['capstan.artifacts.render_origin' => null]);
     Feature::flushCache();
 
     artifactMcpCall(artifactMcpArguments('disabled'), $token)
@@ -235,7 +235,7 @@ test('rejects disabled features and unsupported principals before any durable or
         ->assertJsonPath('result.isError', true)
         ->assertJsonPath('result.content.0.text', 'Artifacts are unavailable.');
 
-    config(['capstan.features.artifacts' => true]);
+    config(['capstan.artifacts.render_origin' => 'https://artifacts.capstan.test']);
     Feature::flushCache();
     $unsupported = artifactMcpToken($user, 'capstan-user:'.$user->id, SubjectType::ExternalConsumer);
     config(['app.debug' => false]);

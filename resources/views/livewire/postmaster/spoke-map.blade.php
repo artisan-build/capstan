@@ -52,6 +52,60 @@
         @endforelse
     </section>
 
+    @if ($showUsageToolGuidance)
+        <section class="space-y-4 rounded-xl border border-amber-200 bg-amber-50 p-5 dark:border-amber-800 dark:bg-amber-950/30" data-testid="machine-usage-tool-guidance">
+            <div class="space-y-1">
+                <flux:heading size="lg">{{ __('Add usage reporting') }}</flux:heading>
+                <flux:text class="text-sm text-zinc-700 dark:text-zinc-300">
+                    {{ __('One or more machines cannot report provider usage yet. This build detects tools but never installs them.') }}
+                </flux:text>
+            </div>
+
+            <details class="rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-700 dark:bg-zinc-950" data-testid="machine-usage-linux-guidance">
+                <summary class="cursor-pointer font-medium text-zinc-700 dark:text-zinc-300">{{ __('Linux: install the pinned OpenUsage.sh release') }}</summary>
+                <flux:text class="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+                    {{ __('This verifies the separately downloaded checksums file before installing into ~/.local/bin, one of the paths checked on every collection. The other lookup paths are ~/bin, /opt/homebrew/bin, /usr/local/bin, and /usr/bin.') }}
+                </flux:text>
+                <pre class="mt-3 overflow-auto rounded-lg bg-zinc-950 p-3 text-xs leading-5 text-zinc-100"><code>version=v0.26.1
+case "$(uname -m)" in
+    x86_64) archive=OpenUsage_Linux_x86_64.tar.gz ;;
+    aarch64) archive=OpenUsage_Linux_aarch64.tar.gz ;;
+    *) printf '%s\n' 'Unsupported Linux architecture.' >&amp;2; exit 1 ;;
+esac
+base_url="https://github.com/janekbaraniewski/openusage/releases/download/$version"
+work_dir="$(mktemp -d)" || exit 1
+trap 'rm -rf "$work_dir"' EXIT HUP INT TERM
+cd "$work_dir" || exit 1
+curl --fail --location --proto '=https' --tlsv1.2 --output "$archive" "$base_url/$archive"
+curl --fail --location --proto '=https' --tlsv1.2 --output checksums.txt "$base_url/checksums.txt"
+expected="$(awk -v name="$archive" '$2 == name || $2 == "*" name { print $1 }' checksums.txt)"
+[ -n "$expected" ] &amp;&amp; [ "$(printf '%s\n' "$expected" | wc -l)" -eq 1 ] || { printf '%s\n' 'Published digest missing or ambiguous.' >&amp;2; exit 1; }
+printf '%s\n' "$expected" | grep -Eq '^[[:xdigit:]]{64}$' || { printf '%s\n' 'Published digest is invalid.' >&amp;2; exit 1; }
+if command -v sha256sum >/dev/null 2>&amp;1; then
+    actual="$(sha256sum "$archive" | awk '{ print $1 }')"
+elif command -v shasum >/dev/null 2>&amp;1; then
+    actual="$(shasum -a 256 "$archive" | awk '{ print $1 }')"
+else
+    printf '%s\n' 'A SHA-256 checker is required.' >&amp;2
+    exit 1
+fi
+[ "$actual" = "$expected" ] || { printf '%s\n' 'Checksum mismatch.' >&amp;2; exit 1; }
+tar -xzf "$archive"
+candidate="$(find "$work_dir" -type f -name openusage -perm -u+x -print)"
+[ -n "$candidate" ] &amp;&amp; [ "$(printf '%s\n' "$candidate" | wc -l)" -eq 1 ] || { printf '%s\n' 'Expected one OpenUsage executable.' >&amp;2; exit 1; }
+mkdir -p "$HOME/.local/bin"
+install -m 0755 "$candidate" "$HOME/.local/bin/openusage"</code></pre>
+            </details>
+
+            <details class="rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-700 dark:bg-zinc-950" data-testid="machine-usage-macos-guidance">
+                <summary class="cursor-pointer font-medium text-zinc-700 dark:text-zinc-300">{{ __('macOS: automatic app probe') }}</summary>
+                <flux:text class="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+                    {{ __('Capstan probes the OpenUsage app automatically on every collection. OpenUsage app v0.7.15 bundles PostHog, and this Capstan build cannot prove that its telemetry can be disabled, so the app is not the default recommendation. Privacy-sensitive or advanced users can install the verified OpenUsage.sh CLI instead.') }}
+                </flux:text>
+            </details>
+        </section>
+    @endif
+
     <section
         class="space-y-4 rounded-xl border border-zinc-200 bg-zinc-50 p-5 dark:border-zinc-700 dark:bg-zinc-900"
         data-testid="postmaster-onboarding"

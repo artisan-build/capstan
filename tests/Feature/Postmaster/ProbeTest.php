@@ -55,7 +55,7 @@ beforeEach(function (): void {
 
 function probeToken(User $user): string
 {
-    return capstanBoundBearer($user, CapstanCredentialDeclaration::POSTMASTER_POLL)['token'];
+    return capstanBoundBearer($user, CapstanCredentialDeclaration::MACHINE)['token'];
 }
 
 function createProbeNotificationsTable(): void
@@ -729,30 +729,6 @@ test('the probe sweep runs with system authority and never synthesizes a human p
         ->and(auth()->user())->toBeNull();
 });
 
-test('disabling Postmaster voids outstanding probes before re-enable', function (): void {
-    $user = capstanUser();
-    $token = probeToken($user);
-    $this->withToken($token)->postJson('/api/v1/poll', [
-        'presence' => ['ready_inboxes' => []],
-    ])->assertOk();
-
-    config(['capstan.features.postmaster' => false]);
-    Feature::flushCache();
-    $this->artisan('postmaster:probe-sweep')
-        ->expectsOutput('Postmaster disabled; voided 1 outstanding probe(s).')
-        ->assertSuccessful();
-
-    expect(SpokeProbe::query()->count())->toBe(0)
-        ->and(Spoke::query()->firstOrFail()->probe_status)->toBe(SpokeLiveness::Unknown)
-        ->and($this->notifier->notifications)->toBe([]);
-
-    config(['capstan.features.postmaster' => true]);
-    Feature::flushCache();
-    $this->withToken($token)->postJson('/api/v1/poll', [
-        'presence' => ['ready_inboxes' => []],
-    ])->assertOk()->assertJsonPath('probe_challenge.algorithm', 'sha256');
-});
-
 test('probe timeouts are clamped to the sweep cadence', function (): void {
     config(['capstan.postmaster.probe.timeout_seconds' => 0]);
     Date::setTestNow('2026-08-17 12:00:00');
@@ -765,16 +741,16 @@ test('probe timeouts are clamped to the sweep cadence', function (): void {
     expect($probe->expires_at->diffInSeconds($probe->issued_at, true))->toBe(60.0);
 });
 
-test('a disabled feature never issues a probe or creates a spoke', function (): void {
+test('obsolete feature config cannot prevent a probe or spoke', function (): void {
     config(['capstan.features.postmaster' => false]);
     Feature::flushCache();
     $user = capstanUser();
 
     $this->withToken(probeToken($user))->postJson('/api/v1/poll', [
         'presence' => ['ready_inboxes' => []],
-    ])->assertNotFound()->assertJsonPath('error.code', 'not_found');
+    ])->assertOk()->assertJsonPath('probe_challenge.algorithm', 'sha256');
 
-    expect(Feature::active(Postmaster::class))->toBeFalse()
-        ->and(Spoke::query()->count())->toBe(0)
-        ->and(SpokeProbe::query()->count())->toBe(0);
+    expect(Feature::active(Postmaster::class))->toBeTrue()
+        ->and(Spoke::query()->count())->toBe(1)
+        ->and(SpokeProbe::query()->count())->toBe(1);
 });

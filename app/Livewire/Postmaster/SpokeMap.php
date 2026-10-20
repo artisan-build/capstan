@@ -12,6 +12,7 @@ use App\Models\Team;
 use App\Postmaster\PendingInstallLinks;
 use App\Postmaster\RetireSpoke;
 use ArtisanBuild\BuiltForCloud\Contracts\IdentityContext;
+use ArtisanBuild\BuiltForCloud\RolePolicy;
 use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
 use DomainException;
@@ -69,12 +70,17 @@ class SpokeMap extends Component
         abort_unless($user instanceof User, 401);
 
         $machineBudgets = $budgets->forTeam($user, $selectedTeam['id'], CarbonImmutable::now());
+        $showUsageToolGuidance = RolePolicy::canManageMembers($user->role)
+            && collect($machineBudgets['machines'])->contains(
+                fn (array $machine): bool => in_array($machine['usage']['availability'], ['unknown', 'unavailable'], true),
+            );
 
         return view('livewire.postmaster.spoke-map', [
             'teams' => $this->workTeams,
             'selectedTeam' => $selectedTeam,
             'spokes' => collect($machineBudgets['machines']),
             'machineBudgets' => $machineBudgets,
+            'showUsageToolGuidance' => $showUsageToolGuidance,
         ]);
     }
 

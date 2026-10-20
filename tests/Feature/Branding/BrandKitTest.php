@@ -673,7 +673,7 @@ test('page CSP follows applied asset classes while drafts and legacy artifacts s
     expect($assetResponse->streamedContent())->toBe(brandPng())
         ->and($assetResponse->headers->get('Cache-Control'))->toContain('private', 'no-store')
         ->and($assetResponse->headers->getCookies())->toBe([]);
-    config(['capstan.features.artifacts' => false]);
+    config(['capstan.artifacts.render_origin' => null]);
     Feature::flushCache();
     $featureOffAsset = $this->get('https://render.brand.test/brand-assets/'.$logo->id)
         ->assertNotFound()
@@ -681,7 +681,7 @@ test('page CSP follows applied asset classes while drafts and legacy artifacts s
         ->assertHeaderMissing('Set-Cookie');
     expect($featureOffAsset->getContent())->toBe('')
         ->and($featureOffAsset->headers->getCookies())->toBe([]);
-    config(['capstan.features.artifacts' => true]);
+    config(['capstan.artifacts.render_origin' => 'https://render.brand.test']);
     Feature::flushCache();
     $restoredAsset = $this->get('https://render.brand.test/brand-assets/'.$logo->id)
         ->assertOk()

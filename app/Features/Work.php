@@ -6,6 +6,6 @@ class Work
 {
     public function resolve(): bool
     {
-        return (bool) config('capstan.features.work');
+        return true;
     }
 }

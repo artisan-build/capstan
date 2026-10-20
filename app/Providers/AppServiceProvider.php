@@ -51,10 +51,7 @@ class AppServiceProvider extends ServiceProvider
         $this->configureDefaults();
 
         // Fork-and-deploy footgun: a non-UTC APP_TIMEZONE breaks every envelope signature.
-        // Config, not Pennant's store, is the source of truth for the flag (D23).
-        if (config('capstan.features.postmaster')) {
-            PostmasterClock::assertUtc();
-        }
+        PostmasterClock::assertUtc();
     }
 
     /**

@@ -688,7 +688,7 @@ test('an oversized legacy message is explicitly omitted and pagination advances'
         ->and(data_get($second, 'items.0.content_omitted'))->toBeFalse();
 });
 
-test('feature gating and unsupported subject types fail closed without changing the tool surface', function (): void {
+test('unsupported subject types fail closed without changing the tool surface', function (): void {
     $user = capstanUser();
     $token = capstanMcpReadToken($user);
     $unsupported = capstanMcpReadToken(
@@ -703,17 +703,7 @@ test('feature gating and unsupported subject types fail closed without changing 
         ->assertJsonPath('result.isError', true)
         ->assertJsonPath('result.content.0.text', 'This MCP principal is not supported.');
 
-    config(['capstan.features.postmaster' => false]);
-    Feature::flushCache();
     expect(capstanMcpReadList($token)->json('result.tools.*.name'))->toHaveCount(12);
-    capstanMcpReadCall('postmaster_spokes', (object) [], $token)
-        ->assertOk()
-        ->assertJsonPath('result.isError', true)
-        ->assertJsonPath('result.content.0.text', 'Postmaster is unavailable.');
-    capstanMcpReadCall('postmaster_messages', ['inbox' => 'missing'], $token)
-        ->assertOk()
-        ->assertJsonPath('result.isError', true)
-        ->assertJsonPath('result.content.0.text', 'Postmaster is unavailable.');
 });
 
 test('runtime validation rejects list numeric null unknown malformed and oversized arguments', function (): void {

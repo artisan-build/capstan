@@ -80,7 +80,7 @@ test('active members see separate items latest milestones claimant and liveness 
     }
 });
 
-test('sidebar and desktop mobile header Work navigation are feature gated and structurally current', function (): void {
+test('sidebar and desktop mobile header Work navigation is structurally current', function (): void {
     $user = capstanUser();
     $sidebar = $this->actingAsVersioned($user)->get(route('work.index'))->assertOk();
     $tags = workNavigationTags($sidebar->content());
@@ -95,12 +95,6 @@ test('sidebar and desktop mobile header Work navigation are feature gated and st
     }
     $dashboard = $this->get(route('bfc.dashboard'))->assertOk();
     expect(workNavigationTags($dashboard->content())[0])->not->toContain('aria-current="page"');
-    config(['capstan.features.work' => false]);
-    Feature::flushCache();
-    $this->get(route('work.index'))->assertNotFound();
-    foreach ([route('bfc.dashboard'), '/_tests/work-header'] as $path) {
-        expect(workNavigationTags($this->get($path)->assertOk()->content()))->toBe([]);
-    }
 });
 
 test('Work page requires active product admission and guards both mount and later renders', function (): void {
@@ -108,12 +102,7 @@ test('Work page requires active product admission and guards both mount and late
     $user = capstanUser();
     $this->actingAsVersioned($user);
     $component = Livewire::test(Index::class)->assertOk()->assertSeeHtml('data-testid="work-board"');
-    config(['capstan.features.work' => false]);
-    Feature::flushCache();
-    $component->call('$refresh')->assertNotFound();
-    Livewire::test(Index::class)->assertNotFound();
-    config(['capstan.features.work' => true]);
-    Feature::flushCache();
+    $component->call('$refresh')->assertOk();
     $user->forceFill(['status' => 'inactive'])->save();
     Livewire::test(Index::class)->assertForbidden();
     $user->forceFill(['status' => 'active'])->save();
@@ -177,15 +166,6 @@ test('addressed users see escaped escalations and page answers recheck feature a
         ->assertDontSee('<b>Continue</b>', false)
         ->assertDontSee('Foreign question');
 
-    $component = Livewire::actingAs($user)->test(Index::class)
-        ->set('answers.'.$escalation->id, '<svg onload=alert(1)>');
-    config(['capstan.features.work' => false]);
-    Feature::flushCache();
-    $component->call('answerEscalation', $escalation->id)->assertNotFound();
-    expect($escalation->fresh()->answered_at)->toBeNull();
-
-    config(['capstan.features.work' => true]);
-    Feature::flushCache();
     Livewire::actingAs($user)->test(Index::class)
         ->set('answers.'.$escalation->id, '<svg onload=alert(1)>')
         ->call('answerEscalation', $escalation->id)
@@ -195,11 +175,7 @@ test('addressed users see escaped escalations and page answers recheck feature a
         ->and($other->fresh()->answered_at)->toBeNull();
 });
 
-test('turning Work off changes nothing outside Work', function (): void {
-    // AC9's last clause, "and nothing else in the app changes", had no test at all: as written it is not
-    // assertable, so this bounds it. The probes go through the components, because the HTTP routes redirect
-    // at managed-auth middleware before any application guard runs — a route-status comparison would be two
-    // 302s agreeing and could not fail.
+test('obsolete Work config changes neither Work nor other surfaces', function (): void {
     config(['capstan.features.artifacts' => true, 'capstan.features.postmaster' => true]);
     Feature::flushCache();
     $user = capstanUser();
@@ -223,5 +199,6 @@ test('turning Work off changes nothing outside Work', function (): void {
     Feature::flushCache();
 
     expect($probe())->toBe($withWork)
-        ->and(Feature::active(Work::class))->toBeFalse();
+        ->and(Feature::active(Work::class))->toBeTrue()
+        ->and($this->get(route('work.index'))->assertOk());
 });

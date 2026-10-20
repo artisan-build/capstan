@@ -44,7 +44,7 @@ function authenticatedReplacementCredential(User $user, string $token): BoundBea
         'HTTP_X_CAPSTAN_ACTOR_ID' => (string) $user->getKey(),
     ]);
     $credential = resolve(BoundBearerCredentialAuthenticator::class)
-        ->authenticate($request, CapstanCredentialDeclaration::POSTMASTER_POLL);
+        ->authenticate($request, CapstanCredentialDeclaration::MACHINE);
     expect($credential)->toBeInstanceOf(BoundBearerCredential::class);
 
     return $credential;
@@ -52,8 +52,8 @@ function authenticatedReplacementCredential(User $user, string $token): BoundBea
 
 test('reinstall rebinds the existing spoke revokes the old credential and keeps its history', function (): void {
     $user = capstanUser();
-    $old = capstanBoundBearer($user, CapstanCredentialDeclaration::POSTMASTER_POLL);
-    $new = capstanBoundBearer($user, CapstanCredentialDeclaration::POSTMASTER_POLL);
+    $old = capstanBoundBearer($user, CapstanCredentialDeclaration::MACHINE);
+    $new = capstanBoundBearer($user, CapstanCredentialDeclaration::MACHINE);
 
     $this->withToken($old['token'])->withHeader(CapstanCredentialDeclaration::ACTOR_HEADER, (string) $user->id)
         ->postJson('/api/v1/poll', ['presence' => ['ready_inboxes' => []]])->assertOk();
@@ -83,17 +83,17 @@ test('reinstall rebinds the existing spoke revokes the old credential and keeps 
 
 test('missing invalid revoked and foreign old credentials each produce a fresh spoke', function (string $case): void {
     $user = capstanUser();
-    $new = capstanBoundBearer($user, CapstanCredentialDeclaration::POSTMASTER_POLL);
+    $new = capstanBoundBearer($user, CapstanCredentialDeclaration::MACHINE);
     $oldToken = null;
 
     if ($case === 'invalid') {
         $oldToken = 'not-a-valid-token';
     } elseif ($case === 'revoked') {
-        $old = capstanBoundBearer($user, CapstanCredentialDeclaration::POSTMASTER_POLL);
+        $old = capstanBoundBearer($user, CapstanCredentialDeclaration::MACHINE);
         $old['credential']->forceFill(['revoked_at' => now()])->save();
         $oldToken = $old['token'];
     } elseif ($case === 'foreign') {
-        $foreign = capstanBoundBearer(capstanUser(), CapstanCredentialDeclaration::POSTMASTER_POLL);
+        $foreign = capstanBoundBearer(capstanUser(), CapstanCredentialDeclaration::MACHINE);
         $oldToken = $foreign['token'];
     }
 
@@ -105,10 +105,32 @@ test('missing invalid revoked and foreign old credentials each produce a fresh s
         ->toBe($new['credential']->id);
 })->with(['missing', 'invalid', 'revoked', 'foreign']);
 
+test('legacy-purpose credentials cannot prove replacement ownership', function (string $purpose): void {
+    $user = capstanUser();
+    $old = capstanLegacyBoundBearer($user, $purpose);
+    $new = capstanBoundBearer($user, CapstanCredentialDeclaration::MACHINE);
+    $original = Spoke::query()->create([
+        'actor_id' => (string) $user->id,
+        'credential_id' => $old['credential']->id,
+    ]);
+
+    replaceSpokeRequest($this, $user, $new, $old['token'])
+        ->assertOk()
+        ->assertJsonPath('replaced', false);
+
+    expect($original->refresh()->credential_id)->toBe($old['credential']->id)
+        ->and($old['credential']->refresh()->revoked_at)->toBeNull()
+        ->and(Spoke::query()->where('credential_id', $new['credential']->id)->count())->toBe(1)
+        ->and(Spoke::query()->count())->toBe(2);
+})->with([
+    CapstanCredentialDeclaration::POSTMASTER_POLL,
+    CapstanCredentialDeclaration::WORK_DRAIN,
+]);
+
 test('a credential from a retired spoke cannot replace it and instead registers a fresh spoke', function (): void {
     $user = capstanUser();
-    $old = capstanBoundBearer($user, CapstanCredentialDeclaration::POSTMASTER_POLL);
-    $new = capstanBoundBearer($user, CapstanCredentialDeclaration::POSTMASTER_POLL);
+    $old = capstanBoundBearer($user, CapstanCredentialDeclaration::MACHINE);
+    $new = capstanBoundBearer($user, CapstanCredentialDeclaration::MACHINE);
     $spoke = Spoke::query()->create([
         'actor_id' => (string) $user->id,
         'credential_id' => $old['credential']->id,
@@ -126,9 +148,9 @@ test('a credential from a retired spoke cannot replace it and instead registers 
 
 test('two replacements authenticated before cutover leave one live credential bound to the original spoke', function (): void {
     $user = capstanUser();
-    $old = capstanBoundBearer($user, CapstanCredentialDeclaration::POSTMASTER_POLL);
-    $first = capstanBoundBearer($user, CapstanCredentialDeclaration::POSTMASTER_POLL);
-    $second = capstanBoundBearer($user, CapstanCredentialDeclaration::POSTMASTER_POLL);
+    $old = capstanBoundBearer($user, CapstanCredentialDeclaration::MACHINE);
+    $first = capstanBoundBearer($user, CapstanCredentialDeclaration::MACHINE);
+    $second = capstanBoundBearer($user, CapstanCredentialDeclaration::MACHINE);
     $spoke = Spoke::query()->create([
         'actor_id' => (string) $user->id,
         'credential_id' => $old['credential']->id,

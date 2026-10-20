@@ -37,8 +37,7 @@ final class ReplacePostmasterSpokeController extends Controller
             && preg_match('/[\x00-\x1F\x7F]/', $oldToken) !== 1) {
             $oldRequest = clone $request;
             $oldRequest->headers->set('Authorization', 'Bearer '.$oldToken);
-            $oldCredential = $credentials->authenticate($oldRequest, CapstanCredentialDeclaration::MACHINE)
-                ?? $credentials->authenticate($oldRequest, CapstanCredentialDeclaration::POSTMASTER_POLL);
+            $oldCredential = $credentials->authenticate($oldRequest, CapstanCredentialDeclaration::MACHINE);
         }
 
         try {
