@@ -82,6 +82,8 @@ try {
                 (int) $capacity,
                 $now,
                 300,
+                $mode === 'machine-routing' ? ['builder' => 'codex'] : [],
+                $mode === 'machine-routing',
             ),
         );
     }

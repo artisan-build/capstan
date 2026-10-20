@@ -333,6 +333,7 @@ test('legacy rows four and five upgrade in place to machine credentials without 
         ])->assertOk();
         $this->withHeaders(machineUsageHeaders($owner, $fixture['new']))->postJson(route('api.work.claim', $team), [
             'capacity' => 0, 'roles' => ['builder'], 'capabilities' => [],
+            'role_providers' => [], 'current_claimed_item_count' => 0,
         ])->assertOk();
 
         $spoke = $fixture['spoke']->refresh();

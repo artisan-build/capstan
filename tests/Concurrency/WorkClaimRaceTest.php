@@ -1,6 +1,10 @@
 <?php
 
 use App\Enums\WorkItemState;
+use App\Models\MachineTeamWorkSetting;
+use App\Models\MachineWorkPresence;
+use App\Models\Spoke;
+use App\Models\Team;
 use App\Models\WorkItem;
 use App\Models\WorkOrchestratorSeat;
 use App\Models\WorkTask;
@@ -8,6 +12,8 @@ use App\Work\WorkClaimService;
 use App\Work\WorkDrainService;
 use App\Work\WorkItemStateService;
 use App\Work\WorkOrchestrationService;
+use ArtisanBuild\BuiltForCloud\User;
+use ArtisanBuild\BuiltForCloud\UserRole;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -449,6 +455,71 @@ test('conditional claim guard survives a real multiprocess race and the unsafe c
         $unsafeIds = array_merge(...$unsafeResults);
 
         expect(count($unsafeIds))->toBeGreaterThan(count(array_unique($unsafeIds)));
+    } finally {
+        cleanupWorkRaceDatabase($database);
+    }
+});
+
+test('simultaneous pooled contenders cannot bypass the deterministic machine winner on SQLite', function (): void {
+    $database = provisionWorkRaceDatabase();
+
+    try {
+        expect(DB::getDriverName())->toBe('sqlite');
+        $team = Team::query()->create([
+            'name' => 'Deterministic routing race',
+            'slug' => 'deterministic-routing-race',
+            'pool_work' => true,
+        ]);
+        $workers = [];
+        foreach (range(1, 2) as $index) {
+            $user = new User;
+            $user->forceFill([
+                'name' => "Routing worker {$index}",
+                'email' => "routing-worker-{$index}@example.test",
+                'password' => bcrypt('test-created-password'),
+                'role' => UserRole::Member->value,
+                'status' => 'active',
+            ])->save();
+            $machine = Spoke::query()->create([
+                'actor_id' => (string) $user->id,
+                'credential_id' => (string) Str::uuid7(),
+                'last_polled_at' => '2026-10-17 16:00:00',
+                'probe_status' => 'green',
+            ]);
+            MachineTeamWorkSetting::query()->create([
+                'spoke_id' => $machine->id,
+                'team_id' => $team->id,
+                'enabled' => true,
+                'roles' => ['builder'],
+                'capabilities' => ['php'],
+                'role_providers' => ['builder' => 'codex'],
+                'concurrency_ceiling' => 1,
+                'updated_by_actor' => (string) $user->id,
+            ]);
+            MachineWorkPresence::query()->create([
+                'spoke_id' => $machine->id,
+                'team_id' => $team->id,
+                'roles' => ['builder'],
+                'capabilities' => ['php'],
+                'role_providers' => ['builder' => 'codex'],
+                'current_claimed_item_count' => 0,
+                'concurrency_ceiling' => 1,
+                'observed_at' => '2026-10-17 16:00:00',
+            ]);
+            $workers[] = ['actor' => (string) $user->id, 'spoke' => $machine->id];
+        }
+        $task = WorkTask::query()->create([
+            'team_id' => $team->id,
+            'title' => 'One deterministic winner',
+            'required_capabilities' => ['php'],
+            'timebox_minutes' => 30,
+            'creator_actor' => 'race-creator',
+        ]);
+        $item = $task->items()->create(['role' => 'builder']);
+
+        $results = runWorkClaimProcesses('machine-routing', $team->id, $workers, [1, 1], $database['connection']);
+        expect(array_merge(...$results))->toBe([$item->id])
+            ->and($item->fresh()->claimant_spoke_id)->toBe($workers[0]['spoke']);
     } finally {
         cleanupWorkRaceDatabase($database);
     }

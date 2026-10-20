@@ -5,6 +5,8 @@ use App\Enums\SpokeLiveness;
 use App\Enums\SpokeMapStatus;
 use App\Livewire\Postmaster\SpokeMap;
 use App\Models\Inbox;
+use App\Models\MachineTeamWorkSetting;
+use App\Models\MachineWorkSettingChange;
 use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkItem;
@@ -437,7 +439,47 @@ test('rendering several routed spokes uses a bounded query count', function (): 
 
     expect($spokes)->toHaveCount(6)
         ->and($spokes->every(fn (array $spoke): bool => $spoke['inboxes_count'] === 2))->toBeTrue()
-        ->and($queryCount)->toBeLessThanOrEqual(3);
+        ->and($queryCount)->toBeLessThanOrEqual(4);
+});
+
+test('machine owners and managers edit the team Work profile without exposing credential fields', function (): void {
+    $owner = capstanUser(['role' => UserRole::Member->value]);
+    $machine = createMapSpoke($owner, 'profile-machine', now(), SpokeLiveness::Green, 0);
+
+    Livewire::actingAs($owner)->test(SpokeMap::class)
+        ->call('beginEditingWorkProfile', $machine->id)
+        ->assertSeeHtml('data-testid="machine-work-profile-form"')
+        ->set('workEnabled', true)
+        ->set('workRoles', 'builder, reviewer')
+        ->set('workCapabilities', 'php')
+        ->set('workRoleProviders', '{"builder":"codex"}')
+        ->set('workConcurrencyCeiling', 2)
+        ->call('saveWorkProfile', $machine->id)
+        ->assertHasNoErrors();
+
+    $setting = MachineTeamWorkSetting::query()->sole();
+    expect($setting->roles)->toBe(['builder', 'reviewer'])
+        ->and($setting->capabilities)->toBe(['php'])
+        ->and($setting->role_providers)->toBe(['builder' => 'codex'])
+        ->and($setting->concurrency_ceiling)->toBe(2)
+        ->and(MachineWorkSettingChange::query()->count())->toBe(1);
+
+    $admin = capstanUser(['role' => UserRole::Admin->value]);
+    Livewire::actingAs($admin)->test(SpokeMap::class)
+        ->call('beginEditingWorkProfile', $machine->id)
+        ->set('workEnabled', false)
+        ->call('saveWorkProfile', $machine->id)
+        ->assertHasNoErrors();
+    expect($setting->fresh()->enabled)->toBeFalse()
+        ->and(MachineWorkSettingChange::query()->count())->toBe(2);
+
+    $member = capstanUser(['role' => UserRole::Member->value]);
+    Livewire::actingAs($member)->test(SpokeMap::class)
+        ->call('beginEditingWorkProfile', $machine->id)
+        ->assertForbidden();
+
+    $html = $this->actingAsVersioned($owner)->get(route('postmaster.map'))->assertOk()->content();
+    expect($html)->not->toContain($machine->credential_id);
 });
 
 test('map ordering stays in id order after rename and status changes', function (): void {

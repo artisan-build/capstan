@@ -3,6 +3,8 @@
 use App\Auth\CapstanCredentialDeclaration;
 use App\Enums\WorkItemState;
 use App\Livewire\Work\Index;
+use App\Models\MachineTeamWorkSetting;
+use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\TeamWorkPolicyChange;
 use App\Models\WorkItem;
@@ -80,11 +82,32 @@ function poolCreateQueuedItem(Team $team, string $token, array $attributes = [])
 function poolDrainClaim(Team $team, User $user): array
 {
     $drain = capstanBoundBearer($user, CapstanCredentialDeclaration::WORK_DRAIN);
+    $spoke = Spoke::query()->create([
+        'actor_id' => (string) $user->id,
+        'credential_id' => $drain['credential']->id,
+        'last_polled_at' => now(),
+    ]);
+    MachineTeamWorkSetting::query()->create([
+        'spoke_id' => $spoke->id,
+        'team_id' => $team->id,
+        'enabled' => true,
+        'roles' => ['builder'],
+        'capabilities' => [],
+        'role_providers' => [],
+        'concurrency_ceiling' => 25,
+        'updated_by_actor' => (string) $user->id,
+    ]);
 
     return test()->withHeaders([
         'Authorization' => 'Bearer '.$drain['token'],
         CapstanCredentialDeclaration::ACTOR_HEADER => (string) $user->id,
-    ])->postJson(route('api.work.claim', $team), ['capacity' => 25, 'roles' => ['builder'], 'capabilities' => []])
+    ])->postJson(route('api.work.claim', $team), [
+        'capacity' => 25,
+        'roles' => ['builder'],
+        'capabilities' => [],
+        'role_providers' => [],
+        'current_claimed_item_count' => 0,
+    ])
         ->assertOk()->json('items.*.id');
 }
 
