@@ -226,6 +226,10 @@ test('projection and writer share the selected-team Work-profile permission', fu
     expect($profiles->put($sameTeamMachine, $team, $manager, $profile, now()))->toBeTrue();
     expect(fn () => $profiles->put($foreignMachine, $team, $manager, $profile, now()))
         ->toThrow(AuthorizationException::class);
+    expect(fn () => $profiles->put($retiredMachine, $team, $manager, $profile, now()))
+        ->toThrow(AuthorizationException::class);
+    expect(fn () => $profiles->put($syntheticMachine, $team, $manager, $profile, now()))
+        ->toThrow(AuthorizationException::class);
 
     $otherTeamManager = capstanUser(['role' => UserRole::Owner->value]);
     DB::table('team_user')->where('team_id', $team->id)->where('user_id', $otherTeamManager->id)->delete();

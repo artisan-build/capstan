@@ -231,7 +231,8 @@ final class MachineWorkProfiles
                 $ownerBelongsToTeam,
             );
 
-            $candidates[$machine->id] = $hasExistingSetting || $ownerAnchorsFirstProfile;
+            $candidates[$machine->id] = $this->isPhysicalAndCurrent($machine)
+                && ($hasExistingSetting || $ownerAnchorsFirstProfile);
             $permissions[$machine->id] = $this->permitted(
                 $machine,
                 $actor,
@@ -253,7 +254,10 @@ final class MachineWorkProfiles
         bool $hasExistingSetting,
         bool $ownerAnchorsFirstProfile,
     ): bool {
-        if ($machine->orphaned_at !== null || ! $actorAdmitted || ! $actorBelongsToTeam) {
+        if (! $this->isPhysicalAndCurrent($machine)
+            || $machine->orphaned_at !== null
+            || ! $actorAdmitted
+            || ! $actorBelongsToTeam) {
             return false;
         }
 
@@ -274,6 +278,11 @@ final class MachineWorkProfiles
             && $owner instanceof User
             && $ownerAdmitted
             && $ownerBelongsToTeam;
+    }
+
+    private function isPhysicalAndCurrent(Spoke $machine): bool
+    {
+        return $machine->credential_backed && $machine->retired_at === null;
     }
 
     public function isAdmitted(User $actor): bool
