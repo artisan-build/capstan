@@ -32,14 +32,18 @@ final class MachineWorkRuntime
         array $roles,
         array $capabilities,
         array $roleProviders,
+        int $requestedCapacity,
         int $reportedClaimedCount,
         CarbonImmutable $now,
     ): ?MachineWorkPresence {
+        if ($requestedCapacity < 0 || $requestedCapacity > MachineRecordBounds::MAX_PROFILE_ENTRIES) {
+            throw new InvalidArgumentException('The requested capacity is invalid.');
+        }
         if ($reportedClaimedCount < 0 || $reportedClaimedCount > MachineRecordBounds::MAX_PROFILE_ENTRIES) {
             throw new InvalidArgumentException('The reported claimed item count is invalid.');
         }
 
-        return DB::transaction(function () use ($teamId, $actorId, $credentialId, $roles, $capabilities, $roleProviders, $now): ?MachineWorkPresence {
+        return DB::transaction(function () use ($teamId, $actorId, $credentialId, $roles, $capabilities, $roleProviders, $requestedCapacity, $now): ?MachineWorkPresence {
             $machine = Spoke::query()->workEligible()
                 ->where('actor_id', $actorId)
                 ->where('credential_id', $credentialId)
@@ -66,6 +70,7 @@ final class MachineWorkRuntime
                 'capabilities' => $this->sorted($capabilities),
                 'role_providers' => $this->sortedMap($roleProviders),
                 'current_claimed_item_count' => min($current, $setting->concurrency_ceiling),
+                'available_capacity' => min($requestedCapacity, max(0, $setting->concurrency_ceiling - $current)),
                 'concurrency_ceiling' => $setting->concurrency_ceiling,
                 'observed_at' => $now,
             ])->save();
@@ -84,8 +89,11 @@ final class MachineWorkRuntime
             return;
         }
 
+        $current = min($this->authoritativeClaimedCount($presence->spoke_id), $setting->concurrency_ceiling);
+        $newlyClaimed = max(0, $current - $presence->current_claimed_item_count);
         $presence->forceFill([
-            'current_claimed_item_count' => min($this->authoritativeClaimedCount($presence->spoke_id), $setting->concurrency_ceiling),
+            'current_claimed_item_count' => $current,
+            'available_capacity' => max(0, min($presence->available_capacity - $newlyClaimed, $setting->concurrency_ceiling - $current)),
             'concurrency_ceiling' => $setting->concurrency_ceiling,
         ])->save();
     }

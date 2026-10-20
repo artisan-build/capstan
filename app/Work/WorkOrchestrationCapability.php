@@ -41,7 +41,7 @@ final readonly class WorkOrchestrationCapability
         return $this->authorised($context, $now, function (WorkTask $parent) use ($underTaskId, $attributes, $brief, $context): WorkTask {
             $under = $this->target($parent, $underTaskId, allowParent: true);
             $team = Team::query()->whereKey($parent->team_id)->lockForUpdate()->firstOrFail();
-            if (! array_key_exists('user_actor_address', $attributes) && ! $team->pool_work) {
+            if (! $team->pool_work) {
                 $attributes['user_actor_address'] = $under->user_actor_address ?? $under->creator_actor;
             }
             if (isset($attributes['device_spoke_id']) && ! Spoke::query()->workEligible()

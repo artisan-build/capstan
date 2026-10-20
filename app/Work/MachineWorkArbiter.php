@@ -32,7 +32,8 @@ final readonly class MachineWorkArbiter
 
         foreach ($presences as $presence) {
             if (! in_array($role, $presence->roles, true)
-                || array_diff($requiredCapabilities, $presence->capabilities) !== []) {
+                || array_diff($requiredCapabilities, $presence->capabilities) !== []
+                || $presence->available_capacity < 1) {
                 continue;
             }
 

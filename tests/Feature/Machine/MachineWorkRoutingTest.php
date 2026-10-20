@@ -204,16 +204,33 @@ test('authoritative claims enforce concurrency even when the machine reports zer
         ->and(MachineWorkPresence::query()->sole()->current_claimed_item_count)->toBe(1);
 });
 
+test('a preferred capacity zero machine cannot starve a capacity positive machine', function (): void {
+    $team = Team::default();
+    $team->update(['pool_work' => true]);
+    $preferred = routingMachine(team: $team, spoke: ['probe_status' => SpokeLiveness::Green]);
+    $available = routingMachine(team: $team, spoke: ['probe_status' => SpokeLiveness::Green]);
+    $item = routingItem($team);
+
+    routingClaim($preferred, ['capacity' => 0, 'current_claimed_item_count' => 0])
+        ->assertOk()->assertExactJson(['items' => []]);
+    routingClaim($available, ['capacity' => 1, 'current_claimed_item_count' => 25])
+        ->assertOk()->assertJsonPath('items.0.id', $item->id)->assertJsonCount(1, 'items');
+
+    $presence = MachineWorkPresence::query()->where('spoke_id', $preferred['spoke']->id)->sole();
+    expect($presence->available_capacity)->toBe(0)
+        ->and($item->fresh()->claimant_spoke_id)->toBe($available['spoke']->id);
+});
+
 test('presence is replaced and expires at exactly 180 seconds', function (): void {
     $machine = routingMachine();
     $runtime = resolve(MachineWorkRuntime::class);
-    $runtime->record($machine['team']->id, (string) $machine['user']->id, $machine['credential']->id, ['builder'], ['php'], [], 0, CarbonImmutable::now());
+    $runtime->record($machine['team']->id, (string) $machine['user']->id, $machine['credential']->id, ['builder'], ['php'], [], 1, 0, CarbonImmutable::now());
     $presence = MachineWorkPresence::query()->sole();
     expect($runtime->isFresh($presence, CarbonImmutable::now()->addSeconds(179)))->toBeTrue()
         ->and($runtime->isFresh($presence, CarbonImmutable::now()->addSeconds(180)))->toBeFalse();
 
     Date::setTestNow(now()->addSeconds(60));
-    $runtime->record($machine['team']->id, (string) $machine['user']->id, $machine['credential']->id, ['builder'], [], [], 0, CarbonImmutable::now());
+    $runtime->record($machine['team']->id, (string) $machine['user']->id, $machine['credential']->id, ['builder'], [], [], 1, 0, CarbonImmutable::now());
     expect(MachineWorkPresence::query()->count())->toBe(1)
         ->and(MachineWorkPresence::query()->sole()->capabilities)->toBe([])
         ->and(MachineWorkPresence::query()->sole()->observed_at->toISOString())->toBe('2026-10-20T12:01:00.000000Z');
@@ -224,7 +241,7 @@ test('both candidate discovery and the guarded write reject a disabled profile',
     routingItem($machine['team']);
     resolve(MachineWorkRuntime::class)->record(
         $machine['team']->id, (string) $machine['user']->id, $machine['credential']->id,
-        ['builder'], ['php'], ['builder' => 'codex'], 0, CarbonImmutable::now(),
+        ['builder'], ['php'], ['builder' => 'codex'], 1, 0, CarbonImmutable::now(),
     );
     $claims = resolve(WorkClaimService::class);
 
@@ -250,6 +267,7 @@ function routingPresence(array $machine, array $attributes = []): MachineWorkPre
         'capabilities' => ['php'],
         'role_providers' => ['builder' => 'codex'],
         'current_claimed_item_count' => 0,
+        'available_capacity' => 1,
         'concurrency_ceiling' => $machine['setting']->concurrency_ceiling,
         'observed_at' => now(),
     ], $attributes));

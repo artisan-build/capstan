@@ -51,6 +51,7 @@ final readonly class WorkDrainService
                 $roles,
                 $capabilities,
                 $roleProviders,
+                $capacity,
                 $reportedClaimedCount,
                 $now,
             );

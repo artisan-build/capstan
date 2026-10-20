@@ -71,6 +71,15 @@ test('new children inherit their parent owner only while pooling is off and poli
     ], CarbonImmutable::now());
     expect(WorkTask::query()->findOrFail($owned['id'])->user_actor_address)->toBe((string) $parentOwner->id);
 
+    $differentActor = capstanUser();
+    $explicitlyRedirected = $surface->act($context, 'create_child', [
+        'under_task_id' => $parent->id,
+        'title' => 'Caller-directed child',
+        'brief' => 'Caller-directed brief',
+        'user_actor_address' => (string) $differentActor->id,
+    ], CarbonImmutable::now());
+    expect(WorkTask::query()->findOrFail($explicitlyRedirected['id'])->user_actor_address)->toBe((string) $parentOwner->id);
+
     $team->update(['pool_work' => true]);
     $pooled = $surface->act($context, 'create_child', [
         'under_task_id' => $parent->id,

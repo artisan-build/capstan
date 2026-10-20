@@ -13,6 +13,16 @@
         <flux:subheading>{{ __('Registered CLI installations and their current routing health.') }}</flux:subheading>
     </div>
 
+    <flux:field data-testid="machine-team-selector">
+        <flux:label>{{ __('Work team') }}</flux:label>
+        <flux:select wire:model.live="selectedTeamId">
+            @foreach ($teams as $team)
+                <option value="{{ $team['id'] }}">{{ $team['name'] }}</option>
+            @endforeach
+        </flux:select>
+        <flux:description>{{ __('Work profiles shown below apply to :team.', ['team' => $selectedTeam['name']]) }}</flux:description>
+    </flux:field>
+
     <section
         class="space-y-4 rounded-xl border border-zinc-200 bg-zinc-50 p-5 dark:border-zinc-700 dark:bg-zinc-900"
         data-testid="postmaster-onboarding"
@@ -68,7 +78,7 @@
                         data-spoke-id="{{ $spoke['id'] }}"
                         data-status="{{ $spoke['status']->value }}"
                         data-inbox-count="{{ $spoke['inboxes_count'] }}"
-                        wire:key="spoke-{{ $spoke['id'] }}"
+                        wire:key="spoke-{{ $selectedTeam['id'] }}-{{ $spoke['id'] }}"
                     >
                         <div class="flex min-w-0 items-start gap-3">
                             <span

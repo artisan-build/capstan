@@ -442,13 +442,39 @@ test('rendering several routed spokes uses a bounded query count', function (): 
         ->and($queryCount)->toBeLessThanOrEqual(4);
 });
 
-test('machine owners and managers edit the team Work profile without exposing credential fields', function (): void {
+test('machine owners and managers edit only the selected team Work profile without exposing credential fields', function (): void {
     $owner = capstanUser(['role' => UserRole::Member->value]);
     $machine = createMapSpoke($owner, 'profile-machine', now(), SpokeLiveness::Green, 0);
+    $defaultTeam = Team::default();
+    $selectedTeam = Team::query()->create(['name' => 'Selected Work team', 'slug' => 'selected-work-team']);
+    $defaultSetting = MachineTeamWorkSetting::query()->create([
+        'spoke_id' => $machine->id,
+        'team_id' => $defaultTeam->id,
+        'enabled' => true,
+        'roles' => ['builder'],
+        'capabilities' => [],
+        'role_providers' => [],
+        'concurrency_ceiling' => 1,
+        'updated_by_actor' => (string) $owner->id,
+    ]);
+    $selectedSetting = MachineTeamWorkSetting::query()->create([
+        'spoke_id' => $machine->id,
+        'team_id' => $selectedTeam->id,
+        'enabled' => false,
+        'roles' => ['reviewer'],
+        'capabilities' => [],
+        'role_providers' => [],
+        'concurrency_ceiling' => 1,
+        'updated_by_actor' => (string) $owner->id,
+    ]);
 
     Livewire::actingAs($owner)->test(SpokeMap::class)
+        ->assertSeeHtml('data-testid="machine-team-selector"')
+        ->set('selectedTeamId', $selectedTeam->id)
         ->call('beginEditingWorkProfile', $machine->id)
         ->assertSeeHtml('data-testid="machine-work-profile-form"')
+        ->assertSet('workEnabled', false)
+        ->assertSet('workRoles', 'reviewer')
         ->set('workEnabled', true)
         ->set('workRoles', 'builder, reviewer')
         ->set('workCapabilities', 'php')
@@ -457,24 +483,30 @@ test('machine owners and managers edit the team Work profile without exposing cr
         ->call('saveWorkProfile', $machine->id)
         ->assertHasNoErrors();
 
-    $setting = MachineTeamWorkSetting::query()->sole();
-    expect($setting->roles)->toBe(['builder', 'reviewer'])
-        ->and($setting->capabilities)->toBe(['php'])
-        ->and($setting->role_providers)->toBe(['builder' => 'codex'])
-        ->and($setting->concurrency_ceiling)->toBe(2)
+    $selectedSetting->refresh();
+    $defaultSetting->refresh();
+    expect($selectedSetting->roles)->toBe(['builder', 'reviewer'])
+        ->and($selectedSetting->capabilities)->toBe(['php'])
+        ->and($selectedSetting->role_providers)->toBe(['builder' => 'codex'])
+        ->and($selectedSetting->concurrency_ceiling)->toBe(2)
+        ->and($defaultSetting->roles)->toBe(['builder'])
+        ->and($defaultSetting->enabled)->toBeTrue()
         ->and(MachineWorkSettingChange::query()->count())->toBe(1);
 
     $admin = capstanUser(['role' => UserRole::Admin->value]);
     Livewire::actingAs($admin)->test(SpokeMap::class)
+        ->set('selectedTeamId', $selectedTeam->id)
         ->call('beginEditingWorkProfile', $machine->id)
         ->set('workEnabled', false)
         ->call('saveWorkProfile', $machine->id)
         ->assertHasNoErrors();
-    expect($setting->fresh()->enabled)->toBeFalse()
+    expect($selectedSetting->refresh()->enabled)->toBeFalse()
+        ->and($defaultSetting->refresh()->enabled)->toBeTrue()
         ->and(MachineWorkSettingChange::query()->count())->toBe(2);
 
     $member = capstanUser(['role' => UserRole::Member->value]);
     Livewire::actingAs($member)->test(SpokeMap::class)
+        ->set('selectedTeamId', $selectedTeam->id)
         ->call('beginEditingWorkProfile', $machine->id)
         ->assertForbidden();
 

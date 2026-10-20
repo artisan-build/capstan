@@ -34,6 +34,13 @@ class SpokeMap extends Component
 
     public ?int $editingWorkSpokeId = null;
 
+    public ?int $editingWorkTeamId = null;
+
+    public ?int $selectedTeamId = null;
+
+    /** @var list<array{id: int, name: string}> */
+    public array $workTeams = [];
+
     public bool $workEnabled = true;
 
     public string $workRoles = '';
@@ -47,15 +54,30 @@ class SpokeMap extends Component
     public function mount(): void
     {
         $this->guardFeature();
+        $teams = Team::query()->orderByDesc('is_default')->orderBy('name')->orderBy('id')->get(['id', 'name']);
+        foreach ($teams as $team) {
+            $this->workTeams[] = ['id' => $team->id, 'name' => $team->name];
+        }
+        $this->selectedTeamId = $this->workTeams[0]['id'] ?? null;
     }
 
     public function render(): View
     {
         $this->guardFeature();
 
+        $selectedTeam = collect($this->workTeams)->firstWhere('id', $this->selectedTeamId);
+        abort_unless(is_array($selectedTeam), 404);
+
         return view('livewire.postmaster.spoke-map', [
-            'spokes' => collect($this->spokes()),
+            'teams' => $this->workTeams,
+            'selectedTeam' => $selectedTeam,
+            'spokes' => collect($this->spokes($selectedTeam['id'])),
         ]);
+    }
+
+    public function updatedSelectedTeamId(): void
+    {
+        $this->cancelEditingWorkProfile();
     }
 
     public function generateOnboardingSnippet(PendingInstallLinks $links, IdentityContext $identity): void
@@ -124,7 +146,8 @@ class SpokeMap extends Component
     {
         $this->guardFeature();
         $spoke = $this->manageableWorkSpoke($spokeId);
-        $setting = $spoke->workSettings()->where('team_id', Team::default()->id)->first();
+        $team = $this->selectedTeam();
+        $setting = $spoke->workSettings()->where('team_id', $team->id)->first();
         $profile = $setting === null ? $defaults->default() : [
             'enabled' => $setting->enabled,
             'roles' => $setting->roles,
@@ -134,6 +157,7 @@ class SpokeMap extends Component
         ];
 
         $this->editingWorkSpokeId = $spoke->id;
+        $this->editingWorkTeamId = $team->id;
         $this->workEnabled = $profile['enabled'];
         $this->workRoles = implode(', ', $profile['roles']);
         $this->workCapabilities = implode(', ', $profile['capabilities']);
@@ -143,7 +167,7 @@ class SpokeMap extends Component
 
     public function cancelEditingWorkProfile(): void
     {
-        $this->reset('editingWorkSpokeId', 'workRoles', 'workCapabilities', 'workRoleProviders');
+        $this->reset('editingWorkSpokeId', 'editingWorkTeamId', 'workRoles', 'workCapabilities', 'workRoleProviders');
         $this->workEnabled = true;
         $this->workConcurrencyCeiling = 1;
         $this->resetValidation('workProfile');
@@ -153,6 +177,7 @@ class SpokeMap extends Component
     {
         $this->guardFeature();
         $spoke = $this->manageableWorkSpoke($spokeId);
+        abort_unless($this->editingWorkSpokeId === $spoke->id && $this->editingWorkTeamId !== null, 409);
         $validated = $this->validate([
             'workEnabled' => ['required', 'boolean'],
             'workRoles' => ['present', 'string', 'max:1624'],
@@ -168,8 +193,9 @@ class SpokeMap extends Component
             }
             $actor = request()->user();
             abort_unless($actor instanceof User, 401);
+            $team = Team::query()->findOrFail($this->editingWorkTeamId);
             /** @var array<string, string> $providers */
-            $profiles->put($spoke, Team::default(), $actor, [
+            $profiles->put($spoke, $team, $actor, [
                 'enabled' => $validated['workEnabled'],
                 'roles' => $this->commaList($validated['workRoles']),
                 'capabilities' => $this->commaList($validated['workCapabilities']),
@@ -200,12 +226,11 @@ class SpokeMap extends Component
      *     status: SpokeMapStatus
      * }>
      */
-    private function spokes(): array
+    private function spokes(int $teamId): array
     {
-        $team = Team::default();
         /** @var Collection<int, Spoke> $spokes */
         $spokes = Spoke::query()->whereNull('retired_at')
-            ->with(['workSettings' => fn ($query) => $query->where('team_id', $team->id)])
+            ->with(['workSettings' => fn ($query) => $query->where('team_id', $teamId)])
             ->withCount('inboxes')->orderBy('id')->get();
         $ownerNames = $this->ownerNames($spokes);
         $baseNames = $spokes->mapWithKeys(fn (Spoke $spoke): array => [
@@ -327,6 +352,11 @@ class SpokeMap extends Component
         abort_unless(hash_equals((string) $user->getKey(), $spoke->actor_id) || RolePolicy::canManageMembers($user->role), 403);
 
         return $spoke;
+    }
+
+    private function selectedTeam(): Team
+    {
+        return Team::query()->findOrFail($this->selectedTeamId);
     }
 
     /** @return list<string> */
