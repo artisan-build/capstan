@@ -3,6 +3,7 @@
 namespace App\Support;
 
 use App\Http\ApiErrorException;
+use App\Machine\MachineConditionNotifier;
 use App\Models\Spoke;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
@@ -10,6 +11,8 @@ use Illuminate\Support\Str;
 
 final class BoundCredentialSpokeResolver
 {
+    public function __construct(private readonly MachineConditionNotifier $conditions) {}
+
     public function resolve(
         string $actorId,
         string $credentialId,
@@ -36,6 +39,7 @@ final class BoundCredentialSpokeResolver
                     'inactive_at' => null,
                     'updated_at' => $now,
                 ])->save();
+                $this->conditions->recover($existing, MachineConditionNotifier::INACTIVE, $now);
             }
 
             $this->refreshDeviceName($existing, $deviceName, $now);

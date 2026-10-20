@@ -11,6 +11,8 @@ use App\Http\Controllers\Controller;
 use App\Http\Middleware\AuthenticateBoundCredential;
 use App\Machine\ApplyPendingMachineProfile;
 use App\Machine\IngestMachineUsage;
+use App\Machine\MachineConditionNotifier;
+use App\Machine\MachineFindingPayload;
 use App\Machine\MachineUsagePayload;
 use App\Models\Envelope;
 use App\Models\Inbox;
@@ -61,6 +63,8 @@ class PollController extends Controller
         ApplyPendingMachineProfile $pendingProfiles,
         MachineUsagePayload $usagePayload,
         IngestMachineUsage $usageIngest,
+        MachineFindingPayload $findingPayload,
+        MachineConditionNotifier $conditionNotifier,
     ): JsonResponse {
         $credential = AuthenticateBoundCredential::credential($request);
         $actorId = AuthenticateBoundCredential::actorId($request);
@@ -85,6 +89,9 @@ class PollController extends Controller
                 $usageInvalid = true;
             }
         }
+
+        $hasFindings = property_exists($payload, 'findings');
+        $findings = $findingPayload->parse($hasFindings ? $payload->findings : null);
 
         $validation = $this->validatePayload($payload);
 
@@ -175,6 +182,31 @@ class PollController extends Controller
                 }
             }
             $result['payload']['usage_status'] = $usageStatus;
+        }
+
+        if ($hasFindings) {
+            $accepted = 0;
+            foreach ($findings['accepted'] as $finding) {
+                try {
+                    // observed_at orders the bounded client events; the consequential
+                    // transition timestamp remains server-authored at processing time.
+                    $changed = $finding['recovered']
+                        ? $conditionNotifier->recover($result['spoke'], $finding['code'], CarbonImmutable::now())
+                        : $conditionNotifier->open($result['spoke'], $finding['code'], CarbonImmutable::now());
+                    $accepted += $changed ? 1 : 0;
+                } catch (Throwable $exception) {
+                    Log::warning('Machine finding transition was ignored.', [
+                        'spoke_id' => $result['spoke']->id,
+                        'finding_code' => $finding['code'],
+                        'exception_class' => $exception::class,
+                    ]);
+                }
+            }
+            $result['payload']['findings_status'] = [
+                'accepted_transitions' => $accepted,
+                'ignored_unknown' => $findings['ignored_unknown'],
+                'ignored_invalid' => $findings['ignored_invalid'],
+            ];
         }
 
         return new JsonResponse($result['payload']);

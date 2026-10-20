@@ -8,6 +8,7 @@ use App\Models\Envelope;
 use App\Models\Inbox;
 use App\Models\Spoke;
 use App\Models\SpokeProbe;
+use App\Postmaster\DatabaseProbeFailureNotifier;
 use App\Postmaster\ProbeFailureNotifier;
 use App\Postmaster\ProbeManager;
 use ArtisanBuild\BuiltForCloud\SystemAuthorityContext;
@@ -137,6 +138,40 @@ test('a wrong digest fails immediately and notifies exactly once', function (): 
     ])->assertOk();
 
     expect($this->notifier->notifications)->toHaveCount(1);
+});
+
+test('the production probe notifier persists one failure and one successful recovery for the machine owner', function (): void {
+    Date::setTestNow('2026-10-20 12:00:00');
+    config(['capstan.postmaster.probe.backoff_seconds' => 0]);
+    $this->app->forgetInstance(ProbeFailureNotifier::class);
+    $this->app->bind(ProbeFailureNotifier::class, DatabaseProbeFailureNotifier::class);
+    $owner = capstanUser(['name' => 'Probe owner']);
+    $token = probeToken($owner);
+    $first = $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+    ])->assertOk()->json('probe_challenge');
+
+    Date::setTestNow('2026-10-20 12:00:01');
+    $second = $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+        'probe_response' => ['probe_id' => $first['probe_id'], 'digest' => str_repeat('0', 64)],
+    ])->assertOk()->json('probe_challenge');
+    expect($second)->toBeArray()
+        ->and($owner->fresh()->notifications)->toHaveCount(1)
+        ->and($owner->fresh()->notifications->sole()->data['state_transition'])->toBe('started');
+
+    Date::setTestNow('2026-10-20 12:00:02');
+    $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+        'probe_response' => [
+            'probe_id' => $second['probe_id'],
+            'digest' => hash('sha256', $second['nonce']),
+        ],
+    ])->assertOk();
+
+    expect($owner->fresh()->notifications)->toHaveCount(2)
+        ->and($owner->fresh()->notifications->pluck('data.state_transition')->sort()->values()->all())
+        ->toBe(['recovered', 'started']);
 });
 
 test('malformed probe responses return the api validation envelope without changing probe state', function (): void {

@@ -9,6 +9,7 @@ use App\Mcp\Tools\GetBrandKitTool;
 use App\Mcp\Tools\GetPageTool;
 use App\Mcp\Tools\ListLayoutsTool;
 use App\Mcp\Tools\ListPagesTool;
+use App\Mcp\Tools\MachineBudgetsTool;
 use App\Mcp\Tools\PostmasterMessagesTool;
 use App\Mcp\Tools\PostmasterSpokesTool;
 use App\Mcp\Tools\PreviewBrandDraftTool;
@@ -48,6 +49,7 @@ final class CapstanServer extends Server
         Tools\AnswerEscalationTool::class,
         Tools\OrchestrateTool::class,
         PostmasterSpokesTool::class,
+        MachineBudgetsTool::class,
         PostmasterMessagesTool::class,
         SendPostmasterMessageTool::class,
         AckPostmasterMessagesTool::class,

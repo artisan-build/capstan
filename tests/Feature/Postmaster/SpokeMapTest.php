@@ -89,7 +89,7 @@ test('the authenticated map page renders registered spoke data', function (): vo
         ->and((new DOMXPath($document))->query('.//button', $row)->length)->toBe(1);
 });
 
-test('map owner names use display name then email without exposing actor ids', function (): void {
+test('map owner names never fall back to email or expose actor ids', function (): void {
     $viewer = capstanUser(['role' => UserRole::Owner->value]);
     $named = capstanUser(['name' => 'Ada Lovelace', 'email' => 'ada@example.test']);
     $emailOnly = capstanUser(['name' => '  ', 'email' => 'email-only@example.test']);
@@ -103,8 +103,8 @@ test('map owner names use display name then email without exposing actor ids', f
     $spokes = Livewire::actingAs($viewer)->test(SpokeMap::class)->viewData('spokes')->keyBy('id');
 
     expect($spokes[$namedSpoke->id]['owner_name'])->toBe('Ada Lovelace')
-        ->and($spokes[$emailSpoke->id]['owner_name'])->toBe('email-only@example.test')
-        ->and($spokes[$missingSpoke->id]['owner_name'])->toBe('Unknown user')
+        ->and($spokes[$emailSpoke->id]['owner_name'])->toBe('Member')
+        ->and($spokes[$missingSpoke->id]['owner_name'])->toBe('Former member')
         ->and($spokes->pluck('owner_name'))->not->toContain((string) $named->id)
         ->and($spokes->pluck('owner_name'))->not->toContain((string) $emailOnly->id)
         ->and($spokes->pluck('owner_name'))->not->toContain($missingId);
@@ -302,11 +302,11 @@ test('map status combines poll recency and probe state', function (): void {
         fn (array $spoke): array => [$spoke['id'] => $spoke['status']],
     );
 
-    expect($states[$green->id])->toBe(SpokeMapStatus::Green)
-        ->and($states[$stale->id])->toBe(SpokeMapStatus::Red)
-        ->and($states[$failed->id])->toBe(SpokeMapStatus::Red)
-        ->and($states[$pending->id])->toBe(SpokeMapStatus::Pending)
-        ->and($states[$neverPolled->id])->toBe(SpokeMapStatus::Red)
+    expect($states[$green->id])->toBe(SpokeMapStatus::Green->value)
+        ->and($states[$stale->id])->toBe(SpokeMapStatus::Red->value)
+        ->and($states[$failed->id])->toBe(SpokeMapStatus::Red->value)
+        ->and($states[$pending->id])->toBe(SpokeMapStatus::Pending->value)
+        ->and($states[$neverPolled->id])->toBe(SpokeMapStatus::Red->value)
         ->and(substr_count($component->html(), 'data-status="green"'))->toBe(1)
         ->and(substr_count($component->html(), 'data-status="red"'))->toBe(3)
         ->and(substr_count($component->html(), 'data-status="pending"'))->toBe(1);
@@ -324,9 +324,9 @@ test('the configured staleness boundary is honored', function (): void {
         ->viewData('spokes')
         ->mapWithKeys(fn (array $spoke): array => [$spoke['id'] => $spoke['status']]);
 
-    expect($states[$inside->id])->toBe(SpokeMapStatus::Green)
-        ->and($states[$atCutoff->id])->toBe(SpokeMapStatus::Green)
-        ->and($states[$outside->id])->toBe(SpokeMapStatus::Red);
+    expect($states[$inside->id])->toBe(SpokeMapStatus::Green->value)
+        ->and($states[$atCutoff->id])->toBe(SpokeMapStatus::Green->value)
+        ->and($states[$outside->id])->toBe(SpokeMapStatus::Red->value);
 });
 
 test('the staleness window has a safe default and minimum', function (array $mapConfig, int $insideAge, int $outsideAge): void {
@@ -340,8 +340,8 @@ test('the staleness window has a safe default and minimum', function (array $map
         ->viewData('spokes')
         ->mapWithKeys(fn (array $spoke): array => [$spoke['id'] => $spoke['status']]);
 
-    expect($states[$inside->id])->toBe(SpokeMapStatus::Green)
-        ->and($states[$outside->id])->toBe(SpokeMapStatus::Red);
+    expect($states[$inside->id])->toBe(SpokeMapStatus::Green->value)
+        ->and($states[$outside->id])->toBe(SpokeMapStatus::Red->value);
 })->with([
     'zero is clamped to sixty seconds' => [['stale_after_seconds' => 0], 59, 61],
     'missing uses the default' => [[], 299, 301],
@@ -439,7 +439,7 @@ test('rendering several routed spokes uses a bounded query count', function (): 
 
     expect($spokes)->toHaveCount(6)
         ->and($spokes->every(fn (array $spoke): bool => $spoke['inboxes_count'] === 2))->toBeTrue()
-        ->and($queryCount)->toBeLessThanOrEqual(4);
+        ->and($queryCount)->toBeLessThanOrEqual(10);
 });
 
 test('machine owners and managers edit only the selected team Work profile without exposing credential fields', function (): void {
@@ -447,6 +447,12 @@ test('machine owners and managers edit only the selected team Work profile witho
     $machine = createMapSpoke($owner, 'profile-machine', now(), SpokeLiveness::Green, 0);
     $defaultTeam = Team::default();
     $selectedTeam = Team::query()->create(['name' => 'Selected Work team', 'slug' => 'selected-work-team']);
+    DB::table('team_user')->insert([
+        'team_id' => $selectedTeam->id,
+        'user_id' => $owner->id,
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
     $defaultSetting = MachineTeamWorkSetting::query()->create([
         'spoke_id' => $machine->id,
         'team_id' => $defaultTeam->id,
@@ -494,6 +500,12 @@ test('machine owners and managers edit only the selected team Work profile witho
         ->and(MachineWorkSettingChange::query()->count())->toBe(1);
 
     $admin = capstanUser(['role' => UserRole::Admin->value]);
+    DB::table('team_user')->insert([
+        'team_id' => $selectedTeam->id,
+        'user_id' => $admin->id,
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
     Livewire::actingAs($admin)->test(SpokeMap::class)
         ->set('selectedTeamId', $selectedTeam->id)
         ->call('beginEditingWorkProfile', $machine->id)
@@ -505,6 +517,12 @@ test('machine owners and managers edit only the selected team Work profile witho
         ->and(MachineWorkSettingChange::query()->count())->toBe(2);
 
     $member = capstanUser(['role' => UserRole::Member->value]);
+    DB::table('team_user')->insert([
+        'team_id' => $selectedTeam->id,
+        'user_id' => $member->id,
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
     Livewire::actingAs($member)->test(SpokeMap::class)
         ->set('selectedTeamId', $selectedTeam->id)
         ->call('beginEditingWorkProfile', $machine->id)

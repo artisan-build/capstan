@@ -5,6 +5,7 @@ use App\Enums\MessageStatus;
 use App\Enums\MessageType;
 use App\Features\Postmaster;
 use App\Http\Controllers\Api\PollController;
+use App\Machine\MachineFindingPayload;
 use App\Models\Envelope;
 use App\Models\Inbox;
 use App\Models\Spoke;
@@ -871,6 +872,50 @@ test('an outbound entry that is a JSON list is rejected by index', function (): 
         ->assertJsonValidationErrors('outbound.1', 'error.errors');
 
     expect(Envelope::query()->count())->toBe(0);
+});
+
+test('poll findings are bounded non-blocking fixed-code transitions with server-authored notification time', function (): void {
+    Date::setTestNow('2026-10-20 12:00:00');
+    $owner = capstanUser(['name' => 'Finding owner']);
+    $token = spokeToken($owner);
+    $canary = 'raw diagnostic /secret/path private@example.test';
+
+    $started = $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+        'findings' => [
+            ['code' => 'unknown_'.$canary, 'severity' => 'critical', 'observed_at' => '2026-10-20T11:58:00+00:00'],
+            $canary,
+            ['code' => 'runner_check', 'severity' => 'warning', 'observed_at' => '2026-10-20T11:59:00+00:00'],
+        ],
+    ])->assertOk();
+    expect($started->json('findings_status'))->toBe([
+        'accepted_transitions' => 1,
+        'ignored_unknown' => 1,
+        'ignored_invalid' => 1,
+    ])->and($started->json('inbound'))->toBe([]);
+
+    Date::setTestNow('2026-10-20 12:01:00');
+    $recovered = $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+        'findings' => [[
+            'code' => 'runner_check', 'severity' => 'recovered', 'observed_at' => '2020-01-01T00:00:00+00:00',
+        ]],
+    ])->assertOk();
+    $notifications = $owner->fresh()->notifications;
+    $startedNotification = $notifications->first(
+        fn ($notification): bool => $notification->data['state_transition'] === 'started',
+    );
+    expect($recovered->json('findings_status.accepted_transitions'))->toBe(1)
+        ->and($notifications)->toHaveCount(2)
+        ->and($startedNotification?->data['occurred_at'])->toBe('2026-10-20T12:00:00.000000Z');
+
+    $over = $this->withToken($token)->postJson('/api/v1/poll', [
+        'presence' => ['ready_inboxes' => []],
+        'findings' => array_fill(0, MachineFindingPayload::MAX_FINDINGS + 1, new stdClass),
+    ])->assertOk();
+    expect($over->json('findings_status.ignored_invalid'))->toBe(MachineFindingPayload::MAX_FINDINGS + 1)
+        ->and($owner->fresh()->notifications)->toHaveCount(2)
+        ->and($over->getContent())->not->toContain($canary);
 });
 
 test('a parked message for the same local part on another server is neither delivered nor ackable', function (): void {
