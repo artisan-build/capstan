@@ -5,6 +5,7 @@ use App\Enums\WorkItemState;
 use App\Mcp\CapstanServer;
 use App\Mcp\Tools\OrchestrateTool;
 use App\Mcp\WriteFaultInjector;
+use App\Models\MachineTeamWorkSetting;
 use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkBriefRevision;
@@ -59,6 +60,40 @@ function workMcpToken(User $user): string
     ]);
 
     return $token;
+}
+
+/**
+ * @param  non-empty-list<string>  $roles
+ * @return array{token: string, headers: array<string, string>, spoke: Spoke}
+ */
+function workMcpDrain(User $user, Team $team, array $roles): array
+{
+    $issued = capstanBoundBearer($user, CapstanCredentialDeclaration::WORK_DRAIN);
+    $spoke = Spoke::query()->create([
+        'actor_id' => (string) $user->id,
+        'credential_id' => $issued['credential']->id,
+        'credential_backed' => true,
+        'last_polled_at' => now(),
+    ]);
+    MachineTeamWorkSetting::query()->create([
+        'spoke_id' => $spoke->id,
+        'team_id' => $team->id,
+        'enabled' => true,
+        'roles' => $roles,
+        'capabilities' => [],
+        'role_providers' => [],
+        'concurrency_ceiling' => 25,
+        'updated_by_actor' => (string) $user->id,
+    ]);
+
+    return [
+        'token' => $issued['token'],
+        'headers' => [
+            'Authorization' => 'Bearer '.$issued['token'],
+            CapstanCredentialDeclaration::ACTOR_HEADER => (string) $user->id,
+        ],
+        'spoke' => $spoke,
+    ];
 }
 
 function workMcpCall(string $tool, array|object $arguments, string $token): TestResponse
@@ -415,9 +450,8 @@ test('interactive MCP seats renew for one credential exclude drains expose bound
         'after' => 999, 'idempotency_key' => 'invalid-cursor',
     ], $token))->toBe(['outcome' => 'refused', 'reason' => 'invalid_cursor']);
 
-    $drain = capstanBoundBearer($user, CapstanCredentialDeclaration::WORK_DRAIN);
-    $headers = ['Authorization' => 'Bearer '.$drain['token'], CapstanCredentialDeclaration::ACTOR_HEADER => (string) $user->id];
-    $this->withHeaders($headers)->postJson(route('api.work.claim', $team), [
+    $drain = workMcpDrain($user, $team, ['orchestrator']);
+    $this->withHeaders($drain['headers'])->postJson(route('api.work.claim', $team), [
         'capacity' => 1, 'roles' => ['orchestrator'], 'capabilities' => [],
     ])->assertOk()->assertJsonCount(0, 'items');
 
@@ -443,7 +477,7 @@ test('interactive MCP seats renew for one credential exclude drains expose bound
         'session_ref' => 'opaque renewed', 'action' => 'finish', 'input' => ['state' => 'acted', 'content' => 'Stale state'],
         'idempotency_key' => 'released-action',
     ], $token))->toBe(['outcome' => 'refused', 'reason' => 'orchestration_forbidden']);
-    $this->withHeaders($headers)->postJson(route('api.work.claim', $team), [
+    $this->withHeaders($drain['headers'])->postJson(route('api.work.claim', $team), [
         'capacity' => 1, 'roles' => ['orchestrator'], 'capabilities' => [],
     ])->assertOk()->assertJsonCount(1, 'items');
 });
@@ -1108,13 +1142,12 @@ test('independent dual review items can be claimed renewed and completed by sepa
     foreach (['code_review', 'security_review'] as $role) {
         $item = workMcpResult('queue_item', ['team_id' => $team->id, 'task_id' => $task['id'], 'role' => $role, 'idempotency_key' => $role], $token)['item'];
         $ids[] = $item['id'];
-        $drain = capstanBoundBearer($user, CapstanCredentialDeclaration::WORK_DRAIN);
-        $headers = ['Authorization' => 'Bearer '.$drain['token'], CapstanCredentialDeclaration::ACTOR_HEADER => (string) $user->id];
-        $claim = $this->withHeaders($headers)->postJson(route('api.work.claim', $team), ['capacity' => 1, 'roles' => [$role], 'capabilities' => []])
+        $drain = workMcpDrain($user, $team, [$role]);
+        $claim = $this->withHeaders($drain['headers'])->postJson(route('api.work.claim', $team), ['capacity' => 1, 'roles' => [$role], 'capabilities' => []])
             ->assertOk()->assertJsonPath('items.0.id', $item['id']);
-        $this->withHeaders($headers)->postJson(route('api.work.renew', $team), ['items' => [['item_id' => $item['id'], 'fence' => 1]]])->assertOk()->assertJsonPath('results.0.status', 'renewed');
+        $this->withHeaders($drain['headers'])->postJson(route('api.work.renew', $team), ['items' => [['item_id' => $item['id'], 'fence' => 1]]])->assertOk()->assertJsonPath('results.0.status', 'renewed');
         foreach (['delivered', 'routed'] as $state) {
-            $this->withHeaders($headers)->postJson(route('api.work.transition', $team), ['item_id' => $item['id'], 'fence' => 1, 'state' => $state])->assertOk();
+            $this->withHeaders($drain['headers'])->postJson(route('api.work.transition', $team), ['item_id' => $item['id'], 'fence' => 1, 'state' => $state])->assertOk();
         }
         $this->postJson($claim->json('items.0.links.milestone'), ['kind' => 'done', 'payload' => (object) ['summary' => $role.' complete']])->assertCreated();
     }
@@ -1134,9 +1167,8 @@ test('MCP cancellation revokes active signed links and queued eligibility and ta
     foreach (range(1, 3) as $n) {
         $ids[] = workMcpResult('queue_item', $base + ['role' => 'builder', 'idempotency_key' => 'item'.$n], $token)['item']['id'];
     }
-    $drain = capstanBoundBearer($user, CapstanCredentialDeclaration::WORK_DRAIN);
-    $headers = ['Authorization' => 'Bearer '.$drain['token'], CapstanCredentialDeclaration::ACTOR_HEADER => (string) $user->id];
-    $claim = $this->withHeaders($headers)->postJson(route('api.work.claim', $team), ['capacity' => 1, 'roles' => ['builder'], 'capabilities' => []])->assertOk();
+    $drain = workMcpDrain($user, $team, ['builder']);
+    $claim = $this->withHeaders($drain['headers'])->postJson(route('api.work.claim', $team), ['capacity' => 1, 'roles' => ['builder'], 'capabilities' => []])->assertOk();
     foreach (array_slice($ids, 0, 2) as $id) {
         workMcpResult('cancel_item', ['team_id' => $team->id, 'item_id' => $id, 'idempotency_key' => 'cancel'.$id], $token);
     }
@@ -1144,8 +1176,8 @@ test('MCP cancellation revokes active signed links and queued eligibility and ta
         $this->getJson($claim->json('items.0.links.'.$action))->assertGone();
     }
     $this->postJson($claim->json('items.0.links.milestone'), ['kind' => 'note', 'payload' => (object) []])->assertGone();
-    $this->withHeaders($headers)->postJson(route('api.work.transition', $team), ['item_id' => $ids[0], 'fence' => 1, 'state' => 'delivered'])->assertConflict();
-    $this->withHeaders($headers)->postJson(route('api.work.claim', $team), ['capacity' => 25, 'roles' => ['builder'], 'capabilities' => []])->assertOk()->assertJsonPath('items.0.id', $ids[2])->assertJsonCount(1, 'items');
+    $this->withHeaders($drain['headers'])->postJson(route('api.work.transition', $team), ['item_id' => $ids[0], 'fence' => 1, 'state' => 'delivered'])->assertConflict();
+    $this->withHeaders($drain['headers'])->postJson(route('api.work.claim', $team), ['capacity' => 25, 'roles' => ['builder'], 'capabilities' => []])->assertOk()->assertJsonPath('items.0.id', $ids[2])->assertJsonCount(1, 'items');
     workMcpResult('cancel_task', $base + ['idempotency_key' => 'cancel-task'], $token);
     foreach ($ids as $id) {
         $item = WorkItem::query()->findOrFail($id);
