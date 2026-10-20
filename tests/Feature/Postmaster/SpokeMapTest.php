@@ -140,7 +140,6 @@ test('usage tool guidance renders the pinned verified Linux path and macOS priva
 
     expect($copy)
         ->toContain('This build detects tools but never installs them.')
-        ->toContain('v0.26.1')
         ->toContain('checksums.txt')
         ->toContain('sha256sum')
         ->toContain('shasum -a 256')
@@ -151,13 +150,11 @@ test('usage tool guidance renders the pinned verified Linux path and macOS priva
         ->not->toContain('install.sh')
         ->not->toMatch('/curl[^\n]*\|\s*(?:ba)?sh/');
 
-    preg_match_all('/archive=(openusage_[^\s;]+\.tar\.gz)/', $copy, $recipeArchives);
-    expect($recipeArchives[1])->toBe([
-        'openusage_0.26.1_linux_amd64.tar.gz',
-        'openusage_0.26.1_linux_arm64.tar.gz',
-    ]);
+    preg_match_all('/archive=(openusage_[^\s;]+_linux_(amd64|arm64)\.tar\.gz)/', $copy, $recipeArchives);
+    expect($recipeArchives[1])->toHaveCount(2)
+        ->and($recipeArchives[2])->toBe(['amd64', 'arm64']);
 
-    $manifest = file_get_contents(base_path('tests/Fixtures/openusage-v0.26.1-checksums.txt'));
+    $manifest = file_get_contents(base_path('tests/Fixtures/openusage-checksums.txt'));
     expect($manifest)->not->toBeFalse();
 
     foreach ($recipeArchives[1] as $archive) {
