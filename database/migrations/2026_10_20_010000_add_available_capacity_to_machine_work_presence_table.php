@@ -14,7 +14,7 @@ return new class extends Migration
         });
 
         if (DB::getDriverName() === 'pgsql') {
-            DB::statement('ALTER TABLE machine_work_presence ADD CONSTRAINT machine_work_presence_available_capacity_check CHECK (available_capacity BETWEEN 0 AND concurrency_ceiling - current_claimed_item_count)');
+            DB::statement('ALTER TABLE machine_work_presence ADD CONSTRAINT machine_work_presence_available_capacity_check CHECK (NOT (concurrency_ceiling BETWEEN 1 AND 25 AND current_claimed_item_count BETWEEN 0 AND concurrency_ceiling) OR available_capacity BETWEEN 0 AND concurrency_ceiling - current_claimed_item_count)');
 
             return;
         }

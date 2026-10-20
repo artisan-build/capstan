@@ -425,7 +425,14 @@ test('window values and nullable duration identity are enforced at the model and
             'spoke_id' => $machine['spoke']->id,
             'team_id' => $machine['team']->id,
             'roles' => '[]', 'capabilities' => '[]', 'role_providers' => '[]',
-            'current_claimed_item_count' => 2, 'concurrency_ceiling' => 1,
+            'current_claimed_item_count' => 2, 'available_capacity' => 0, 'concurrency_ceiling' => 1,
+            'observed_at' => now(), 'created_at' => now(), 'updated_at' => now(),
+        ]), 'invalid machine work presence counts', 'machine_work_presence_counts_check'],
+        ['machine_work_presence', fn () => DB::table('machine_work_presence')->insert([
+            'spoke_id' => $machine['spoke']->id,
+            'team_id' => $machine['team']->id,
+            'roles' => '[]', 'capabilities' => '[]', 'role_providers' => '[]',
+            'current_claimed_item_count' => 2, 'available_capacity' => 25, 'concurrency_ceiling' => 1,
             'observed_at' => now(), 'created_at' => now(), 'updated_at' => now(),
         ]), 'invalid machine work presence counts', 'machine_work_presence_counts_check'],
         ['machine_work_presence', fn () => DB::table('machine_work_presence')->insert([
@@ -433,6 +440,13 @@ test('window values and nullable duration identity are enforced at the model and
             'team_id' => $machine['team']->id,
             'roles' => '[]', 'capabilities' => '[]', 'role_providers' => '[]',
             'current_claimed_item_count' => 1, 'available_capacity' => 1, 'concurrency_ceiling' => 1,
+            'observed_at' => now(), 'created_at' => now(), 'updated_at' => now(),
+        ]), 'invalid machine work presence availability', 'machine_work_presence_available_capacity_check'],
+        ['machine_work_presence', fn () => DB::table('machine_work_presence')->insert([
+            'spoke_id' => $machine['spoke']->id,
+            'team_id' => $machine['team']->id,
+            'roles' => '[]', 'capabilities' => '[]', 'role_providers' => '[]',
+            'current_claimed_item_count' => 0, 'available_capacity' => -1, 'concurrency_ceiling' => 1,
             'observed_at' => now(), 'created_at' => now(), 'updated_at' => now(),
         ]), 'invalid machine work presence availability', 'machine_work_presence_available_capacity_check'],
     ];
