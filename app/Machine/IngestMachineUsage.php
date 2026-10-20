@@ -8,9 +8,9 @@ use App\Models\Spoke;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 
-final class IngestMachineUsage
+final readonly class IngestMachineUsage
 {
-    public function __construct(private readonly MachineConditionNotifier $conditions) {}
+    public function __construct(private MachineConditionNotifier $conditions) {}
 
     /**
      * @param  array<string, mixed>  $usage

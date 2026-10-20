@@ -150,7 +150,7 @@ test('the first poll is pending and the first passing probe turns the same spoke
 
     expect($spoke->probe_status)->toBe(SpokeLiveness::Unknown)
         ->and(Livewire::actingAs($operator)->test(SpokeMap::class)->viewData('spokes')->sole()['status'])
-        ->toBe(SpokeMapStatus::Pending);
+        ->toBe(SpokeMapStatus::Pending->value);
 
     $challenge = $first->json('probe_challenge');
     $this->withToken($token)->postJson(route('api.postmaster.poll'), [
@@ -163,5 +163,5 @@ test('the first poll is pending and the first passing probe turns the same spoke
 
     expect($spoke->refresh()->probe_status)->toBe(SpokeLiveness::Green)
         ->and(Livewire::actingAs($operator)->test(SpokeMap::class)->viewData('spokes')->sole()['status'])
-        ->toBe(SpokeMapStatus::Green);
+        ->toBe(SpokeMapStatus::Green->value);
 });

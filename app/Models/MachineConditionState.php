@@ -15,6 +15,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property CarbonImmutable|null $opened_at
  * @property CarbonImmutable|null $closed_at
  * @property-read Spoke $spoke
+ *
+ * @mixin IdeHelperMachineConditionState
  */
 class MachineConditionState extends Model
 {

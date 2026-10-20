@@ -9,9 +9,9 @@ use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
-final class BoundCredentialSpokeResolver
+final readonly class BoundCredentialSpokeResolver
 {
-    public function __construct(private readonly MachineConditionNotifier $conditions) {}
+    public function __construct(private MachineConditionNotifier $conditions) {}
 
     public function resolve(
         string $actorId,
