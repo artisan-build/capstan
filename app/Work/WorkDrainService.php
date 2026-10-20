@@ -4,6 +4,8 @@ namespace App\Work;
 
 use App\Enums\WorkItemState;
 use App\Http\ApiErrorException;
+use App\Machine\MachineWorkRuntime;
+use App\Models\Spoke;
 use App\Models\WorkItem;
 use App\Support\BoundCredentialSpokeResolver;
 use Carbon\CarbonImmutable;
@@ -21,11 +23,13 @@ final readonly class WorkDrainService
         private BoundCredentialSpokeResolver $spokes,
         private WorkClaimService $claims,
         private WorkItemStateService $states,
+        private MachineWorkRuntime $runtime,
     ) {}
 
     /**
      * @param  non-empty-list<string>  $roles
      * @param  list<string>  $capabilities
+     * @param  array<string, string>  $roleProviders
      * @return list<WorkItem>
      */
     public function claim(
@@ -35,10 +39,25 @@ final readonly class WorkDrainService
         int $capacity,
         array $roles,
         array $capabilities,
+        array $roleProviders,
+        int $reportedClaimedCount,
         CarbonImmutable $now,
     ): array {
-        return DB::transaction(function () use ($teamId, $actorId, $credentialId, $capacity, $roles, $capabilities, $now): array {
-            $spoke = $this->spokes->resolve($actorId, $credentialId, $now);
+        return DB::transaction(function () use ($teamId, $actorId, $credentialId, $capacity, $roles, $capabilities, $roleProviders, $reportedClaimedCount, $now): array {
+            $presence = $this->runtime->record(
+                $teamId,
+                $actorId,
+                $credentialId,
+                $roles,
+                $capabilities,
+                $roleProviders,
+                $reportedClaimedCount,
+                $now,
+            );
+            if ($presence === null) {
+                return [];
+            }
+            $spoke = Spoke::query()->findOrFail($presence->spoke_id);
             $items = $this->claims->claim(
                 $teamId,
                 $actorId,
@@ -48,7 +67,10 @@ final readonly class WorkDrainService
                 $capacity,
                 $now,
                 $this->leaseSeconds(),
+                $roleProviders,
+                true,
             );
+            $this->runtime->refreshCount($presence);
             $this->spokes->heartbeat($spoke, $now);
 
             return $items;

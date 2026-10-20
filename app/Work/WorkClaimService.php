@@ -3,11 +3,14 @@
 namespace App\Work;
 
 use App\Enums\WorkItemState;
+use App\Machine\MachineWorkRuntime;
+use App\Models\MachineTeamWorkSetting;
 use App\Models\Spoke;
 use App\Models\WorkItem;
 use App\Models\WorkItemTransition;
 use App\Models\WorkOrchestratorSeat;
 use Carbon\CarbonImmutable;
+use Closure;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Sleep;
@@ -16,7 +19,12 @@ use Throwable;
 
 final readonly class WorkClaimService
 {
-    public function __construct(private WorkSeatService $seats, private WorkOrchestrationLock $locks) {}
+    public function __construct(
+        private WorkSeatService $seats,
+        private WorkOrchestrationLock $locks,
+        private MachineWorkRuntime $runtime,
+        private MachineWorkArbiter $arbiter,
+    ) {}
 
     private const int CANDIDATE_PAGE_SIZE = 200;
 
@@ -25,6 +33,7 @@ final readonly class WorkClaimService
     /**
      * @param  non-empty-list<string>  $roles
      * @param  list<string>  $capabilities
+     * @param  array<string, string>  $roleProviders
      * @return list<WorkItem>
      */
     public function claim(
@@ -36,8 +45,11 @@ final readonly class WorkClaimService
         int $capacity,
         CarbonImmutable $now,
         int $leaseSeconds,
+        array $roleProviders = [],
+        bool $requireMachineProfile = false,
+        ?Closure $afterCandidates = null,
     ): array {
-        if ($capacity === 0 || ! $this->activeSpokeExists($actorId, $spokeId)) {
+        if ($capacity === 0 || ! $this->activeSpokeExists($actorId, $spokeId, $teamId, $roles, $capabilities, $roleProviders, $now, $requireMachineProfile)) {
             return [];
         }
 
@@ -52,11 +64,16 @@ final readonly class WorkClaimService
                 $capabilities,
                 $capacity - count($claimed),
                 $now,
+                $roleProviders,
+                $requireMachineProfile,
             );
 
             if ($candidates === []) {
                 break;
             }
+
+            $afterCandidates?->__invoke();
+            $afterCandidates = null;
 
             $won = 0;
 
@@ -68,6 +85,10 @@ final readonly class WorkClaimService
                     $spokeId,
                     $now,
                     $leaseSeconds,
+                    $roles,
+                    $capabilities,
+                    $roleProviders,
+                    $requireMachineProfile,
                 );
 
                 if ($item !== null) {
@@ -80,8 +101,8 @@ final readonly class WorkClaimService
                 }
             }
 
-            if ($won === 0 && (! $this->activeSpokeExists($actorId, $spokeId)
-                || $this->candidates($teamId, $actorId, $spokeId, $roles, $capabilities, 1, $now) === [])) {
+            if ($won === 0 && (! $this->activeSpokeExists($actorId, $spokeId, $teamId, $roles, $capabilities, $roleProviders, $now, $requireMachineProfile)
+                || $this->candidates($teamId, $actorId, $spokeId, $roles, $capabilities, 1, $now, $roleProviders, $requireMachineProfile) === [])) {
                 break;
             }
         }
@@ -96,6 +117,7 @@ final readonly class WorkClaimService
      *
      * @param  non-empty-list<string>  $roles
      * @param  list<string>  $capabilities
+     * @param  array<string, string>  $roleProviders
      * @return list<stdClass>
      */
     private function candidates(
@@ -106,7 +128,17 @@ final readonly class WorkClaimService
         array $capabilities,
         int $wanted,
         CarbonImmutable $now,
+        array $roleProviders = [],
+        bool $requireMachineProfile = false,
     ): array {
+        if ($requireMachineProfile) {
+            $setting = $this->runtime->eligibleSetting($teamId, $actorId, $spokeId, $roles, $capabilities, $roleProviders, $now);
+            if (! $setting instanceof MachineTeamWorkSetting
+                || $this->runtime->authoritativeClaimedCount($spokeId) >= $setting->concurrency_ceiling) {
+                return [];
+            }
+            $wanted = min($wanted, $setting->concurrency_ceiling - $this->runtime->authoritativeClaimedCount($spokeId));
+        }
         $eligible = [];
         $afterCreatedAt = null;
         $afterId = null;
@@ -138,6 +170,7 @@ final readonly class WorkClaimService
                     'work_tasks.updated_at as task_updated_at',
                     'work_tasks.required_capabilities',
                     'work_tasks.device_spoke_id',
+                    'work_tasks.user_actor_address',
                 ])
                 ->oldest('work_items.created_at')
                 ->orderBy('work_items.id')
@@ -174,7 +207,15 @@ final readonly class WorkClaimService
                         continue;
                     }
                 }
-                if ($this->hasEveryCapability($candidate->required_capabilities, $capabilities)) {
+                if ($this->hasEveryCapability($candidate->required_capabilities, $capabilities)
+                    && (! $requireMachineProfile || ! $this->isPooledUnpinned($candidate)
+                        || $this->arbiter->isWinner(
+                            $teamId,
+                            $candidate->role,
+                            $this->capabilities($candidate->required_capabilities),
+                            $spokeId,
+                            $now,
+                        ))) {
                     $eligible[] = $candidate;
                 }
 
@@ -194,17 +235,24 @@ final readonly class WorkClaimService
     /** @param list<string> $declared */
     private function hasEveryCapability(mixed $requiredValue, array $declared): bool
     {
-        $required = is_string($requiredValue)
-            ? json_decode($requiredValue, true)
-            : $requiredValue;
-
-        if (! is_array($required)) {
-            return false;
-        }
+        $required = $this->capabilities($requiredValue);
 
         return array_diff($required, $declared) === [];
     }
 
+    /** @return list<string> */
+    private function capabilities(mixed $value): array
+    {
+        $value = is_string($value) ? json_decode($value, true) : $value;
+
+        return is_array($value) && array_is_list($value) ? $value : [];
+    }
+
+    /**
+     * @param  list<string>  $roles
+     * @param  list<string>  $capabilities
+     * @param  array<string, string>  $roleProviders
+     */
     private function claimCandidate(
         stdClass $candidate,
         int $teamId,
@@ -212,14 +260,37 @@ final readonly class WorkClaimService
         int $spokeId,
         CarbonImmutable $now,
         int $leaseSeconds,
+        array $roles = [],
+        array $capabilities = [],
+        array $roleProviders = [],
+        bool $requireMachineProfile = false,
     ): ?WorkItem {
         $attempt = 0;
 
         beginning:
         try {
-            return DB::transaction(function () use ($candidate, $teamId, $actorId, $spokeId, $now, $leaseSeconds): ?WorkItem {
+            return DB::transaction(function () use ($candidate, $teamId, $actorId, $spokeId, $now, $leaseSeconds, $roles, $capabilities, $roleProviders, $requireMachineProfile): ?WorkItem {
                 if (! Spoke::query()->workEligible()->whereKey($spokeId)->where('actor_id', $actorId)->lockForUpdate()->exists()) {
                     return null;
+                }
+                if ($requireMachineProfile) {
+                    if ($roles === []) {
+                        return null;
+                    }
+                    $setting = $this->runtime->eligibleSetting($teamId, $actorId, $spokeId, $roles, $capabilities, $roleProviders, $now, true);
+                    if (! $setting instanceof MachineTeamWorkSetting
+                        || ! in_array($candidate->role, $roles, true)
+                        || ! $this->hasEveryCapability($candidate->required_capabilities, $capabilities)
+                        || $this->runtime->authoritativeClaimedCount($spokeId) >= $setting->concurrency_ceiling
+                        || ($this->isPooledUnpinned($candidate) && ! $this->arbiter->isWinner(
+                            $teamId,
+                            $candidate->role,
+                            $this->capabilities($candidate->required_capabilities),
+                            $spokeId,
+                            $now,
+                        ))) {
+                        return null;
+                    }
                 }
                 $seat = null;
                 if ($candidate->role === WorkItem::ROLE_ORCHESTRATOR) {
@@ -313,9 +384,37 @@ final readonly class WorkClaimService
             && str_contains(strtolower($exception->getMessage()), 'database is locked');
     }
 
-    /** @phpstan-impure */
-    private function activeSpokeExists(string $actorId, int $spokeId): bool
-    {
+    /**
+     * @param  list<string>  $roles
+     * @param  list<string>  $capabilities
+     * @param  array<string, string>  $roleProviders
+     *
+     * @phpstan-impure
+     */
+    private function activeSpokeExists(
+        string $actorId,
+        int $spokeId,
+        int $teamId,
+        array $roles,
+        array $capabilities,
+        array $roleProviders,
+        CarbonImmutable $now,
+        bool $requireMachineProfile,
+    ): bool {
+        if ($requireMachineProfile) {
+            if ($roles === []) {
+                return false;
+            }
+
+            return $this->runtime->eligibleSetting($teamId, $actorId, $spokeId, $roles, $capabilities, $roleProviders, $now) instanceof MachineTeamWorkSetting;
+        }
+
         return Spoke::query()->workEligible()->whereKey($spokeId)->where('actor_id', $actorId)->exists();
+    }
+
+    private function isPooledUnpinned(stdClass $candidate): bool
+    {
+        return $candidate->user_actor_address === null
+            && $candidate->device_spoke_id === null;
     }
 }

@@ -129,6 +129,34 @@
                                         </flux:button>
                                     @endif
                                 @endif
+
+                                @if ($spoke['can_manage_work'])
+                                    @if ($editingWorkSpokeId === $spoke['id'])
+                                        <form class="mt-3 grid gap-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-700" wire:submit="saveWorkProfile({{ $spoke['id'] }})" data-testid="machine-work-profile-form">
+                                            <flux:checkbox wire:model="workEnabled" label="{{ __('Accept Work') }}" />
+                                            <flux:input wire:model="workRoles" label="{{ __('Roles') }}" description="{{ __('Comma-separated') }}" />
+                                            <flux:input wire:model="workCapabilities" label="{{ __('Capabilities') }}" description="{{ __('Comma-separated') }}" />
+                                            <flux:input wire:model="workRoleProviders" label="{{ __('Role providers') }}" description="{{ __('JSON object mapping roles to provider families') }}" />
+                                            <flux:input wire:model="workConcurrencyCeiling" type="number" min="1" max="25" label="{{ __('Concurrency') }}" />
+                                            @error('workProfile')
+                                                <flux:text class="text-sm text-red-600 dark:text-red-400">{{ $message }}</flux:text>
+                                            @enderror
+                                            <div class="flex gap-2">
+                                                <flux:button type="submit" size="sm">{{ __('Save Work profile') }}</flux:button>
+                                                <flux:button type="button" size="sm" variant="ghost" wire:click="cancelEditingWorkProfile">{{ __('Cancel') }}</flux:button>
+                                            </div>
+                                        </form>
+                                    @else
+                                        <div class="mt-2 flex items-center gap-2" data-testid="machine-work-profile-summary">
+                                            <flux:badge color="{{ $spoke['work_setting']?->enabled ? 'green' : 'zinc' }}">
+                                                {{ $spoke['work_setting']?->enabled ? __('Work on') : __('Work off') }}
+                                            </flux:badge>
+                                            <flux:button type="button" size="sm" variant="ghost" wire:click="beginEditingWorkProfile({{ $spoke['id'] }})">
+                                                {{ __('Edit Work profile') }}
+                                            </flux:button>
+                                        </div>
+                                    @endif
+                                @endif
                             </div>
                         </div>
 
