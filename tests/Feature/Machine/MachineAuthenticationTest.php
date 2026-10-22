@@ -266,15 +266,16 @@ test('a machine credential is isolated from MCP credential management and browse
 
 test('machine purpose authenticates claim renew and transition while both legacy purposes reach none', function (): void {
     $team = Team::default();
+    $owner = capstanUser();
     $task = WorkTask::query()->create([
         'team_id' => $team->id,
         'title' => 'Machine Work endpoint coverage',
         'required_capabilities' => [],
         'timebox_minutes' => 30,
-        'creator_actor' => 'creator',
+        'creator_actor' => (string) $owner->getKey(),
+        'owner_actor' => (string) $owner->getKey(),
     ]);
     $item = WorkItem::query()->create(['work_task_id' => $task->id, 'role' => 'builder']);
-    $owner = capstanUser();
     $machine = capstanBoundBearer($owner, CapstanCredentialDeclaration::MACHINE);
     $spoke = Spoke::query()->create([
         'actor_id' => (string) $owner->getKey(),
