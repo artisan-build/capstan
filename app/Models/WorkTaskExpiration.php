@@ -17,6 +17,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property CarbonImmutable $expired_at
  * @property CarbonImmutable $created_at
  * @property-read WorkTask $workTask
+ *
+ * @mixin IdeHelperWorkTaskExpiration
  */
 class WorkTaskExpiration extends WorkAppendOnlyRecord
 {
