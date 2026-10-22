@@ -572,25 +572,29 @@ final readonly class BrandChromeSanitizer
 
     private function assertNoReplacementCharacterReferences(string $html): void
     {
-        preg_match_all('/&#(?:[xX]([0-9A-Fa-f]+)|([0-9]+));/', $html, $references, PREG_SET_ORDER);
+        $patterns = [
+            16 => '/&#[xX]([0-9A-Fa-f]+);/',
+            10 => '/&#([0-9]+);/',
+        ];
 
-        foreach ($references as $reference) {
-            $hexadecimal = $reference[1] !== '';
-            $digits = $hexadecimal ? $reference[1] : $reference[2];
-            $base = $hexadecimal ? 16 : 10;
-            $codePoint = 0;
+        foreach ($patterns as $base => $pattern) {
+            preg_match_all($pattern, $html, $references);
 
-            foreach (str_split($digits) as $digit) {
-                $value = intval($digit, $base);
-                if ($codePoint > intdiv(0x10FFFF - $value, $base)) {
-                    throw new InvalidArgumentException('is not valid HTML5 chrome');
+            foreach ($references[1] ?? [] as $digits) {
+                $codePoint = 0;
+
+                foreach (str_split($digits) as $digit) {
+                    $value = intval($digit, $base);
+                    if ($codePoint > intdiv(0x10FFFF - $value, $base)) {
+                        throw new InvalidArgumentException('is not valid HTML5 chrome');
+                    }
+
+                    $codePoint = ($codePoint * $base) + $value;
                 }
 
-                $codePoint = ($codePoint * $base) + $value;
-            }
-
-            if ($codePoint === 0 || ($codePoint >= 0xD800 && $codePoint <= 0xDFFF)) {
-                throw new InvalidArgumentException('is not valid HTML5 chrome');
+                if ($codePoint === 0 || ($codePoint >= 0xD800 && $codePoint <= 0xDFFF)) {
+                    throw new InvalidArgumentException('is not valid HTML5 chrome');
+                }
             }
         }
     }
