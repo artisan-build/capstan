@@ -131,6 +131,7 @@ final readonly class WorkOrchestrationCapability
                 'task' => array_filter([
                     'id' => $parent->id, 'team_id' => $parent->team_id, 'title' => $parent->title,
                     'workflow_ref' => $parent->workflow_ref, 'owner_actor' => $parent->owner_actor,
+                    'escalation_actor' => $parent->effectiveEscalationActor(),
                     'priority' => $parent->priority->value,
                     'depends_on' => $parent->dependencies()->orderBy('work_tasks.id')->pluck('work_tasks.id')->all(),
                     'expires_at' => $parent->expires_at?->toJSON(), 'pr' => $parent->pr,
@@ -220,7 +221,7 @@ final readonly class WorkOrchestrationCapability
     }
 
     /** @param list<string> $options */
-    public function escalate(WorkOrchestrationContext $context, string $key, string $addressedActor, string $question, array $options, string $recommendation, CarbonImmutable $now): WorkEscalation
+    public function escalate(WorkOrchestrationContext $context, string $key, ?string $addressedActor, string $question, array $options, string $recommendation, CarbonImmutable $now): WorkEscalation
     {
         return $this->authorised($context, $now, fn (WorkTask $parent): WorkEscalation => $this->orchestration->escalate(
             $parent, $key, $addressedActor, $question, $options, $recommendation,

@@ -148,6 +148,7 @@ test('mounts the complete write family behind the write ceiling', function (): v
             'preview_brand_draft',
             'publish_page',
             'queue_item',
+            'reassign_task',
             'release_seat',
             'revise_brief',
             'send_postmaster_message',
@@ -162,6 +163,7 @@ test('mounts the complete write family behind the write ceiling', function (): v
     foreach ([
         'send_postmaster_message' => ['content', false, false, true],
         'ack_postmaster_messages' => ['metadata', false, false, true],
+        'reassign_task' => ['content', false, true, true],
     ] as $name => [$classification, $readOnly, $destructive, $idempotent]) {
         $tool = $write->get($name);
         expect(data_get($tool, '_meta.effect'))->toBe('write')

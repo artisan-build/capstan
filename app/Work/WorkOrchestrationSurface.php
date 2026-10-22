@@ -73,7 +73,7 @@ final readonly class WorkOrchestrationSurface
             'steer' => $this->created($action, $this->capability->steer($context, $input['task_id'], $input['item_id'] ?? null, $input['content'], $now)),
             'decide' => $this->created($action, $this->capability->decide($context, $input['event_id'], $input['decision'], $input['rationale'], $input['evidence'], $now)),
             'request_wake' => $this->created($action, $this->capability->requestWake($context, $input['key'], CarbonImmutable::parse($input['due_at']), $input['reason'], $now)),
-            'escalate' => $this->created($action, $this->capability->escalate($context, $input['key'], $input['addressed_actor'], $input['question'], $input['options'], $input['recommendation'], $now)),
+            'escalate' => $this->created($action, $this->capability->escalate($context, $input['key'], $input['addressed_actor'] ?? null, $input['question'], $input['options'], $input['recommendation'], $now)),
             'finish' => $this->created($action, $this->capability->finish($context, WorkItemState::from($input['state']), $input['content'] ?? null, $now)),
             default => throw $this->invalid(),
         };
@@ -122,7 +122,7 @@ final readonly class WorkOrchestrationSurface
             'steer' => ['task_id' => ['required', 'uuid'], 'item_id' => ['sometimes', 'uuid'], 'content' => ['required', 'string', 'min:1', 'max:8000']],
             'decide' => ['event_id' => ['required', 'uuid'], 'decision' => ['required', 'string', 'min:1', 'max:10000'], 'rationale' => ['required', 'string', 'min:1', 'max:10000'], 'evidence' => ['required', 'array', 'max:25']],
             'request_wake' => ['key' => ['required', 'string', 'min:1', 'max:255'], 'due_at' => ['required', 'date'], 'reason' => ['required', 'string', 'min:1', 'max:2000']],
-            'escalate' => ['key' => ['required', 'string', 'min:1', 'max:255'], 'addressed_actor' => ['required', 'string', 'regex:/\A[1-9][0-9]{0,18}\z/D'], 'question' => ['required', 'string', 'min:1', 'max:10000'], 'options' => ['required', 'array', 'list', 'min:1', 'max:10'], 'options.*' => ['required', 'string', 'min:1', 'max:2000'], 'recommendation' => ['required', 'string', 'min:1', 'max:2000']],
+            'escalate' => ['key' => ['required', 'string', 'min:1', 'max:255'], 'addressed_actor' => ['sometimes', 'required', 'string', 'regex:/\A[1-9][0-9]{0,18}\z/D'], 'question' => ['required', 'string', 'min:1', 'max:10000'], 'options' => ['required', 'array', 'list', 'min:1', 'max:10'], 'options.*' => ['required', 'string', 'min:1', 'max:2000'], 'recommendation' => ['required', 'string', 'min:1', 'max:2000']],
             'finish' => ['state' => ['required', Rule::in([WorkItemState::Acted->value, WorkItemState::Failed->value])], 'content' => ['required_if:state,acted', 'string', 'min:1', 'max:100000']],
         };
         $validator = Validator::make($input, $rules);
@@ -170,7 +170,8 @@ final readonly class WorkOrchestrationSurface
                 throw new ApiErrorException(422, 'wake_outside_horizon', 'The wake must be due between now and the wake horizon.');
             }
         }
-        if ($action === 'escalate' && ! User::query()->whereKey($validated['addressed_actor'])->where('status', 'active')->exists()) {
+        if ($action === 'escalate' && isset($validated['addressed_actor'])
+            && ! User::query()->whereKey($validated['addressed_actor'])->where('status', 'active')->exists()) {
             throw $this->invalid();
         }
 

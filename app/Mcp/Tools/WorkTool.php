@@ -11,6 +11,7 @@ use App\Mcp\ToolResponse;
 use App\Models\Spoke;
 use App\Models\Team;
 use App\Work\TeamWorkPolicy;
+use App\Work\WorkReassignmentService;
 use App\Work\WorkRepresentation;
 use App\Work\WorkToolService;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
@@ -60,6 +61,12 @@ abstract class WorkTool extends CapstanTool
             'list_work' => ['task_id' => $schema->string(), 'state' => $schema->string()->enum(WorkItemState::class), 'limit' => $schema->integer()->min(1)->max(25)->default(25)],
             'get_team_work_policy' => [],
             'set_team_work_policy' => ['pool_work' => $schema->boolean()->required()],
+            'reassign_task' => [
+                'task_id' => $schema->string()->required(),
+                'to_actor' => $schema->string()->min(1)->max(19)->required(),
+                'mode' => $schema->string()->enum([WorkReassignmentService::MODE_MOVE, WorkReassignmentService::MODE_ESCALATIONS])->required(),
+                'note' => $schema->string()->min(1)->max(2000),
+            ],
             default => ['task_id' => $schema->string()->required()],
         }];
     }
@@ -80,6 +87,14 @@ abstract class WorkTool extends CapstanTool
             'queue_item', 'cancel_item' => ['item' => $representation->schema($schema, 'item')],
             'steer' => ['steer' => $representation->schema($schema, 'steer')],
             'cancel_task' => ['task' => $representation->schema($schema, 'task')],
+            'reassign_task' => [
+                'task_id' => $schema->string(),
+                'old_owner' => $schema->string(),
+                'new_owner' => $schema->string(),
+                'old_escalation_actor' => $schema->string(),
+                'new_escalation_actor' => $schema->string(),
+                'mode' => $schema->string()->enum([WorkReassignmentService::MODE_MOVE, WorkReassignmentService::MODE_ESCALATIONS]),
+            ],
             'get_task' => [
                 'task' => $representation->schema($schema, 'task')->required(),
                 'revisions' => $schema->array()->items($representation->schema($schema, 'revision'))->required(),
@@ -104,7 +119,7 @@ abstract class WorkTool extends CapstanTool
         return $properties;
     }
 
-    public function handle(Request $request, OwnerSubjectResolver $owners, DurableWriteCoordinator $writes, WorkToolService $work, TeamWorkPolicy $policy): Response|ResponseFactory
+    public function handle(Request $request, OwnerSubjectResolver $owners, DurableWriteCoordinator $writes, WorkToolService $work, TeamWorkPolicy $policy, WorkReassignmentService $reassignments): Response|ResponseFactory
     {
         $schema = $this->schema(new JsonSchemaTypeFactory);
         $this->requireExactArguments($request, array_keys($schema));
@@ -139,6 +154,9 @@ abstract class WorkTool extends CapstanTool
                 'pr' => ['sometimes', 'required', 'array'],
                 'limit' => ['sometimes', 'required', 'integer', 'min:1', 'max:25'],
                 'state' => ['sometimes', 'required', Rule::enum(WorkItemState::class)],
+                'to_actor' => ['required', 'string', 'regex:/\A[1-9][0-9]{0,18}\z/D'],
+                'mode' => ['required', 'string', Rule::in([WorkReassignmentService::MODE_MOVE, WorkReassignmentService::MODE_ESCALATIONS])],
+                'note' => ['sometimes', 'required', 'string', 'min:1', 'max:2000'],
                 default => throw new \LogicException('Unknown Work input.'),
             };
         }
@@ -158,10 +176,13 @@ abstract class WorkTool extends CapstanTool
         $input = $request->validate($rules);
         $owner = $owners->resolve();
         $user = User::query()->find($owner->actorId);
-        if (! $user instanceof User || $user->status !== 'active'
-            || ! RolePolicy::canManageMembers($user->role)
-            || OffboardedSubject::userIsOffboarded($owner->actorId)) {
-            throw new AuthorizationException('Only an admitted Owner or Admin may manage Work.');
+        $admitted = $user instanceof User && $user->status === 'active'
+            && RolePolicy::canUseProduct($user->role)
+            && ! OffboardedSubject::userIsOffboarded($owner->actorId);
+        if (! $admitted || ($this->name() !== 'reassign_task' && ! RolePolicy::canManageMembers($user->role))) {
+            throw new AuthorizationException($this->name() === 'reassign_task'
+                ? 'Only an admitted user may reassign Work.'
+                : 'Only an admitted Owner or Admin may manage Work.');
         }
         $team = Team::query()->find($input['team_id']);
         if (! $team instanceof Team) {
@@ -189,7 +210,7 @@ abstract class WorkTool extends CapstanTool
             $result = $writes->run(
                 owner: $owner, tool: $this->name(), idempotencyKey: $input['idempotency_key'],
                 intent: $input, targetType: 'work',
-                operation: function () use ($work, $policy, $input, $team, $owner, $user): array {
+                operation: function (string $targetId, string $claimId) use ($work, $policy, $reassignments, $input, $team, $owner, $user): array {
                     if ($this->name() === 'set_team_work_policy') {
                         $changed = $policy->setPoolWork($team, $user, $input['pool_work'], TeamWorkPolicy::SURFACE_MCP);
 
@@ -204,6 +225,17 @@ abstract class WorkTool extends CapstanTool
                             'priority' => WorkPriority::P2->value,
                             'depends_on' => [],
                         ];
+                    }
+                    if ($this->name() === 'reassign_task') {
+                        return $reassignments->reassign(
+                            $team->id,
+                            $input['task_id'],
+                            $owner->actorId,
+                            $input['to_actor'],
+                            $input['mode'],
+                            $input['note'] ?? null,
+                            $claimId,
+                        );
                     }
 
                     return $work->write($this->name(), $input, $owner->actorId);

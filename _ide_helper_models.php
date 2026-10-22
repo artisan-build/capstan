@@ -1064,6 +1064,7 @@ namespace App\Models{
  * @property int $timebox_minutes
  * @property string $creator_actor
  * @property string $owner_actor
+ * @property string|null $escalation_actor
  * @property WorkPriority $priority
  * @property int $dependency_version
  * @property bool $routing_pool_work
@@ -1101,6 +1102,7 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereCreatorActor($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereDependencyVersion($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereDeviceSpokeId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereEscalationActor($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereExpiresAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereFailover($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereId($value)

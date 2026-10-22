@@ -74,12 +74,12 @@ The installer writes one `capstan.machine` token and its non-secret actor id und
 
 ## 5. Connect your agent over MCP
 
-An agent connected to your installation through Scalpels gets 30 Capstan tools. Eleven of them are
+An agent connected to your installation through Scalpels gets 32 Capstan tools. Eleven of them are
 read-only. Capstan also serves the same MCP server itself at `/mcp` and `/mcp/write`.
 
 | Area | Read-only tools | Tools that change data |
 | --- | --- | --- |
-| Work | `list_work`, `get_task`, `list_escalations`, `get_team_work_policy` | `create_task`, `revise_brief`, `queue_item`, `cancel_item`, `steer`, `cancel_task`, `take_seat`, `release_seat`, `answer_escalation`, `orchestrate`, `set_team_work_policy` |
+| Work | `list_work`, `get_task`, `list_escalations`, `get_team_work_policy` | `create_task`, `revise_brief`, `queue_item`, `cancel_item`, `steer`, `cancel_task`, `take_seat`, `release_seat`, `answer_escalation`, `orchestrate`, `reassign_task`, `set_team_work_policy` |
 | Postmaster | `postmaster_spokes`, `postmaster_messages` | `send_postmaster_message`, `ack_postmaster_messages` |
 | Pages and artifacts | `list_pages`, `get_page` | `publish_page`, `update_page`, `create_artifact_share` |
 | Brand kit | `get_brand_kit`, `list_layouts`, `preview_brand_draft` | `update_brand_draft`, `upload_brand_asset`, `apply_brand_draft` |

@@ -8,7 +8,7 @@ use App\Postmaster\DatabaseProbeFailureNotifier;
 use App\Postmaster\ProbeFailureNotifier;
 use App\Support\PostmasterClock;
 use App\Support\ServerIdentity;
-use App\Work\LogWorkNotifier;
+use App\Work\DatabaseWorkNotifier;
 use App\Work\WorkNotifier;
 use ArtisanBuild\BuiltForCloud\Contracts\IdentityContext;
 use ArtisanBuild\BuiltForCloud\DomainIdentityContext;
@@ -32,7 +32,7 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->app->singleton(ServerIdentity::class);
         $this->app->bind(ProbeFailureNotifier::class, DatabaseProbeFailureNotifier::class);
-        $this->app->bind(WorkNotifier::class, LogWorkNotifier::class);
+        $this->app->bind(WorkNotifier::class, DatabaseWorkNotifier::class);
         $this->app->bind(function (): IdentityContext {
             $user = auth()->user();
 

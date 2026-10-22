@@ -24,6 +24,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property int $timebox_minutes
  * @property string $creator_actor
  * @property string $owner_actor
+ * @property string|null $escalation_actor
  * @property WorkPriority $priority
  * @property int $dependency_version
  * @property bool $routing_pool_work
@@ -70,6 +71,7 @@ class WorkTask extends Model
         'timebox_minutes',
         'creator_actor',
         'owner_actor',
+        'escalation_actor',
         'priority',
         'dependency_version',
         'routing_pool_work',
@@ -115,8 +117,14 @@ class WorkTask extends Model
                 $root = self::query()->findOrFail($root->parent_task_id);
             }
             $task->owner_actor = $root->owner_actor;
+            $task->escalation_actor = $root->escalation_actor;
             $task->priority = $root->priority;
         });
+    }
+
+    public function effectiveEscalationActor(): string
+    {
+        return $this->escalation_actor ?? $this->owner_actor;
     }
 
     /** @return BelongsTo<Team, $this> */

@@ -106,6 +106,7 @@ abstract class WorkOrchestrationTool extends CapstanTool
             'id' => $schema->string()->required(), 'team_id' => $schema->integer()->required(),
             'title' => $schema->string()->required(), 'workflow_ref' => $schema->string(),
             'owner_actor' => $schema->string()->required(),
+            'escalation_actor' => $schema->string()->required(),
             'priority' => $schema->string()->enum(['P0', 'P1', 'P2', 'P3'])->required(),
             'depends_on' => $schema->array()->items($schema->string())->required(),
             'expires_at' => $schema->string(),

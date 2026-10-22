@@ -136,6 +136,7 @@ test('advertises the four exact page tools through their effect doors', function
         'preview_brand_draft',
         'publish_page',
         'queue_item',
+        'reassign_task',
         'release_seat',
         'revise_brief',
         'send_postmaster_message',

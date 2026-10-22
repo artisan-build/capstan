@@ -24,6 +24,7 @@ use App\Mcp\Tools\PostmasterSpokesTool;
 use App\Mcp\Tools\PreviewBrandDraftTool;
 use App\Mcp\Tools\PublishPageTool;
 use App\Mcp\Tools\QueueItemTool;
+use App\Mcp\Tools\ReassignTaskTool;
 use App\Mcp\Tools\ReleaseSeatTool;
 use App\Mcp\Tools\ReviseBriefTool;
 use App\Mcp\Tools\SendPostmasterMessageTool;
@@ -382,6 +383,14 @@ test('the delegated enforcement harness reaches every tool through the canonical
         'required_capabilities' => [],
         'timebox_minutes' => 30,
     ], (string) $user->getKey());
+    $reassignmentTask = resolve(WorkToolService::class)->write('create_task', [
+        'team_id' => $team->id,
+        'title' => 'Delegated enforcement reassignment task',
+        'brief' => 'Used to reach the reassignment handler.',
+        'failover' => true,
+        'required_capabilities' => [],
+        'timebox_minutes' => 30,
+    ], (string) $user->getKey());
     $enforcementIdentityHash = DelegatedActor::identityHash(
         'https://bfc-enforcement.test',
         'bfc-enforcement-primary',
@@ -426,6 +435,7 @@ test('the delegated enforcement harness reaches every tool through the canonical
         PreviewBrandDraftTool::class => [],
         PublishPageTool::class => ['idempotency_key' => 'all-tools-publish-page', 'title' => 'Delegated page', 'recipe' => 'Rebuild from the delegated test.', 'layout' => 'report', 'content' => '<p>Delegated page</p>', 'content_type' => 'text/html'],
         QueueItemTool::class => ['team_id' => $team->id, 'task_id' => $uuid, 'role' => 'builder', 'idempotency_key' => 'all-tools-queue'],
+        ReassignTaskTool::class => ['team_id' => $team->id, 'task_id' => $reassignmentTask['task']['id'], 'to_actor' => (string) $secondary->getKey(), 'mode' => 'escalations', 'idempotency_key' => 'all-tools-reassign'],
         ReleaseSeatTool::class => ['team_id' => $team->id, 'task_id' => $uuid, 'seat_fence' => 1, 'idempotency_key' => 'all-tools-release'],
         ReviseBriefTool::class => ['team_id' => $team->id, 'task_id' => $uuid, 'brief' => 'Revised.', 'idempotency_key' => 'all-tools-revise'],
         SendPostmasterMessageTool::class => ['idempotency_key' => 'all-tools-send', 'from' => 'relay@'.$server, 'to' => 'receiver@'.$server, 'type' => 'generic', 'version' => Envelope::CURRENT_VERSION, 'message_id' => 'all-tools-message', 'body' => ['subject' => 'Delegated']],
@@ -446,6 +456,7 @@ test('the delegated enforcement harness reaches every tool through the canonical
         GetTaskTool::class,
         SteerTool::class,
         CancelTaskTool::class,
+        ReassignTaskTool::class,
         GetTeamWorkPolicyTool::class,
         SetTeamWorkPolicyTool::class,
         TakeSeatTool::class,
@@ -607,7 +618,7 @@ test('the delegated enforcement harness reaches every tool through the canonical
     $delegated = $report->families['mcp_delegated'];
 
     expect($delegated->applicability)->toBe('applicable')
-        ->and($delegated->visited)->toBe(31)
+        ->and($delegated->visited)->toBe(32)
         ->and($delegated->expected)->toBe($sortedExpected)
         ->and($delegated->discovered)->toBe($sortedExpected)
         ->and($delegated->violations)->toBe([]);

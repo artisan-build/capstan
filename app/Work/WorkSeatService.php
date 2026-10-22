@@ -68,6 +68,25 @@ final readonly class WorkSeatService
         }, 5);
     }
 
+    /** Caller holds the root task lock. */
+    public function releaseForReassignment(WorkTask $parent, CarbonImmutable $now): WorkOrchestratorSeat
+    {
+        $seat = $this->locks->seat($parent);
+        $this->recover($seat, $now);
+        $seat->fence++;
+        $seat->fill([
+            'holder_actor' => null,
+            'holder_spoke_id' => null,
+            'session_ref' => null,
+            'interactive' => false,
+            'lease_until' => null,
+            'waiting_at' => null,
+            'notified_at' => null,
+        ])->save();
+
+        return $seat;
+    }
+
     /** Rotate authority without discarding the holder's opaque session or durable memory. */
     public function fence(WorkTask $parent, string $actor, int $spoke, int $fence, CarbonImmutable $now): WorkOrchestratorSeat
     {
