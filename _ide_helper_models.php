@@ -1065,9 +1065,10 @@ namespace App\Models{
  * @property string $creator_actor
  * @property string $owner_actor
  * @property WorkPriority $priority
+ * @property int $dependency_version
  * @property bool $routing_pool_work
  * @property CarbonImmutable|null $expires_at
- * @property string|null $pr
+ * @property array{repo: string, number: int, url: string}|null $pr
  * @property CarbonImmutable|null $cancelled_at
  * @property string|null $parent_task_id
  * @property string|null $workflow_ref
@@ -1098,6 +1099,7 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereCancelledAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereCreatedAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereCreatorActor($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereDependencyVersion($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereDeviceSpokeId($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereExpiresAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereFailover($value)
@@ -1127,19 +1129,21 @@ namespace App\Models{
  * @property string $owner_actor
  * @property WorkPriority $priority
  * @property int $waited_seconds
- * @property WorkExpirationReason $reason
+ * @property WorkExpirationProvenance $provenance
+ * @property WorkExpirationCause $cause
  * @property CarbonImmutable $expired_at
  * @property CarbonImmutable $created_at
  * @property-read WorkTask $workTask
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration whereCause($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration whereCreatedAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration whereExpiredAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration whereId($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration whereOwnerActor($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration wherePriority($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration whereReason($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration whereProvenance($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration whereWaitedSeconds($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration whereWorkTaskId($value)
  * @mixin \Eloquent
