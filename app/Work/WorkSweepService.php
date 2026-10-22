@@ -2,6 +2,7 @@
 
 namespace App\Work;
 
+use App\Enums\WorkExpirationCause;
 use App\Enums\WorkItemState;
 use App\Models\Spoke;
 use App\Models\WorkItem;
@@ -141,6 +142,13 @@ final readonly class WorkSweepService
                 if ($expiry === null || $expiry['at']->gt($now)) {
                     return;
                 }
+                if ($this->gate->successful($task)) {
+                    return;
+                }
+
+                $cause = $this->gate->dependenciesSuccessful($task)
+                    ? WorkExpirationCause::Unclaimed
+                    : WorkExpirationCause::DependencyUnmet;
 
                 foreach ($task->items()->where('state', WorkItemState::Queued->value)->orderBy('id')->get() as $item) {
                     $this->states->transition($item, WorkItemState::Expired, 'system', 'task-expiry', $now);
@@ -152,7 +160,8 @@ final readonly class WorkSweepService
                         'owner_actor' => $task->owner_actor,
                         'priority' => $task->priority,
                         'waited_seconds' => max(0, (int) $task->created_at->diffInSeconds($now, false)),
-                        'reason' => $expiry['reason'],
+                        'provenance' => $expiry['provenance'],
+                        'cause' => $cause,
                         'expired_at' => $now,
                     ],
                 );

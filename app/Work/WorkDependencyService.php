@@ -40,11 +40,15 @@ final readonly class WorkDependencyService
             }
 
             $task->dependencies()->sync($ids);
+            $task->increment('dependency_version');
         }, 5);
     }
 
     public function signalFailed(WorkTask $dependency): void
     {
+        if ($this->gate->successful($dependency)) {
+            return;
+        }
         if ($dependency->cancelled_at === null && ! $dependency->expiration()->exists() && ! $dependency->items()
             ->whereIn('state', [WorkItemState::Failed->value, WorkItemState::Cancelled->value, WorkItemState::Expired->value])
             ->exists()) {
@@ -56,7 +60,7 @@ final readonly class WorkDependencyService
             $key = 'dependency-failed:'.$dependent->id.':'.$dependency->id;
             $evidence = ['task_id' => $dependent->id, 'dependency_task_id' => $dependency->id];
 
-            if (WorkOrchestratorSeat::query()->where('work_task_id', $root->id)->exists()) {
+            if (WorkOrchestratorSeat::query()->where('work_task_id', $root->id)->whereNull('stopped_at')->exists()) {
                 $this->orchestration->event($root, $key, 'dependency_failed', $evidence, inheritAuthor: false);
 
                 continue;

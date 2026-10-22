@@ -9,6 +9,7 @@ use App\Models\WorkItem;
 use App\Models\WorkOrchestratorSeat;
 use App\Models\WorkTask;
 use App\Work\WorkClaimService;
+use App\Work\WorkDependencyService;
 use App\Work\WorkDrainService;
 use App\Work\WorkItemStateService;
 use App\Work\WorkOrchestrationService;
@@ -816,6 +817,105 @@ test('simultaneous P0 root creation admits one active task per owner on PostgreS
         expect($results)->toBe(['accepted', 'conflict'])
             ->and(WorkTask::query()->where('owner_actor', 'concurrent-p0-owner')->where('priority', 'P0')->count())->toBe(1);
     } finally {
+        cleanupWorkRaceDatabase($database);
+    }
+});
+
+test('dependency invalidation cannot cross the locked claim gate on PostgreSQL', function (): void {
+    if (DB::getDriverName() !== 'pgsql') {
+        $this->markTestSkipped('Dedicated PostgreSQL dependency gate serialization proof.');
+    }
+
+    $database = provisionWorkRaceDatabase();
+    $barrier = storage_path('framework/testing/dependency-gate-barrier-'.Str::lower(Str::random(16)));
+    mkdir($barrier, 0777, true);
+    $processes = [];
+
+    try {
+        $team = Team::query()->create([
+            'name' => 'Dependency gate race',
+            'slug' => 'dependency-gate-race',
+            'pool_work' => false,
+        ]);
+        $spoke = Spoke::query()->create([
+            'actor_id' => 'dependency-gate-owner',
+            'credential_id' => (string) Str::uuid7(),
+        ]);
+        $dependency = WorkTask::query()->create([
+            'team_id' => $team->id,
+            'title' => 'Completed dependency',
+            'required_capabilities' => [],
+            'timebox_minutes' => 30,
+            'creator_actor' => 'dependency-gate-owner',
+        ]);
+        $dependency->items()->create(['role' => 'dependency-builder', 'state' => WorkItemState::Acted]);
+        $dependent = WorkTask::query()->create([
+            'team_id' => $team->id,
+            'title' => 'Dependent claim target',
+            'required_capabilities' => [],
+            'timebox_minutes' => 30,
+            'creator_actor' => 'dependency-gate-owner',
+        ]);
+        resolve(WorkDependencyService::class)->replace($dependent, [$dependency->id]);
+        $item = $dependent->items()->create(['role' => 'builder']);
+        $environment = workRaceProcessEnvironment($database['connection']);
+
+        $claim = new Process([
+            PHP_BINARY, base_path('tests/Support/work-dependency-gate-worker.php'),
+            'claim', $barrier, (string) $team->id, 'dependency-gate-owner', (string) $spoke->id,
+        ], base_path(), $environment, null, 90);
+        $claim->start();
+        $processes[] = $claim;
+        $deadline = microtime(true) + 30;
+        while (! file_exists($barrier.'/claim-gated')) {
+            if ($claim->isTerminated() || microtime(true) >= $deadline) {
+                throw new RuntimeException('Claim worker did not reach the dependency gate: '.$claim->getErrorOutput());
+            }
+            Sleep::usleep(10_000);
+        }
+
+        $invalidate = new Process([
+            PHP_BINARY, base_path('tests/Support/work-dependency-gate-worker.php'),
+            'invalidate', $barrier, (string) $team->id, 'dependency-gate-owner', $dependency->id,
+        ], base_path(), $environment, null, 90);
+        $invalidate->start();
+        $processes[] = $invalidate;
+        while (! file_exists($barrier.'/invalidate-attempting')) {
+            if ($invalidate->isTerminated() || microtime(true) >= $deadline) {
+                throw new RuntimeException('Invalidation worker did not attempt its task lock: '.$invalidate->getErrorOutput());
+            }
+            Sleep::usleep(10_000);
+        }
+
+        Sleep::usleep(250_000);
+        expect($invalidate->isRunning())->toBeTrue('Dependency invalidation crossed the locked claim gate.')
+            ->and(file_exists($barrier.'/invalidate-done'))->toBeFalse();
+        touch($barrier.'/release-claim');
+
+        expect($claim->wait())->toBe(0, $claim->getErrorOutput())
+            ->and($invalidate->wait())->toBe(0, $invalidate->getErrorOutput());
+        $claimResult = json_decode($claim->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+        $invalidationResult = json_decode($invalidate->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+        expect($claimResult)->toBe(['status' => 'claimed', 'ids' => [$item->id]])
+            ->and($invalidationResult['status'])->toBe('invalidated')
+            ->and($invalidationResult['cancelled_at'])->not->toBeNull()
+            ->and($dependency->fresh()->cancelled_at)->not->toBeNull()
+            ->and($item->fresh()->state)->toBe(WorkItemState::Claimed);
+    } finally {
+        if (is_dir($barrier) && ! file_exists($barrier.'/release-claim')) {
+            touch($barrier.'/release-claim');
+        }
+        foreach ($processes as $process) {
+            if ($process->isRunning()) {
+                $process->stop(1);
+            }
+        }
+        foreach (glob($barrier.'/*') ?: [] as $file) {
+            unlink($file);
+        }
+        if (is_dir($barrier)) {
+            rmdir($barrier);
+        }
         cleanupWorkRaceDatabase($database);
     }
 });

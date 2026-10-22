@@ -47,7 +47,11 @@ abstract class WorkTool extends CapstanTool
                 'priority' => $schema->string()->enum(WorkPriority::class),
                 'depends_on' => $schema->array()->items($schema->string())->max(25)->unique(),
                 'expires_at' => $schema->string(),
-                'pr' => $schema->string()->min(1)->max(2048),
+                'pr' => $schema->object([
+                    'repo' => $schema->string()->min(1)->max(255)->required(),
+                    'number' => $schema->integer()->min(1)->required(),
+                    'url' => $schema->string()->min(1)->max(2048)->required(),
+                ])->withoutAdditionalProperties(),
             ],
             'revise_brief' => ['task_id' => $schema->string()->required(), 'brief' => $schema->string()->min(1)->max(32000)->required()],
             'queue_item' => ['task_id' => $schema->string()->required(), 'role' => $schema->string()->min(1)->max(64)->required()],
@@ -111,7 +115,7 @@ abstract class WorkTool extends CapstanTool
             if (array_key_exists($field, $request->all())) {
                 $valid = match ($definition['type']) {
                     'integer' => is_int($raw), 'boolean' => is_bool($raw),
-                    'array' => is_array($raw), default => is_string($raw),
+                    'array' => is_array($raw), 'object' => $raw instanceof \stdClass, default => is_string($raw),
                 };
                 if (! $valid) {
                     throw ValidationException::withMessages([$field => ['Invalid argument type.']]);
@@ -132,7 +136,7 @@ abstract class WorkTool extends CapstanTool
                 'depends_on' => ['sometimes', 'array', 'list', 'max:25'],
                 'priority' => ['sometimes', 'required', Rule::enum(WorkPriority::class)],
                 'expires_at' => ['sometimes', 'required', 'date'],
-                'pr' => ['sometimes', 'required', 'string', 'min:1', 'max:2048'],
+                'pr' => ['sometimes', 'required', 'array'],
                 'limit' => ['sometimes', 'required', 'integer', 'min:1', 'max:25'],
                 'state' => ['sometimes', 'required', Rule::enum(WorkItemState::class)],
                 default => throw new \LogicException('Unknown Work input.'),
@@ -140,6 +144,17 @@ abstract class WorkTool extends CapstanTool
         }
         $rules['required_capabilities.*'] = ['required', 'string', 'min:1', 'max:64', 'distinct:strict'];
         $rules['depends_on.*'] = ['required', 'string', 'uuid', 'distinct:strict'];
+        $rules['pr.repo'] = ['required_with:pr', 'string', 'min:1', 'max:255'];
+        $rules['pr.number'] = ['required_with:pr', 'integer', 'min:1'];
+        $rules['pr.url'] = ['required_with:pr', 'string', 'max:2048', 'url:https'];
+        $rawPr = $this->rawArgument('pr');
+        if ($rawPr instanceof \stdClass) {
+            $prKeys = array_keys(get_object_vars($rawPr));
+            sort($prKeys);
+            if ($prKeys !== ['number', 'repo', 'url']) {
+                throw ValidationException::withMessages(['pr' => ['PR metadata has invalid fields.']]);
+            }
+        }
         $input = $request->validate($rules);
         $owner = $owners->resolve();
         $user = User::query()->find($owner->actorId);

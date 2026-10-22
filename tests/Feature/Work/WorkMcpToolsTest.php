@@ -191,14 +191,41 @@ test('root creation exposes ownership priority dependencies expiry and PR metada
         'priority' => 'P1',
         'depends_on' => [$dependency['id']],
         'expires_at' => $expiresAt->toJSON(),
-        'pr' => 'https://example.test/pulls/123',
+        'pr' => [
+            'repo' => 'artisan-build/capstan',
+            'number' => 123,
+            'url' => 'https://example.test/pulls/123',
+        ],
     ]);
 
     expect($result['task']['owner_actor'])->toBe((string) $otherOwner->id)
         ->and($result['task']['priority'])->toBe('P1')
         ->and($result['task']['depends_on'])->toBe([$dependency['id']])
         ->and($result['task']['expires_at'])->toBe($expiresAt->toJSON())
-        ->and($result['task']['pr'])->toBe('https://example.test/pulls/123');
+        ->and($result['task']['pr'])->toBe([
+            'repo' => 'artisan-build/capstan',
+            'number' => 123,
+            'url' => 'https://example.test/pulls/123',
+        ]);
+
+    foreach ([
+        'missing field' => ['repo' => 'artisan-build/capstan', 'number' => 123],
+        'unknown field' => ['repo' => 'artisan-build/capstan', 'number' => 123, 'url' => 'https://example.test/pulls/123', 'branch' => 'main'],
+        'empty repo' => ['repo' => '', 'number' => 123, 'url' => 'https://example.test/pulls/123'],
+        'long repo' => ['repo' => str_repeat('r', 256), 'number' => 123, 'url' => 'https://example.test/pulls/123'],
+        'non-positive number' => ['repo' => 'artisan-build/capstan', 'number' => 0, 'url' => 'https://example.test/pulls/123'],
+        'non-HTTPS URL' => ['repo' => 'artisan-build/capstan', 'number' => 123, 'url' => 'http://example.test/pulls/123'],
+    ] as $name => $pr) {
+        $beforeInvalidPr = WorkTask::query()->count();
+        workMcpCall('create_task', [
+            'team_id' => $team->id,
+            'idempotency_key' => 'invalid-pr-'.$name,
+            'title' => 'Invalid PR metadata',
+            'brief' => 'Invalid PR metadata brief',
+            'pr' => $pr,
+        ], $token)->assertOk()->assertJsonPath('result.isError', true);
+        expect(WorkTask::query()->count())->toBe($beforeInvalidPr);
+    }
 
     $before = WorkTask::query()->count();
     $refused = workMcpResult('create_task', [
@@ -902,6 +929,9 @@ test('MCP child orchestration enforces canonical intent and team defaults before
     $refuse(['required_capabilities' => ['duplicate', 'duplicate']], 'mcp-capabilities-duplicate');
     $refuse(['required_capabilities' => [str_repeat('c', 65)]], 'mcp-capability-length');
     $refuse(['required_capabilities' => array_map(fn (int $i): string => 'cap-'.$i, range(1, 26))], 'mcp-capabilities-overrun');
+    $refuse(['pr' => ['repo' => 'artisan-build/capstan', 'number' => 1, 'url' => 'https://example.test/pulls/1', 'extra' => true]], 'mcp-pr-extra');
+    $refuse(['pr' => ['repo' => 'artisan-build/capstan', 'number' => 0, 'url' => 'https://example.test/pulls/1']], 'mcp-pr-number');
+    $refuse(['pr' => ['repo' => 'artisan-build/capstan', 'number' => 1, 'url' => 'http://example.test/pulls/1']], 'mcp-pr-url');
 
     foreach ([false, true] as $default) {
         $team->update(['default_failover' => $default]);
@@ -910,12 +940,14 @@ test('MCP child orchestration enforces canonical intent and team defaults before
             'input' => [
                 'under_task_id' => $parent->id, 'title' => 'Boundary child', 'brief' => str_repeat('b', 32000),
                 'user_actor_address' => (string) $active->id, 'timebox_minutes' => 1440, 'required_capabilities' => $capabilities,
+                'pr' => ['repo' => 'artisan-build/capstan', 'number' => 321, 'url' => 'https://example.test/pulls/321'],
             ],
             'idempotency_key' => 'mcp-default-'.(int) $default,
         ], $token);
         $child = WorkTask::query()->findOrFail($result['task_id']);
         expect($child->failover)->toBe($default)->and($child->timebox_minutes)->toBe(1440)
             ->and($child->required_capabilities)->toBe($capabilities)
+            ->and($child->pr)->toBe(['repo' => 'artisan-build/capstan', 'number' => 321, 'url' => 'https://example.test/pulls/321'])
             ->and($child->latestBriefRevision()->firstOrFail()->content)->toHaveLength(32000);
     }
 });

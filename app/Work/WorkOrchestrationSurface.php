@@ -110,7 +110,10 @@ final readonly class WorkOrchestrationSurface
                 'owner_actor' => ['sometimes', 'required', 'string', 'regex:/\A[1-9][0-9]{0,18}\z/D'],
                 'priority' => ['sometimes', 'required', Rule::enum(WorkPriority::class)],
                 'depends_on' => ['sometimes', 'array', 'list', 'max:25'], 'depends_on.*' => ['required', 'uuid', 'distinct:strict'],
-                'expires_at' => ['sometimes', 'required', 'date'], 'pr' => ['sometimes', 'required', 'string', 'min:1', 'max:2048'],
+                'expires_at' => ['sometimes', 'required', 'date'], 'pr' => ['sometimes', 'required', 'array'],
+                'pr.repo' => ['required_with:pr', 'string', 'min:1', 'max:255'],
+                'pr.number' => ['required_with:pr', 'integer', 'min:1'],
+                'pr.url' => ['required_with:pr', 'string', 'max:2048', 'url:https'],
             ],
             'set_priority' => ['priority' => ['required', Rule::enum(WorkPriority::class)]],
             'revise_brief' => ['task_id' => ['required', 'uuid'], 'brief' => ['required', 'string', 'min:1', 'max:32000']],
@@ -125,6 +128,13 @@ final readonly class WorkOrchestrationSurface
         $validator = Validator::make($input, $rules);
         if ($validator->fails()) {
             throw $this->invalid();
+        }
+        if (isset($input['pr']) && is_array($input['pr'])) {
+            $prKeys = array_keys($input['pr']);
+            sort($prKeys);
+            if ($prKeys !== ['number', 'repo', 'url']) {
+                throw $this->invalid();
+            }
         }
         $validated = $validator->validated();
         if ($action === 'create_child') {

@@ -25,9 +25,10 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property string $creator_actor
  * @property string $owner_actor
  * @property WorkPriority $priority
+ * @property int $dependency_version
  * @property bool $routing_pool_work
  * @property CarbonImmutable|null $expires_at
- * @property string|null $pr
+ * @property array{repo: string, number: int, url: string}|null $pr
  * @property CarbonImmutable|null $cancelled_at
  * @property string|null $parent_task_id
  * @property string|null $workflow_ref
@@ -70,6 +71,7 @@ class WorkTask extends Model
         'creator_actor',
         'owner_actor',
         'priority',
+        'dependency_version',
         'routing_pool_work',
         'expires_at',
         'pr',
@@ -87,8 +89,10 @@ class WorkTask extends Model
             'required_capabilities' => 'array',
             'timebox_minutes' => 'integer',
             'priority' => WorkPriority::class,
+            'dependency_version' => 'integer',
             'routing_pool_work' => 'boolean',
             'expires_at' => 'immutable_datetime',
+            'pr' => 'array',
             'cancelled_at' => 'datetime',
         ];
     }

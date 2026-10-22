@@ -2,7 +2,8 @@
 
 namespace App\Models;
 
-use App\Enums\WorkExpirationReason;
+use App\Enums\WorkExpirationCause;
+use App\Enums\WorkExpirationProvenance;
 use App\Enums\WorkPriority;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -13,7 +14,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property string $owner_actor
  * @property WorkPriority $priority
  * @property int $waited_seconds
- * @property WorkExpirationReason $reason
+ * @property WorkExpirationProvenance $provenance
+ * @property WorkExpirationCause $cause
  * @property CarbonImmutable $expired_at
  * @property CarbonImmutable $created_at
  * @property-read WorkTask $workTask
@@ -30,7 +32,8 @@ class WorkTaskExpiration extends WorkAppendOnlyRecord
         'owner_actor',
         'priority',
         'waited_seconds',
-        'reason',
+        'provenance',
+        'cause',
         'expired_at',
     ];
 
@@ -40,7 +43,8 @@ class WorkTaskExpiration extends WorkAppendOnlyRecord
         return [
             'priority' => WorkPriority::class,
             'waited_seconds' => 'integer',
-            'reason' => WorkExpirationReason::class,
+            'provenance' => WorkExpirationProvenance::class,
+            'cause' => WorkExpirationCause::class,
             'expired_at' => 'immutable_datetime',
         ];
     }

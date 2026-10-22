@@ -2,15 +2,16 @@
 
 namespace App\Work;
 
-use App\Enums\WorkExpirationReason;
+use App\Enums\WorkExpirationProvenance;
 use App\Enums\WorkItemState;
 use App\Models\WorkTask;
 use Carbon\CarbonImmutable;
 use DomainException;
+use Illuminate\Support\Facades\DB;
 
 final class WorkTaskGate
 {
-    /** @return array{at: CarbonImmutable, reason: WorkExpirationReason}|null */
+    /** @return array{at: CarbonImmutable, provenance: WorkExpirationProvenance}|null */
     public function effectiveExpiry(WorkTask $task): ?array
     {
         $effective = null;
@@ -26,9 +27,9 @@ final class WorkTaskGate
             if ($cursor->expires_at !== null && ($effective === null || $cursor->expires_at->lt($effective['at']))) {
                 $effective = [
                     'at' => $cursor->expires_at,
-                    'reason' => $cursor->id === $task->id
-                        ? WorkExpirationReason::OwnExpiry
-                        : WorkExpirationReason::AncestorExpiry,
+                    'provenance' => $cursor->id === $task->id
+                        ? WorkExpirationProvenance::Own
+                        : WorkExpirationProvenance::Ancestor,
                 ];
             }
 
@@ -40,10 +41,10 @@ final class WorkTaskGate
         }
     }
 
-    public function dependenciesSuccessful(WorkTask $task, ?CarbonImmutable $now = null): bool
+    public function dependenciesSuccessful(WorkTask $task): bool
     {
         foreach ($task->dependencies()->get() as $dependency) {
-            if (! $this->successful($dependency, $now)) {
+            if (! $this->successful($dependency)) {
                 return false;
             }
         }
@@ -51,13 +52,9 @@ final class WorkTaskGate
         return true;
     }
 
-    public function successful(WorkTask $task, ?CarbonImmutable $now = null): bool
+    public function successful(WorkTask $task): bool
     {
-        $expiry = $this->effectiveExpiry($task);
-        $now ??= CarbonImmutable::now();
-
         return $task->cancelled_at === null
-            && ($expiry === null || $expiry['at']->gt($now))
             && $task->items()->exists()
             && ! $task->items()->where('state', '!=', WorkItemState::Acted->value)->exists();
     }
@@ -67,7 +64,22 @@ final class WorkTaskGate
         $expiry = $this->effectiveExpiry($task);
 
         return ($expiry === null || $expiry['at']->gt($now))
-            && $this->dependenciesSuccessful($task, $now);
+            && $this->dependenciesSuccessful($task);
+    }
+
+    /** @return array<string, int> */
+    public function lockDependencies(WorkTask $task): array
+    {
+        $dependencies = $task->dependencies()->orderBy('work_tasks.id')->get();
+        foreach ($dependencies as $dependency) {
+            WorkTask::query()->whereKey($dependency->id)
+                ->update(['updated_at' => DB::raw('updated_at')]);
+            $dependency->refresh();
+        }
+
+        return $dependencies->mapWithKeys(
+            fn (WorkTask $dependency): array => [$dependency->id => $dependency->dependency_version],
+        )->all();
     }
 
     public function root(WorkTask $task): WorkTask
