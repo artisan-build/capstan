@@ -365,6 +365,7 @@ final readonly class WorkClaimService
                                 ->whereKey($dependencyId)
                                 ->where('dependency_version', $version)
                                 ->whereNull('cancelled_at')
+                                ->doesntHave('expiration')
                                 ->has('items')
                                 ->whereDoesntHave('items', fn ($query) => $query->where('state', '!=', WorkItemState::Acted->value)));
                         }
