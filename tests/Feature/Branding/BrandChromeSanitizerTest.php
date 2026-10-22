@@ -99,6 +99,8 @@ function pr5ChromeContentLossCases(): array
     return [
         'dropped null character reference text' => ['<span>before&#0;after</span>'],
         'dropped surrogate character reference text' => ['<div>before&#xD800;after</div>'],
+        'dropped decimal surrogate character reference text' => ['<div>before&#55296;after</div>'],
+        'out-of-range character reference text' => ['<div>before&#x110000;after</div>'],
     ];
 }
 
@@ -209,6 +211,10 @@ test('well formed explicit trees and void elements remain accepted', function (s
     'no optional-end-tag elements' => [
         '<section><strong>one</strong><span>two</span></section>',
         '<section><strong>one</strong><span>two</span></section>',
+    ],
+    'literal author-supplied replacement character' => [
+        "<div>before\u{FFFD}after</div>",
+        "<div>before\u{FFFD}after</div>",
     ],
 ]);
 
