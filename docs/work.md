@@ -35,8 +35,43 @@ to the root owner; moving it to another person requires `reassign_task`. Descend
 owner and priority, including grandchildren. Changing the immediate child's input does not create a second
 ownership boundary.
 
-Existing tasks are not affected. A task created while pooled work was off stays addressed to its creator
-after it is turned on, and only tasks created after the change follow the new setting.
+Changing the pool policy does not affect existing tasks. A task created while pooled work was off stays
+addressed to its creator after it is turned on, and only tasks created after the change follow the new
+setting.
+
+## Reassigning a task
+
+`reassign_task` is the only way to move existing Work between people. It accepts a root `task_id`, the
+numeric `to_actor`, a mode, an optional note of up to 2,000 characters, and an `idempotency_key`. The current
+root owner may call it even when they are a Member. An Owner or Admin who belongs to the task's team may
+also call it. The new owner must be an active, admitted member of that same team. Child ids, people outside
+the team, inactive accounts, and offboarded accounts are refused. A request from outside the team does not
+reveal whether its task id exists there.
+
+Both modes assign the root and every descendant to the new owner and route later work to that person's
+machines. Items already running keep their claimant, lease, and fences, so the machine holding one may
+finish it. Every unanswered escalation in the subtree is addressed to the new owner, along with its queued
+human item. Answers already recorded remain attached to their original addressee.
+
+The `move` mode releases the orchestrator seat, clears its holder and session, and increments its fence. An
+old orchestrator write then fails its fence check, and only the new owner's eligible machines can claim the
+replacement turn. Ordinary running items are not released or fenced. The `escalations` mode leaves the
+current seat, session, lease, fence, active turn, and ordinary claims alone. Use it when the current
+orchestrator should continue while questions and ownership move to someone else.
+
+Each accepted reassignment adds one waking event to the root. The event records the old owner, new owner,
+mode, and optional note. A repeated call with the same idempotency key replays the accepted result without
+adding another event or notification.
+
+An orchestrator may omit `addressed_actor` when creating an escalation. Capstan then addresses it to the
+current root owner. Passing the id of another active person remains supported. Reassignment changes the
+addressee only for unanswered escalations.
+
+Work alerts are stored as Laravel database notifications as well as written to the existing logs. An
+escalation goes to its addressee, reassignment goes to the new owner, and stalled, heartbeat, pinned-host,
+and seat-waiting alerts go to the person who owns the affected work or machine. Notification payloads carry
+only bounded ids and state. The state change and notification insert share one database transaction; if the
+notification cannot be stored, neither change is committed.
 
 ## Priority, dependencies, and expiry
 

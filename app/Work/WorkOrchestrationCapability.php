@@ -220,7 +220,7 @@ final readonly class WorkOrchestrationCapability
     }
 
     /** @param list<string> $options */
-    public function escalate(WorkOrchestrationContext $context, string $key, string $addressedActor, string $question, array $options, string $recommendation, CarbonImmutable $now): WorkEscalation
+    public function escalate(WorkOrchestrationContext $context, string $key, ?string $addressedActor, string $question, array $options, string $recommendation, CarbonImmutable $now): WorkEscalation
     {
         return $this->authorised($context, $now, fn (WorkTask $parent): WorkEscalation => $this->orchestration->escalate(
             $parent, $key, $addressedActor, $question, $options, $recommendation,

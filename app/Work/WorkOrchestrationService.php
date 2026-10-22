@@ -256,7 +256,7 @@ final readonly class WorkOrchestrationService
     /** Validate caller-supplied options into a bounded list of nonempty strings.
      * @param  array<array-key, mixed>  $options
      */
-    public function escalate(WorkTask $parent, string $key, string $actor, string $question, array $options, string $recommendation): WorkEscalation
+    public function escalate(WorkTask $parent, string $key, ?string $actor, string $question, array $options, string $recommendation): WorkEscalation
     {
         if (trim($question) === '' || mb_strlen($question) > 10000 || ! array_is_list($options)
             || count($options) < 1 || count($options) > 10 || trim($recommendation) === '' || mb_strlen($recommendation) > 2000) {
@@ -269,7 +269,8 @@ final readonly class WorkOrchestrationService
         }
 
         return DB::transaction(function () use ($parent, $key, $actor, $question, $options, $recommendation): WorkEscalation {
-            $this->locks->tasks($parent->id);
+            $ancestors = $this->locks->tasks($parent->id);
+            $actor ??= $ancestors[0]->owner_actor;
 
             return $this->createEscalation($parent, $key, $actor, $question, ['options' => $options, 'recommendation' => $recommendation]);
         }, 5);
@@ -359,7 +360,7 @@ final readonly class WorkOrchestrationService
             $seat->active_item_id = null;
             $seat->save();
         }
-        $this->createEscalation($parent, 'circuit-breaker', $parent->user_actor_address ?? $parent->creator_actor,
+        $this->createEscalation($parent, 'circuit-breaker', $parent->owner_actor,
             'Automatic orchestration budget exhausted.', ['options' => ['Review the task before resuming', 'Cancel the task'], 'recommendation' => 'Review the task before resuming', 'reason' => $reason, 'turns' => $seat->turns_completed, 'turns_started' => $seat->turns_started, 'children' => $seat->children_created]);
     }
 

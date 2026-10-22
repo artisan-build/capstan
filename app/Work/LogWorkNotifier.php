@@ -6,6 +6,7 @@ use App\Models\Spoke;
 use App\Models\WorkEscalation;
 use App\Models\WorkItem;
 use App\Models\WorkOrchestratorSeat;
+use App\Models\WorkTask;
 use Illuminate\Support\Facades\Log;
 
 final class LogWorkNotifier implements WorkNotifier
@@ -13,6 +14,16 @@ final class LogWorkNotifier implements WorkNotifier
     public function escalated(WorkEscalation $escalation): void
     {
         Log::warning('Work escalation requires an answer.', ['task_id' => $escalation->work_task_id, 'item_id' => $escalation->work_item_id, 'escalation_id' => $escalation->id]);
+    }
+
+    public function reassigned(WorkTask $task, string $oldOwner, string $newOwner, string $mode): void
+    {
+        Log::warning('Work task reassigned.', [
+            'task_id' => $task->id,
+            'old_owner' => $oldOwner,
+            'new_owner' => $newOwner,
+            'mode' => $mode,
+        ]);
     }
 
     public function seatWaiting(WorkOrchestratorSeat $seat): void
