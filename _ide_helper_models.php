@@ -1064,6 +1064,7 @@ namespace App\Models{
  * @property int $timebox_minutes
  * @property string $creator_actor
  * @property string $owner_actor
+ * @property string|null $escalation_actor
  * @property WorkPriority $priority
  * @property int $dependency_version
  * @property bool $routing_pool_work
