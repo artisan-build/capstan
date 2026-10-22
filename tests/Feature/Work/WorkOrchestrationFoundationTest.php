@@ -1,6 +1,7 @@
 <?php
 
-use App\Enums\WorkExpirationReason;
+use App\Enums\WorkExpirationCause;
+use App\Enums\WorkExpirationProvenance;
 use App\Enums\WorkItemState;
 use App\Enums\WorkPriority;
 use App\Http\ApiErrorException;
@@ -9,6 +10,7 @@ use App\Models\Team;
 use App\Models\WorkEscalation;
 use App\Models\WorkItem;
 use App\Models\WorkOrchestrationEvent;
+use App\Models\WorkOrchestratorSeat;
 use App\Models\WorkTask;
 use App\Models\WorkTaskExpiration;
 use App\Work\WorkClaimService;
@@ -17,6 +19,7 @@ use App\Work\WorkItemStateService;
 use App\Work\WorkOrchestrationService;
 use App\Work\WorkRepresentation;
 use App\Work\WorkSweepService;
+use App\Work\WorkToolService;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Date;
@@ -146,6 +149,69 @@ test('dependencies gate real claims until every dependency item is acted', funct
     expect($claims->claim($team->id, 'worker', $spoke->id, ['builder'], [], 1, $now, 300)[0]->id)->toBe($dependentItem->id);
 });
 
+test('dependency invalidation before the locked gate prevents a stale claim', function (string $invalidation): void {
+    $team = Team::query()->create(['name' => 'Dependency invalidation', 'slug' => 'dependency-invalidation', 'pool_work' => false]);
+    $spoke = foundationSpoke('worker');
+    $dependency = foundationTask($team, ['owner_actor' => 'worker']);
+    $dependency->items()->create(['role' => 'dependency-builder', 'state' => WorkItemState::Acted]);
+    $dependent = foundationTask($team, ['owner_actor' => 'worker']);
+    resolve(WorkDependencyService::class)->replace($dependent, [$dependency->id]);
+    $dependent->items()->create(['role' => 'builder']);
+    $unfinished = foundationTask($team, ['owner_actor' => 'worker']);
+    $unfinished->items()->create(['role' => 'dependency-builder']);
+
+    $claimed = resolve(WorkClaimService::class)->claim(
+        $team->id,
+        'worker',
+        $spoke->id,
+        ['builder'],
+        [],
+        1,
+        CarbonImmutable::now(),
+        300,
+        afterCandidates: function () use ($invalidation, $team, $dependency, $dependent, $unfinished): void {
+            if ($invalidation === 'relation') {
+                resolve(WorkDependencyService::class)->replace($dependent, [$unfinished->id]);
+
+                return;
+            }
+            resolve(WorkToolService::class)->write(
+                $invalidation === 'cancel' ? 'cancel_task' : 'queue_item',
+                [
+                    'team_id' => $team->id,
+                    'task_id' => $dependency->id,
+                    ...($invalidation === 'queue' ? ['role' => 'reviewer'] : []),
+                ],
+                'worker',
+            );
+        },
+    );
+
+    expect($claimed)->toBe([])
+        ->and($dependent->items()->where('role', 'builder')->sole()->state)->toBe(WorkItemState::Queued);
+})->with(['cancel', 'queue', 'relation']);
+
+test('a dependency completed before expiry stays successful after its deadline', function (): void {
+    $team = Team::query()->create(['name' => 'Completed dependency expiry', 'slug' => 'completed-dependency-expiry', 'pool_work' => false]);
+    $spoke = foundationSpoke('worker');
+    $dependency = foundationTask($team, ['owner_actor' => 'worker', 'expires_at' => now()->addMinute()]);
+    $dependency->items()->create(['role' => 'dependency-builder', 'state' => WorkItemState::Acted]);
+    $dependent = foundationTask($team, ['owner_actor' => 'worker']);
+    resolve(WorkDependencyService::class)->replace($dependent, [$dependency->id]);
+    $item = $dependent->items()->create(['role' => 'builder']);
+    Date::setTestNow(now()->addMinutes(2));
+
+    resolve(WorkSweepService::class)->expiration(CarbonImmutable::now());
+    $claimed = resolve(WorkClaimService::class)->claim(
+        $team->id, 'worker', $spoke->id, ['builder'], [], 1, CarbonImmutable::now(), 300,
+    );
+
+    expect($claimed[0]->id)->toBe($item->id)
+        ->and($dependency->expiration()->doesntExist())->toBeTrue()
+        ->and(WorkOrchestrationEvent::query()->where('kind', 'dependency_failed')->count())->toBe(0)
+        ->and(WorkEscalation::query()->count())->toBe(0);
+});
+
 test('a failed dependency signals the root owner once without cancelling the dependent', function (): void {
     $user = capstanUser();
     $team = Team::default();
@@ -176,6 +242,23 @@ test('a failed dependency wakes an existing root orchestrator once', function ()
     expect(WorkOrchestrationEvent::query()->where('work_task_id', $dependent->id)->where('kind', 'dependency_failed')->count())->toBe(1)
         ->and(WorkEscalation::query()->where('work_task_id', $dependent->id)->count())->toBe(0)
         ->and($dependent->fresh()->cancelled_at)->toBeNull();
+});
+
+test('a failed dependency with a stopped root seat signals the owner once', function (): void {
+    $user = capstanUser();
+    $team = Team::default();
+    $dependency = foundationTask($team, ['owner_actor' => (string) $user->id]);
+    $dependent = foundationTask($team, ['owner_actor' => (string) $user->id]);
+    resolve(WorkDependencyService::class)->replace($dependent, [$dependency->id]);
+    WorkOrchestratorSeat::query()->create(['work_task_id' => $dependent->id, 'stopped_at' => now()]);
+    $failed = $dependency->items()->create(['role' => 'builder', 'state' => WorkItemState::Routed]);
+
+    resolve(WorkItemStateService::class)->transition($failed, WorkItemState::Failed, 'spoke', 'worker');
+    resolve(WorkDependencyService::class)->signalFailed($dependency);
+
+    expect(WorkOrchestrationEvent::query()->where('work_task_id', $dependent->id)->where('kind', 'dependency_failed')->count())->toBe(0)
+        ->and(WorkEscalation::query()->where('work_task_id', $dependent->id)->count())->toBe(1)
+        ->and($dependent->items()->where('role', WorkItem::ROLE_HUMAN)->sole()->addressed_actor)->toBe((string) $user->id);
 });
 
 test('claims use priority then UUIDv7 FIFO and active P0 roots are unique per owner', function (): void {
@@ -230,7 +313,8 @@ test('own and ancestor expiry block claims and sweeps expire queued items exactl
         ->and($queued->transitions()->where('to_state', WorkItemState::Expired)->count())->toBe(1)
         ->and(WorkTaskExpiration::query()->where('work_task_id', $root->id)->count())->toBe(1)
         ->and($record->id[14])->toBe('7')
-        ->and($record->reason)->toBe(WorkExpirationReason::OwnExpiry)
+        ->and($record->provenance)->toBe(WorkExpirationProvenance::Own)
+        ->and($record->cause)->toBe(WorkExpirationCause::Unclaimed)
         ->and($record->owner_actor)->toBe('expiry-owner')
         ->and($record->priority)->toBe(WorkPriority::P2)
         ->and($record->waited_seconds)->toBeGreaterThanOrEqual(0);
@@ -243,7 +327,24 @@ test('own and ancestor expiry block claims and sweeps expire queued items exactl
     ))->toBe([]);
     $sweep->expiration(CarbonImmutable::now());
     expect($childItem->fresh()->state)->toBe(WorkItemState::Expired)
-        ->and($child->expiration()->sole()->reason)->toBe(WorkExpirationReason::AncestorExpiry);
+        ->and($child->expiration()->sole()->provenance)->toBe(WorkExpirationProvenance::Ancestor)
+        ->and($child->expiration()->sole()->cause)->toBe(WorkExpirationCause::Unclaimed);
+});
+
+test('expiry records an unmet dependency as the never-ran cause', function (): void {
+    $team = Team::default();
+    $dependency = foundationTask($team);
+    $dependency->items()->create(['role' => 'builder']);
+    $task = foundationTask($team, ['expires_at' => now()->subMinute()]);
+    resolve(WorkDependencyService::class)->replace($task, [$dependency->id]);
+    $task->items()->create(['role' => 'reviewer']);
+
+    resolve(WorkSweepService::class)->expiration(CarbonImmutable::now());
+
+    expect($task->expiration()->sole()->cause)->toBe(WorkExpirationCause::DependencyUnmet)
+        ->and(array_column(WorkExpirationCause::cases(), 'value'))->toBe([
+            'dependency_unmet', 'unclaimed', 'no_eligible_machine', 'preempted',
+        ]);
 });
 
 test('task representations expose required orchestration fields and omit unset optionals', function (): void {

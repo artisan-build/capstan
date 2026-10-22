@@ -71,7 +71,11 @@ abstract class WorkOrchestrationTool extends CapstanTool
                     'timebox_minutes' => $schema->integer()->min(1)->max(1440), 'workflow_ref' => $schema->string()->max(2048),
                     'owner_actor' => $schema->string()->min(1)->max(19), 'priority' => $schema->string()->enum(['P0', 'P1', 'P2', 'P3']),
                     'depends_on' => $schema->array()->items($schema->string())->max(25)->unique(), 'expires_at' => $schema->string(),
-                    'pr' => $schema->string()->min(1)->max(2048),
+                    'pr' => $schema->object([
+                        'repo' => $schema->string()->min(1)->max(255)->required(),
+                        'number' => $schema->integer()->min(1)->required(),
+                        'url' => $schema->string()->min(1)->max(2048)->required(),
+                    ])->withoutAdditionalProperties(),
                 ])->withoutAdditionalProperties()->required(),
                 'idempotency_key' => $schema->string()->min(1)->max(255)->required(),
             ],
@@ -104,7 +108,12 @@ abstract class WorkOrchestrationTool extends CapstanTool
             'owner_actor' => $schema->string()->required(),
             'priority' => $schema->string()->enum(['P0', 'P1', 'P2', 'P3'])->required(),
             'depends_on' => $schema->array()->items($schema->string())->required(),
-            'expires_at' => $schema->string(), 'pr' => $schema->string(),
+            'expires_at' => $schema->string(),
+            'pr' => $schema->object([
+                'repo' => $schema->string()->required(),
+                'number' => $schema->integer()->required(),
+                'url' => $schema->string()->required(),
+            ])->withoutAdditionalProperties(),
         ])->withoutAdditionalProperties();
         $brief = $schema->object(['id' => $schema->string()->required(), 'sequence' => $schema->integer()->required(), 'content' => $schema->string()->required()])->withoutAdditionalProperties();
         $state = $schema->object(['id' => $schema->string()->required(), 'sequence' => $schema->integer()->required(), 'through' => $schema->integer()->required(), 'content' => $schema->string()->required()])->withoutAdditionalProperties();

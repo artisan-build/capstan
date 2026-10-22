@@ -47,15 +47,19 @@ raise it; the lower priority is applied to the existing descendants as well.
 `depends_on` is a list of task ids. Each dependency must exist in the same team and cannot be the task
 itself, one of its descendants, or an edge that closes a cycle. A dependent item stays queued until every
 dependency is successful. Success means the dependency is not cancelled, has at least one item, and every
-item is `acted`. Failed, cancelled, and expired dependencies do not satisfy the gate. They wake the root's
-orchestrator when it has one, or create one owner-addressed signal when it does not. The dependent task is
-not cancelled automatically.
+item is `acted`. A dependency completed before its deadline remains successful after the deadline passes.
+Failed, cancelled, and expired dependencies do not satisfy the gate. They wake a live root orchestrator,
+or create one owner-addressed signal when no live seat exists. A stopped seat uses the owner signal instead
+of dropping the event. The dependent task is not cancelled automatically.
 
-A task may set `expires_at`; `pr` is optional task metadata. A descendant's effective expiry is the earliest
-expiry on itself or any ancestor. An elapsed expiry blocks new claims immediately. The expiration sweep
-moves queued items to the terminal `expired` state and leaves claimed, delivered, or routed items running.
-It records one durable expiration row per task with the owner, priority, waited seconds, and whether the
-deadline came from the task or an ancestor. Repeated sweeps do not duplicate the record or transition.
+A task may set `expires_at`. Optional `pr` metadata is an object with a repository name, positive pull-request
+number, and HTTPS URL. A descendant's effective expiry is the earliest expiry on itself or any ancestor. An
+elapsed expiry blocks new claims immediately. The expiration sweep moves queued items to the terminal
+`expired` state and leaves claimed, delivered, or routed items running. Completed tasks are not expired.
+Each durable expiration row records the task, owner, priority, waited seconds, deadline provenance (`own` or
+`ancestor`), and a separate never-ran cause. PR1 records `dependency_unmet` when a dependency blocked the
+task and `unclaimed` otherwise. `no_eligible_machine` is reserved for evidence that proves that condition;
+`preempted` is reserved for PR3. Repeated sweeps do not duplicate the record or transition.
 
 Only an Owner or Admin can change it. The Work page at `/work` has a Pooled work section that names the
 team it changes (the default team) and a button that turns it on or off. A Member sees the button

@@ -50,6 +50,7 @@ final readonly class WorkClaimService
         array $roleProviders = [],
         bool $requireMachineProfile = false,
         ?Closure $afterCandidates = null,
+        ?Closure $afterDependencyGate = null,
     ): array {
         if ($capacity === 0 || ! $this->activeSpokeExists($actorId, $spokeId, $teamId, $roles, $capabilities, $roleProviders, $now, $requireMachineProfile)) {
             return [];
@@ -91,7 +92,9 @@ final readonly class WorkClaimService
                     $capabilities,
                     $roleProviders,
                     $requireMachineProfile,
+                    $afterDependencyGate,
                 );
+                $afterDependencyGate = null;
 
                 if ($item !== null) {
                     $claimed[] = $item;
@@ -279,19 +282,26 @@ final readonly class WorkClaimService
         array $capabilities = [],
         array $roleProviders = [],
         bool $requireMachineProfile = false,
+        ?Closure $afterDependencyGate = null,
     ): ?WorkItem {
         $attempt = 0;
 
         beginning:
         try {
-            return DB::transaction(function () use ($candidate, $teamId, $actorId, $spokeId, $now, $leaseSeconds, $roles, $capabilities, $roleProviders, $requireMachineProfile): ?WorkItem {
+            return DB::transaction(function () use ($candidate, $teamId, $actorId, $spokeId, $now, $leaseSeconds, $roles, $capabilities, $roleProviders, $requireMachineProfile, $afterDependencyGate): ?WorkItem {
                 if (! Spoke::query()->workEligible()->whereKey($spokeId)->where('actor_id', $actorId)->lockForUpdate()->exists()) {
                     return null;
                 }
                 $task = WorkTask::query()->whereKey($candidate->work_task_id)->first();
-                if (! $task instanceof WorkTask || ! $this->gate->claimable($task, $now)) {
+                if (! $task instanceof WorkTask) {
                     return null;
                 }
+                $dependencyVersions = $this->gate->lockDependencies($task);
+                $task->refresh();
+                if (! $this->gate->claimable($task, $now)) {
+                    return null;
+                }
+                $afterDependencyGate?->__invoke($task, $dependencyVersions);
                 if ($requireMachineProfile) {
                     if ($roles === []) {
                         return null;
@@ -331,11 +341,12 @@ final readonly class WorkClaimService
                     ->where('role', $candidate->role)
                     ->where('state', WorkItemState::Queued->value)
                     ->where('fence', $candidate->fence)
-                    ->whereHas('workTask', function ($query) use ($candidate, $teamId, $actorId, $spokeId, $seat, $now): void {
+                    ->whereHas('workTask', function ($query) use ($candidate, $teamId, $actorId, $spokeId, $seat, $now, $task, $dependencyVersions): void {
                         $query->where('team_id', $teamId)
                             ->whereNull('cancelled_at')
                             ->where(fn ($query) => $query->whereNull('expires_at')->orWhere('expires_at', '>', $now))
                             ->where('updated_at', $candidate->task_updated_at)
+                            ->where('dependency_version', $task->dependency_version)
                             ->where(function ($query) use ($actorId): void {
                                 $query->where('user_actor_address', $actorId)
                                     ->orWhere(function ($query) use ($actorId): void {
@@ -349,6 +360,14 @@ final readonly class WorkClaimService
                             ->when($seat === null, fn ($query) => $query->where(function ($query) use ($spokeId): void {
                                 $query->whereNull('device_spoke_id')->orWhere('device_spoke_id', $spokeId);
                             }));
+                        foreach ($dependencyVersions as $dependencyId => $version) {
+                            $query->whereHas('dependencies', fn ($query) => $query
+                                ->whereKey($dependencyId)
+                                ->where('dependency_version', $version)
+                                ->whereNull('cancelled_at')
+                                ->has('items')
+                                ->whereDoesntHave('items', fn ($query) => $query->where('state', '!=', WorkItemState::Acted->value)));
+                        }
                     })
                     ->update([
                         'state' => WorkItemState::Claimed->value,

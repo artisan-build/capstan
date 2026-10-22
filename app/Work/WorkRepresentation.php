@@ -82,6 +82,11 @@ final class WorkRepresentation
                 'integer' => $schema->integer(),
                 'boolean' => $schema->boolean(),
                 'strings' => $schema->array()->items($schema->string()),
+                'pr' => $schema->object([
+                    'repo' => $schema->string()->required(),
+                    'number' => $schema->integer()->required(),
+                    'url' => $schema->string()->required(),
+                ])->withoutAdditionalProperties(),
                 default => $schema->string(),
             };
             if ($field === 'state') {
@@ -118,7 +123,7 @@ final class WorkRepresentation
                 'user_actor_address' => 'string?', 'device_spoke_id' => 'integer?',
                 'failover' => 'boolean', 'required_capabilities' => 'strings',
                 'timebox_minutes' => 'integer', 'creator_actor' => 'string', 'owner_actor' => 'string',
-                'priority' => 'string', 'expires_at' => 'string?', 'pr' => 'string?',
+                'priority' => 'string', 'expires_at' => 'string?', 'pr' => 'pr?',
                 'cancelled_at' => 'string?', 'created_at' => 'string',
             ],
             'item' => [

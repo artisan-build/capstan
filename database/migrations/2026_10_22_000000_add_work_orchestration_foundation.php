@@ -12,9 +12,10 @@ return new class extends Migration
         Schema::table('work_tasks', function (Blueprint $table): void {
             $table->string('owner_actor')->nullable()->after('creator_actor');
             $table->string('priority', 2)->default('P2')->after('owner_actor');
+            $table->unsignedBigInteger('dependency_version')->default(0)->after('priority');
             $table->boolean('routing_pool_work')->default(false)->after('priority');
             $table->timestamp('expires_at')->nullable()->after('priority');
-            $table->string('pr', 2048)->nullable()->after('expires_at');
+            $table->json('pr')->nullable()->after('expires_at');
         });
 
         DB::table('work_tasks')->whereNull('owner_actor')->update(['owner_actor' => DB::raw('creator_actor')]);
@@ -42,7 +43,8 @@ return new class extends Migration
             $table->string('owner_actor');
             $table->string('priority', 2);
             $table->unsignedBigInteger('waited_seconds');
-            $table->string('reason', 32);
+            $table->string('provenance', 32);
+            $table->string('cause', 32);
             $table->timestamp('expired_at');
             $table->timestamp('created_at');
         });
@@ -58,7 +60,7 @@ return new class extends Migration
             $table->dropIndex(['team_id', 'owner_actor']);
             $table->dropIndex(['priority', 'id']);
             $table->dropIndex(['expires_at']);
-            $table->dropColumn(['owner_actor', 'priority', 'routing_pool_work', 'expires_at', 'pr']);
+            $table->dropColumn(['owner_actor', 'priority', 'dependency_version', 'routing_pool_work', 'expires_at', 'pr']);
         });
     }
 };
