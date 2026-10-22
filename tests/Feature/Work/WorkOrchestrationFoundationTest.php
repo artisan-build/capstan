@@ -197,10 +197,11 @@ test('claims use priority then UUIDv7 FIFO and active P0 roots are unique per ow
         ...$expected['P0'], ...$expected['P1'], ...$expected['P2'], ...$expected['P3'],
     ]);
 
-    expect(fn () => foundationTask($team, ['owner_actor' => 'priority-owner', 'priority' => WorkPriority::P0]))
-        ->toThrow(QueryException::class);
     $otherOwner = foundationTask($team, ['owner_actor' => 'other-priority-owner', 'priority' => WorkPriority::P0]);
     expect($otherOwner->priority)->toBe(WorkPriority::P0);
+
+    expect(fn () => foundationTask($team, ['owner_actor' => 'priority-owner', 'priority' => WorkPriority::P0]))
+        ->toThrow(QueryException::class);
 });
 
 test('own and ancestor expiry block claims and sweeps expire queued items exactly once', function (): void {
