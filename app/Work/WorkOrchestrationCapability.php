@@ -42,7 +42,11 @@ final readonly class WorkOrchestrationCapability
             $team = $parent->team()->lockForUpdate()->firstOrFail();
             if (! $team->pool_work) {
                 if (isset($attributes['user_actor_address']) && $attributes['user_actor_address'] !== $parent->owner_actor) {
-                    throw $this->forbidden('A non-pooled child must stay with the root owner; use reassign_task to move work between people.');
+                    throw new ApiErrorException(
+                        403,
+                        'use_reassign_task',
+                        'A non-pooled child must stay with the root owner; use reassign_task to move work between people.',
+                    );
                 }
                 $attributes['user_actor_address'] = $parent->owner_actor;
             }

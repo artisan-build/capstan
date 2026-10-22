@@ -915,6 +915,21 @@ test('MCP child orchestration enforces canonical intent and team defaults before
         expect([WorkTask::query()->count(), WorkBriefRevision::query()->count(), DB::table('mcp_write_claims')->count()])->toBe($before);
     };
 
+    $team->update(['pool_work' => false]);
+    $beforeCrossOwner = [WorkTask::query()->count(), WorkBriefRevision::query()->count()];
+    $crossOwner = workMcpResult('orchestrate', $base + [
+        'input' => [
+            'under_task_id' => $parent->id,
+            'title' => 'Cross-owner child',
+            'brief' => 'Cross-owner brief',
+            'user_actor_address' => (string) $active->id,
+        ],
+        'idempotency_key' => 'mcp-cross-owner-child',
+    ], $token);
+    expect($crossOwner)->toBe(['outcome' => 'refused', 'reason' => 'use_reassign_task'])
+        ->and([WorkTask::query()->count(), WorkBriefRevision::query()->count()])->toBe($beforeCrossOwner);
+    $team->update(['pool_work' => true]);
+
     $refuse(['device_spoke_id' => $spoke->id], 'mcp-pin-no-failover');
     $refuse(['device_spoke_id' => 999999999, 'failover' => true], 'mcp-missing-spoke');
     $refuse(['device_spoke_id' => $orphan->id, 'failover' => true], 'mcp-invalid-spoke');
