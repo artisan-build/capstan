@@ -270,7 +270,7 @@ final readonly class WorkOrchestrationService
 
         return DB::transaction(function () use ($parent, $key, $actor, $question, $options, $recommendation): WorkEscalation {
             $ancestors = $this->locks->tasks($parent->id);
-            $actor ??= $ancestors[0]->owner_actor;
+            $actor ??= $ancestors[0]->effectiveEscalationActor();
 
             return $this->createEscalation($parent, $key, $actor, $question, ['options' => $options, 'recommendation' => $recommendation]);
         }, 5);
@@ -285,7 +285,7 @@ final readonly class WorkOrchestrationService
             return $this->createEscalation(
                 $root,
                 $key,
-                $root->owner_actor,
+                $root->effectiveEscalationActor(),
                 $question,
                 $metadata + [
                     'options' => ['Review the dependent task', 'Cancel the dependent task'],
@@ -360,7 +360,7 @@ final readonly class WorkOrchestrationService
             $seat->active_item_id = null;
             $seat->save();
         }
-        $this->createEscalation($parent, 'circuit-breaker', $parent->owner_actor,
+        $this->createEscalation($parent, 'circuit-breaker', $parent->effectiveEscalationActor(),
             'Automatic orchestration budget exhausted.', ['options' => ['Review the task before resuming', 'Cancel the task'], 'recommendation' => 'Review the task before resuming', 'reason' => $reason, 'turns' => $seat->turns_completed, 'turns_started' => $seat->turns_started, 'children' => $seat->children_created]);
     }
 

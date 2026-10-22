@@ -131,6 +131,7 @@ final readonly class WorkOrchestrationCapability
                 'task' => array_filter([
                     'id' => $parent->id, 'team_id' => $parent->team_id, 'title' => $parent->title,
                     'workflow_ref' => $parent->workflow_ref, 'owner_actor' => $parent->owner_actor,
+                    'escalation_actor' => $parent->effectiveEscalationActor(),
                     'priority' => $parent->priority->value,
                     'depends_on' => $parent->dependencies()->orderBy('work_tasks.id')->pluck('work_tasks.id')->all(),
                     'expires_at' => $parent->expires_at?->toJSON(), 'pr' => $parent->pr,

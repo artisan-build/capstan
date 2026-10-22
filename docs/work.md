@@ -41,37 +41,41 @@ setting.
 
 ## Reassigning a task
 
-`reassign_task` is the only way to move existing Work between people. It accepts a root `task_id`, the
-numeric `to_actor`, a mode, an optional note of up to 2,000 characters, and an `idempotency_key`. The current
-root owner may call it even when they are a Member. An Owner or Admin who belongs to the task's team may
-also call it. The new owner must be an active, admitted member of that same team. Child ids, people outside
-the team, inactive accounts, and offboarded accounts are refused. A request from outside the team does not
-reveal whether its task id exists there.
+`reassign_task` accepts a root `task_id`, the numeric `to_actor`, a mode, an optional note of up to 2,000
+characters, and an `idempotency_key`. The current root owner may call it even when they are a Member. An
+Owner or Admin who belongs to the task's team may also call it. The target must be an active, admitted member
+of that same team. Child ids, people outside the team, inactive accounts, and offboarded accounts are
+refused. A request from outside the team does not reveal whether its task id exists there.
 
-Both modes assign the root and every descendant to the new owner and route later work to that person's
-machines. Items already running keep their claimant, lease, and fences, so the machine holding one may
-finish it. Every unanswered escalation in the subtree is addressed to the new owner, along with its queued
-human item. Answers already recorded remain attached to their original addressee.
+Work ownership and escalation addressing are separate. `owner_actor` controls which person's machines run
+the work. `escalation_actor` controls who receives questions and Work alerts; when it has not been set,
+Capstan uses the owner.
 
-The `move` mode releases the orchestrator seat, clears its holder and session, and increments its fence. An
-old orchestrator write then fails its fence check, and only the new owner's eligible machines can claim the
-replacement turn. Ordinary running items are not released or fenced. The `escalations` mode leaves the
-current seat, session, lease, fence, active turn, and ordinary claims alone. Use it when the current
-orchestrator should continue while questions and ownership move to someone else.
+The `move` mode assigns both roles to the target across the root and every descendant. It updates future
+person routing and clears any device pin owned by someone else, while preserving a pin already owned by the
+target. The old orchestrator seat is released, its fence increments, and old orchestrator writes fail their
+fence checks. Ordinary items already running keep their claimant, lease, and fences, so their original
+machine may finish them.
 
-Each accepted reassignment adds one waking event to the root. The event records the old owner, new owner,
-mode, and optional note. A repeated call with the same idempotency key replays the accepted result without
-adding another event or notification.
+The `escalations` mode changes only `escalation_actor`. Ownership, person and device routing, the current
+seat, session, lease, fences, active turn, and ordinary claims stay unchanged. Existing and newly queued
+items continue on the old owner's machines while questions and Work alerts go to the target.
 
-An orchestrator may omit `addressed_actor` when creating an escalation. Capstan then addresses it to the
-current root owner. Passing the id of another active person remains supported. Reassignment changes the
-addressee only for unanswered escalations.
+Both modes readdress every unanswered escalation in the subtree, along with its queued human item. Answers
+already recorded remain attached to their original addressee. Each accepted reassignment adds one waking
+event to the root with the old and new work owner, old and new escalation actor, mode, and optional note. A
+repeated call with the same idempotency key replays the accepted result without adding another event or
+notification.
+
+An orchestrator may omit `addressed_actor` when creating an escalation. Capstan then uses the root's
+effective escalation actor. Passing the id of another active person remains supported.
 
 Work alerts are stored as Laravel database notifications as well as written to the existing logs. An
-escalation goes to its addressee, reassignment goes to the new owner, and stalled, heartbeat, pinned-host,
-and seat-waiting alerts go to the person who owns the affected work or machine. Notification payloads carry
-only bounded ids and state. The state change and notification insert share one database transaction; if the
-notification cannot be stored, neither change is committed.
+escalation goes to its addressee. Reassignment, stalled-item, pinned-host, and seat-waiting alerts go to the
+effective escalation actor; a machine heartbeat alert goes to that machine's owner. Notification payloads
+carry only bounded ids and state. The state change and notification insert share one database transaction.
+If the notification cannot be stored, neither change is committed and the same MCP idempotency key can be
+retried.
 
 ## Priority, dependencies, and expiry
 

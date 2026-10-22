@@ -23,6 +23,7 @@ test('every Work finding logs and stores one bounded database notification for i
         'timebox_minutes' => 30,
         'creator_actor' => (string) $owner->id,
         'owner_actor' => (string) $owner->id,
+        'escalation_actor' => (string) $addressed->id,
     ]);
     $item = $task->items()->create(['role' => 'builder', 'fence' => 7]);
     $human = $task->items()->create(['role' => WorkItem::ROLE_HUMAN, 'addressed_actor' => (string) $addressed->id]);
@@ -47,11 +48,12 @@ test('every Work finding logs and stores one bounded database notification for i
     $notifier->missedHeartbeat($spoke);
     $notifier->waitingOnHost($item);
     $notifier->seatWaiting($seat);
-    $notifier->reassigned($task, (string) $owner->id, (string) $newOwner->id, 'move');
+    $task->forceFill(['escalation_actor' => (string) $newOwner->id])->save();
+    $notifier->reassigned($task, (string) $owner->id, (string) $owner->id, 'escalations');
 
-    expect($addressed->fresh()->notifications)->toHaveCount(1)
-        ->and($newOwner->fresh()->notifications)->toHaveCount(1)
-        ->and($owner->fresh()->notifications)->toHaveCount(4)
+    expect($newOwner->fresh()->notifications)->toHaveCount(1)
+        ->and($owner->fresh()->notifications)->toHaveCount(1)
+        ->and($addressed->fresh()->notifications)->toHaveCount(4)
         ->and($other->fresh()->notifications)->toBeEmpty();
     $notifications = $addressed->fresh()->notifications
         ->concat($newOwner->fresh()->notifications)

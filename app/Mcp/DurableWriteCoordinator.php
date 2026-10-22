@@ -258,6 +258,18 @@ final readonly class DurableWriteCoordinator
                 'refused',
                 $this->outcome('refused', ['reason' => $exception->errorCode]),
             );
+        } catch (RetryableWriteException) {
+            if ($this->releaseRetryableClaim($claimId, $fenceToken)) {
+                throw new JsonRpcException('The write service is temporarily unavailable.', -32003);
+            }
+
+            return $this->settleFailure(
+                $claimId,
+                $fenceToken,
+                $tool,
+                'outcome_unknown',
+                $this->outcome('outcome_unknown'),
+            );
         } catch (Throwable) {
             $effect = DB::table('mcp_write_effects')->where('claim_id', $claimId)->first();
 
@@ -288,6 +300,30 @@ final readonly class DurableWriteCoordinator
                 'outcome_unknown',
                 $this->outcome('outcome_unknown'),
             );
+        }
+    }
+
+    private function releaseRetryableClaim(string $claimId, string $fenceToken): bool
+    {
+        try {
+            return DB::transaction(function () use ($claimId, $fenceToken): bool {
+                $claim = DB::table('mcp_write_claims')->where('id', $claimId)->lockForUpdate()->first();
+                if ($claim === null
+                    || $claim->state !== 'in_progress'
+                    || ! is_string($claim->fence_token)
+                    || ! hash_equals($claim->fence_token, $fenceToken)
+                    || DB::table('mcp_write_effects')->where('claim_id', $claimId)->exists()) {
+                    return false;
+                }
+
+                return DB::table('mcp_write_claims')
+                    ->where('id', $claimId)
+                    ->where('fence_token', $fenceToken)
+                    ->where('state', 'in_progress')
+                    ->delete() === 1;
+            }, 3);
+        } catch (Throwable) {
+            return false;
         }
     }
 

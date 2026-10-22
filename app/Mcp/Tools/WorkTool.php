@@ -91,6 +91,8 @@ abstract class WorkTool extends CapstanTool
                 'task_id' => $schema->string(),
                 'old_owner' => $schema->string(),
                 'new_owner' => $schema->string(),
+                'old_escalation_actor' => $schema->string(),
+                'new_escalation_actor' => $schema->string(),
                 'mode' => $schema->string()->enum([WorkReassignmentService::MODE_MOVE, WorkReassignmentService::MODE_ESCALATIONS]),
             ],
             'get_task' => [

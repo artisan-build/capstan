@@ -5,6 +5,8 @@ namespace App\Work;
 use App\Enums\WorkPriority;
 use App\Http\ApiErrorException;
 use App\Machine\TeamMemberships;
+use App\Mcp\RetryableWriteException;
+use App\Models\Spoke;
 use App\Models\WorkEscalation;
 use App\Models\WorkItem;
 use App\Models\WorkTask;
@@ -29,7 +31,7 @@ final readonly class WorkReassignmentService
         private TeamMemberships $memberships,
     ) {}
 
-    /** @return array{task_id: string, old_owner: string, new_owner: string, mode: string} */
+    /** @return array{task_id: string, old_owner: string, new_owner: string, old_escalation_actor: string, new_escalation_actor: string, mode: string} */
     public function reassign(
         int $teamId,
         string $taskId,
@@ -73,10 +75,12 @@ final readonly class WorkReassignmentService
                 || ! $this->memberships->belongsTo($target, $teamId)) {
                 throw $this->refused('invalid_target');
             }
-            if ($root->owner_actor === $targetActor) {
+            $oldEscalationActor = $root->effectiveEscalationActor();
+            if (($mode === self::MODE_MOVE && $root->owner_actor === $targetActor && $oldEscalationActor === $targetActor)
+                || ($mode === self::MODE_ESCALATIONS && $oldEscalationActor === $targetActor)) {
                 throw $this->refused('reassignment_unchanged');
             }
-            if ($root->priority === WorkPriority::P0
+            if ($mode === self::MODE_MOVE && $root->priority === WorkPriority::P0
                 && WorkTask::query()
                     ->where('owner_actor', $targetActor)
                     ->whereNull('parent_task_id')
@@ -90,19 +94,25 @@ final readonly class WorkReassignmentService
             $oldOwner = $root->owner_actor;
             $taskIds = $this->subtreeIds($root);
             try {
-                WorkTask::query()->whereKey($taskIds)->update([
-                    'owner_actor' => $targetActor,
-                    'user_actor_address' => $targetActor,
-                    'updated_at' => CarbonImmutable::now(),
-                ]);
+                $updates = $mode === self::MODE_MOVE
+                    ? ['owner_actor' => $targetActor, 'escalation_actor' => $targetActor, 'user_actor_address' => $targetActor]
+                    : ['escalation_actor' => $targetActor];
+                WorkTask::query()->whereKey($taskIds)->update([...$updates, 'updated_at' => CarbonImmutable::now()]);
             } catch (QueryException $exception) {
-                if ($root->priority === WorkPriority::P0
+                if ($mode === self::MODE_MOVE && $root->priority === WorkPriority::P0
                     && (str_contains($exception->getMessage(), 'work_tasks_one_active_p0_per_owner')
                         || str_contains($exception->getMessage(), 'work_tasks.owner_actor'))) {
                     throw $this->refused('active_p0_exists');
                 }
 
                 throw $exception;
+            }
+            if ($mode === self::MODE_MOVE) {
+                WorkTask::query()
+                    ->whereKey($taskIds)
+                    ->whereNotNull('device_spoke_id')
+                    ->whereNotIn('device_spoke_id', Spoke::query()->select('id')->where('actor_id', $targetActor))
+                    ->update(['device_spoke_id' => null, 'updated_at' => CarbonImmutable::now()]);
             }
 
             $openEscalations = WorkEscalation::query()
@@ -126,15 +136,28 @@ final readonly class WorkReassignmentService
                 $root,
                 'reassignment:'.$sourceKey,
                 'task_reassigned',
-                ['old_owner' => $oldOwner, 'new_owner' => $targetActor, 'mode' => $mode, 'note' => $note],
+                [
+                    'old_owner' => $oldOwner,
+                    'new_owner' => $root->owner_actor,
+                    'old_escalation_actor' => $oldEscalationActor,
+                    'new_escalation_actor' => $root->effectiveEscalationActor(),
+                    'mode' => $mode,
+                    'note' => $note,
+                ],
                 inheritAuthor: false,
             );
-            $this->notifier->reassigned($root, $oldOwner, $targetActor, $mode);
+            try {
+                $this->notifier->reassigned($root, $oldOwner, $root->owner_actor, $mode);
+            } catch (QueryException $exception) {
+                throw new RetryableWriteException('A transactional notification write failed.', previous: $exception);
+            }
 
             return [
                 'task_id' => $root->id,
                 'old_owner' => $oldOwner,
-                'new_owner' => $targetActor,
+                'new_owner' => $root->owner_actor,
+                'old_escalation_actor' => $oldEscalationActor,
+                'new_escalation_actor' => $root->effectiveEscalationActor(),
                 'mode' => $mode,
             ];
         }, 5);

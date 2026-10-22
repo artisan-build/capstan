@@ -21,6 +21,7 @@ final class WorkRepresentation
     {
         return [
             ...$this->present($task, 'task'),
+            'escalation_actor' => $task->effectiveEscalationActor(),
             'depends_on' => $task->dependencies()->orderBy('work_tasks.id')->pluck('work_tasks.id')->all(),
         ];
     }
@@ -123,6 +124,7 @@ final class WorkRepresentation
                 'user_actor_address' => 'string?', 'device_spoke_id' => 'integer?',
                 'failover' => 'boolean', 'required_capabilities' => 'strings',
                 'timebox_minutes' => 'integer', 'creator_actor' => 'string', 'owner_actor' => 'string',
+                'escalation_actor' => 'string',
                 'priority' => 'string', 'expires_at' => 'string?', 'pr' => 'pr?',
                 'cancelled_at' => 'string?', 'created_at' => 'string',
             ],

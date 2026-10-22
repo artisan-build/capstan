@@ -29,11 +29,12 @@ final readonly class DatabaseWorkNotifier implements WorkNotifier
     public function reassigned(WorkTask $task, string $oldOwner, string $newOwner, string $mode): void
     {
         $this->logger->reassigned($task, $oldOwner, $newOwner, $mode);
-        $this->notify($newOwner, [
+        $this->notify($task->effectiveEscalationActor(), [
             'kind' => 'task_reassigned',
             'task_id' => $task->id,
             'old_owner' => $oldOwner,
             'new_owner' => $newOwner,
+            'escalation_actor' => $task->effectiveEscalationActor(),
             'mode' => $mode,
         ]);
     }
@@ -41,13 +42,16 @@ final readonly class DatabaseWorkNotifier implements WorkNotifier
     public function stalled(WorkItem $item): void
     {
         $this->logger->stalled($item);
-        $this->notify($item->workTask->owner_actor, [
-            'kind' => 'item_stalled',
-            'task_id' => $item->work_task_id,
-            'item_id' => $item->id,
-            'fence' => $item->fence,
-            'state' => 'stalled',
-        ]);
+        $actor = $this->taskEscalationActor($item->work_task_id);
+        if ($actor !== null) {
+            $this->notify($actor, [
+                'kind' => 'item_stalled',
+                'task_id' => $item->work_task_id,
+                'item_id' => $item->id,
+                'fence' => $item->fence,
+                'state' => 'stalled',
+            ]);
+        }
     }
 
     public function missedHeartbeat(Spoke $spoke): void
@@ -63,26 +67,34 @@ final readonly class DatabaseWorkNotifier implements WorkNotifier
     public function waitingOnHost(WorkItem $item): void
     {
         $this->logger->waitingOnHost($item);
-        $this->notify($item->workTask->owner_actor, [
-            'kind' => 'item_waiting_on_host',
-            'task_id' => $item->work_task_id,
-            'item_id' => $item->id,
-            'state' => 'waiting',
-        ]);
+        $actor = $this->taskEscalationActor($item->work_task_id);
+        if ($actor !== null) {
+            $this->notify($actor, [
+                'kind' => 'item_waiting_on_host',
+                'task_id' => $item->work_task_id,
+                'item_id' => $item->id,
+                'state' => 'waiting',
+            ]);
+        }
     }
 
     public function seatWaiting(WorkOrchestratorSeat $seat): void
     {
         $this->logger->seatWaiting($seat);
-        $owner = WorkTask::query()->whereKey($seat->work_task_id)->value('owner_actor');
-        if (is_string($owner)) {
-            $this->notify($owner, [
+        $actor = $this->taskEscalationActor($seat->work_task_id);
+        if ($actor !== null) {
+            $this->notify($actor, [
                 'kind' => 'seat_waiting',
                 'task_id' => $seat->work_task_id,
                 'seat_id' => $seat->id,
                 'state' => 'waiting',
             ]);
         }
+    }
+
+    private function taskEscalationActor(string $taskId): ?string
+    {
+        return WorkTask::query()->find($taskId)?->effectiveEscalationActor();
     }
 
     /** @param array<string, int|string> $data */

@@ -24,7 +24,6 @@ use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
-use Illuminate\Database\QueryException;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -134,6 +133,9 @@ test('move cascades ownership fences the orchestrator and preserves a running or
     $grandchild = reassignmentTask($oldOwner, $child);
     $oldSpoke = reassignmentSpoke($oldOwner);
     $newSpoke = reassignmentSpoke($newOwner);
+    $root->update(['device_spoke_id' => $oldSpoke->id, 'failover' => false]);
+    $child->update(['device_spoke_id' => $newSpoke->id, 'failover' => false]);
+    $grandchild->update(['device_spoke_id' => $oldSpoke->id, 'failover' => false]);
     $engine = resolve(WorkOrchestrationService::class);
     $engine->event($root, 'before-move', 'test_event');
     $turn = reassignmentClaims($team, $oldOwner, $oldSpoke, [WorkItem::ROLE_ORCHESTRATOR])[0];
@@ -166,8 +168,12 @@ test('move cascades ownership fences the orchestrator and preserves a running or
     ]);
     foreach ([$root, $child, $grandchild] as $task) {
         expect($task->fresh()->owner_actor)->toBe((string) $newOwner->id)
+            ->and($task->fresh()->effectiveEscalationActor())->toBe((string) $newOwner->id)
             ->and($task->fresh()->user_actor_address)->toBe((string) $newOwner->id);
     }
+    expect($root->fresh()->device_spoke_id)->toBeNull()
+        ->and($child->fresh()->device_spoke_id)->toBe($newSpoke->id)
+        ->and($grandchild->fresh()->device_spoke_id)->toBeNull();
 
     $seatAfter = $seatBefore->fresh();
     expect($seatAfter->fence)->toBeGreaterThan($seatBefore->fence)
@@ -199,6 +205,8 @@ test('move cascades ownership fences the orchestrator and preserves a running or
         ->and($event->evidence)->toBe([
             'old_owner' => (string) $oldOwner->id,
             'new_owner' => (string) $newOwner->id,
+            'old_escalation_actor' => (string) $oldOwner->id,
+            'new_escalation_actor' => (string) $newOwner->id,
             'mode' => 'move',
             'note' => 'Handing off the root',
         ])
@@ -215,7 +223,14 @@ test('escalations mode preserves live authority and readdresses only unanswered 
     $root = reassignmentTask($oldOwner, team: $team);
     $child = reassignmentTask($oldOwner, $root);
     $oldSpoke = reassignmentSpoke($oldOwner);
+    $newSpoke = reassignmentSpoke($newOwner);
+    $root->update(['device_spoke_id' => $oldSpoke->id, 'failover' => false]);
+    $child->update(['device_spoke_id' => $oldSpoke->id, 'failover' => false]);
     $engine = resolve(WorkOrchestrationService::class);
+    expect($root->escalation_actor)->toBeNull()
+        ->and($root->effectiveEscalationActor())->toBe((string) $oldOwner->id);
+    $fallback = $engine->escalate($root, 'fallback-before-reassignment', null, 'Fallback recipient?', ['Continue'], 'Continue');
+    expect($fallback->addressed_actor)->toBe((string) $oldOwner->id);
     $engine->event($root, 'before-escalations', 'test_event');
     $turn = reassignmentClaims($team, $oldOwner, $oldSpoke, [WorkItem::ROLE_ORCHESTRATOR])[0];
     $leaf = $child->items()->create(['role' => 'builder']);
@@ -245,6 +260,12 @@ test('escalations mode preserves live authority and readdresses only unanswered 
 
     expect(reassignmentRaw(WorkOrchestratorSeat::query()->where('work_task_id', $root->id)->sole(), $seatFields))->toBe($seatBefore)
         ->and(reassignmentRaw($running->fresh(), $runningFields))->toBe($runningBefore);
+    foreach ([$root, $child] as $task) {
+        expect($task->fresh()->owner_actor)->toBe((string) $oldOwner->id)
+            ->and($task->fresh()->user_actor_address)->toBe((string) $oldOwner->id)
+            ->and($task->fresh()->effectiveEscalationActor())->toBe((string) $newOwner->id)
+            ->and($task->fresh()->device_spoke_id)->toBe($oldSpoke->id);
+    }
     foreach ([$openRoot, $openChild] as $open) {
         expect($open->fresh()->addressed_actor)->toBe((string) $newOwner->id)
             ->and(WorkItem::query()->findOrFail($open->work_item_id)->addressed_actor)->toBe((string) $newOwner->id);
@@ -257,6 +278,15 @@ test('escalations mode preserves live authority and readdresses only unanswered 
 
     $surface = resolve(WorkOrchestrationSurface::class);
     $context = $surface->claimed($turn->id, $turn->fence);
+    $created = $surface->act($context, 'create_child', [
+        'under_task_id' => $root->id,
+        'title' => 'Escalations-mode child',
+        'brief' => 'Work ownership stays with the old owner.',
+    ], CarbonImmutable::now());
+    $createdChild = WorkTask::query()->findOrFail($created['id']);
+    expect($createdChild->owner_actor)->toBe((string) $oldOwner->id)
+        ->and($createdChild->user_actor_address)->toBe((string) $oldOwner->id)
+        ->and($createdChild->effectiveEscalationActor())->toBe((string) $newOwner->id);
     $defaulted = $surface->act($context, 'escalate', [
         'key' => 'default-after-reassignment',
         'question' => 'Who receives this?',
@@ -274,6 +304,11 @@ test('escalations mode preserves live authority and readdresses only unanswered 
         ->and(WorkEscalation::query()->findOrFail($explicitResult['id'])->addressed_actor)->toBe((string) $explicit->id)
         ->and($newOwner->fresh()->notifications)->toHaveCount(2)
         ->and($explicit->fresh()->notifications)->toHaveCount(1);
+
+    $later = $child->items()->create(['role' => 'later-builder']);
+    expect(reassignmentClaims($team, $newOwner, $newSpoke, ['later-builder']))->toBe([]);
+    expect(reassignmentClaims($team, $oldOwner, $oldSpoke, ['later-builder']))->toHaveCount(1)
+        ->and($later->fresh()->claimant_actor)->toBe((string) $oldOwner->id);
 });
 
 test('authorization targets exact input and durable replay are enforced without duplicate effects', function (): void {
@@ -432,25 +467,45 @@ test('reassignment rejects unknown fields wrong scalar types invalid UUIDs modes
     'long note' => [['note' => str_repeat('n', 2001)]],
 ]);
 
-test('a notification insert failure rolls back reassignment and can be retried safely', function (): void {
+test('a notification insert failure leaves the published durable key retryable without partial effects', function (): void {
     $owner = capstanUser(['role' => 'member']);
     $target = capstanUser(['role' => 'member']);
     $root = reassignmentTask($owner);
-    $service = resolve(WorkReassignmentService::class);
+    $token = reassignmentToken($owner);
+    $engine = resolve(WorkOrchestrationService::class);
+    $open = $engine->escalate($root, 'rollback-open', (string) $owner->id, 'Rollback question', ['Continue'], 'Continue');
+    $engine->event($root, 'rollback-turn', 'test_event');
+    $spoke = reassignmentSpoke($owner);
+    $turn = reassignmentClaims(Team::default(), $owner, $spoke, [WorkItem::ROLE_ORCHESTRATOR])[0];
+    DB::table('notifications')->delete();
+    $seatFields = ['holder_actor', 'holder_spoke_id', 'session_ref', 'interactive', 'lease_until', 'fence', 'active_item_id'];
+    $seatBefore = reassignmentRaw(WorkOrchestratorSeat::query()->where('work_task_id', $root->id)->sole(), $seatFields);
+    $turnFields = ['state', 'claimant_spoke_id', 'claimant_actor', 'lease_until', 'fence', 'seat_fence'];
+    $turnBefore = reassignmentRaw($turn, $turnFields);
+    $eventsBefore = WorkOrchestrationEvent::query()->count();
+    $arguments = [
+        'team_id' => Team::default()->id,
+        'task_id' => $root->id,
+        'to_actor' => (string) $target->id,
+        'mode' => WorkReassignmentService::MODE_MOVE,
+        'idempotency_key' => 'notification-failure',
+    ];
     Schema::drop('notifications');
 
-    expect(fn () => $service->reassign(
-        Team::default()->id,
-        $root->id,
-        (string) $owner->id,
-        (string) $target->id,
-        WorkReassignmentService::MODE_MOVE,
-        null,
-        'notification-failure',
-    ))->toThrow(QueryException::class);
+    $failed = reassignmentCall($arguments, $token)->assertOk();
+    expect($failed->json('result.isError'))->toBeTrue()
+        ->and($failed->json('result.content.0.text'))->toBe('The write service is temporarily unavailable.')
+        ->and($failed->getContent())->not->toContain('notifications')
+        ->and($failed->getContent())->not->toContain('SQLSTATE');
     expect($root->fresh()->owner_actor)->toBe((string) $owner->id)
-        ->and(WorkOrchestrationEvent::query()->count())->toBe(0)
-        ->and(WorkOrchestratorSeat::query()->count())->toBe(0);
+        ->and($root->fresh()->escalation_actor)->toBeNull()
+        ->and($open->fresh()->addressed_actor)->toBe((string) $owner->id)
+        ->and(WorkItem::query()->findOrFail($open->work_item_id)->addressed_actor)->toBe((string) $owner->id)
+        ->and(WorkOrchestrationEvent::query()->count())->toBe($eventsBefore)
+        ->and(reassignmentRaw(WorkOrchestratorSeat::query()->where('work_task_id', $root->id)->sole(), $seatFields))->toBe($seatBefore)
+        ->and(reassignmentRaw($turn->fresh(), $turnFields))->toBe($turnBefore)
+        ->and(DB::table('mcp_write_claims')->where('idempotency_key', 'notification-failure')->count())->toBe(0)
+        ->and(DB::table('mcp_write_effects')->count())->toBe(0);
 
     Schema::create('notifications', function (Blueprint $table): void {
         $table->uuid('id')->primary();
@@ -460,17 +515,13 @@ test('a notification insert failure rolls back reassignment and can be retried s
         $table->timestamp('read_at')->nullable();
         $table->timestamps();
     });
-    $result = $service->reassign(
-        Team::default()->id,
-        $root->id,
-        (string) $owner->id,
-        (string) $target->id,
-        WorkReassignmentService::MODE_MOVE,
-        null,
-        'notification-failure',
-    );
-    expect($result['new_owner'])->toBe((string) $target->id)
+    $result = reassignmentResult($arguments, $token);
+    expect($result['outcome'])->toBe('accepted')
+        ->and($result['new_owner'])->toBe((string) $target->id)
+        ->and($result['new_escalation_actor'])->toBe((string) $target->id)
         ->and($root->fresh()->owner_actor)->toBe((string) $target->id)
         ->and(WorkOrchestrationEvent::query()->where('kind', 'task_reassigned')->count())->toBe(1)
-        ->and($target->fresh()->notifications)->toHaveCount(1);
+        ->and($target->fresh()->notifications)->toHaveCount(1)
+        ->and(DB::table('mcp_write_claims')->where('idempotency_key', 'notification-failure')->value('state'))->toBe('accepted')
+        ->and(DB::table('mcp_write_effects')->count())->toBe(1);
 });
