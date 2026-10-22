@@ -19,7 +19,9 @@ final readonly class MachineWorkArbiter
         private MachineUsageFreshness $freshness,
     ) {}
 
-    /** @param list<string> $requiredCapabilities */
+    /** @param list<string> $requiredCapabilities
+     * @param  list<string>  $excludedTaskIds
+     */
     public function isWinner(
         int $teamId,
         string $role,
@@ -31,6 +33,7 @@ final readonly class MachineWorkArbiter
         ?string $ownerActor = null,
         bool $routingPoolWork = true,
         ?int $deviceSpokeId = null,
+        array $excludedTaskIds = [],
     ): bool {
         /** @var list<array{id: int, full: int, health: int, known: int, remaining: float|null, reset: int|null, count: int, ceiling: int}> $ranked */
         $ranked = [];
@@ -66,7 +69,7 @@ final readonly class MachineWorkArbiter
 
             $count = $this->runtime->authoritativeClaimedCount($machine->id);
             $full = $count >= $setting->concurrency_ceiling;
-            if ($full && (! $allowPreemption || resolve(WorkPreemptionService::class)->victim($machine->id, $now) === null)) {
+            if ($full && (! $allowPreemption || resolve(WorkPreemptionService::class)->victim($machine->id, $now, $excludedTaskIds) === null)) {
                 continue;
             }
             if (! $full && $presence->available_capacity < 1) {

@@ -240,6 +240,42 @@ test('preview and release use the same deterministic machine for an owner only o
         ->and($winnerVictim->fresh()->release_for_item_id)->toBe($opportunity->id);
 });
 
+test('preview excludes the elevating subtree when arbitrating full machines', function (): void {
+    $owner = capstanUser();
+    $rootItemMachine = preemptionMachine($owner);
+    $victimMachine = preemptionMachine($owner);
+    expect($rootItemMachine->id)->toBeLessThan($victimMachine->id);
+
+    $root = preemptionTask($owner);
+    $rootItem = preemptionRunning($root, $rootItemMachine);
+    $victim = preemptionRunning(preemptionTask($owner, 'P3'), $victimMachine);
+    $opportunity = $root->items()->create(['role' => 'builder']);
+    $service = resolve(WorkPriorityService::class);
+    $input = ['team_id' => Team::default()->id, 'task_id' => $root->id, 'priority' => 'P0'];
+
+    $preview = $service->change($input, (string) $owner->id, 'excluded-subtree-preview');
+    expect($preview['preemptions'])->toBe([[
+        'item_id' => $victim->id,
+        'role' => 'builder',
+        'machine_id' => $victimMachine->id,
+        'machine_name' => 'Test machine',
+        'owner_actor' => (string) $owner->id,
+    ]]);
+
+    $confirmed = $service->change([
+        ...$input,
+        'confirmation_token' => $preview['confirmation_token'],
+        'reason' => 'Incident response',
+    ], (string) $owner->id, 'excluded-subtree-confirm');
+    expect($confirmed)->toMatchArray(['priority_changed' => true, 'priority' => 'P0']);
+
+    expect(preemptionClaim($rootItemMachine))->toBe([])
+        ->and($rootItem->fresh()->release_requested_at)->toBeNull();
+    expect(preemptionClaim($victimMachine))->toBe([])
+        ->and($victim->fresh()->release_for_item_id)->toBe($opportunity->id)
+        ->and($rootItem->fresh()->release_requested_at)->toBeNull();
+});
+
 test('task-ineligible free machines cannot suppress preview or release arbitration', function (string $route): void {
     $owner = capstanUser();
     $eligible = preemptionMachine($owner);

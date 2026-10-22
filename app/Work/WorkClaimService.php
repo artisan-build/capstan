@@ -307,6 +307,7 @@ final readonly class WorkClaimService
                             $candidate->owner_actor,
                             (bool) $candidate->routing_pool_work,
                             $candidate->device_spoke_id === null ? null : (int) $candidate->device_spoke_id,
+                            $taskIds ?? [],
                         ))) {
                     $eligible[] = $candidate;
                 }
