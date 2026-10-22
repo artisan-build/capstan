@@ -6,6 +6,7 @@ use App\Enums\WorkItemState;
 use App\Models\Spoke;
 use App\Models\WorkItem;
 use App\Models\WorkTask;
+use App\Models\WorkTaskExpiration;
 use Carbon\CarbonImmutable;
 use Closure;
 use Illuminate\Database\Eloquent\Builder;
@@ -13,7 +14,13 @@ use Illuminate\Support\Facades\DB;
 
 final readonly class WorkSweepService
 {
-    public function __construct(private WorkWorkerService $workers, private WorkNotifier $notifier) {}
+    public function __construct(
+        private WorkWorkerService $workers,
+        private WorkNotifier $notifier,
+        private WorkTaskGate $gate,
+        private WorkItemStateService $states,
+        private WorkDependencyService $dependencies,
+    ) {}
 
     public function liveness(CarbonImmutable $now, ?Closure $afterIdentified = null): void
     {
@@ -107,6 +114,49 @@ final readonly class WorkSweepService
                         $this->notifier->waitingOnHost($item->fresh());
                     }
                 }
+            }, 5);
+        }
+    }
+
+    public function expiration(CarbonImmutable $now, ?Closure $afterIdentified = null): void
+    {
+        $candidates = WorkTask::query()
+            ->whereNull('cancelled_at')
+            ->where(fn ($query) => $query->whereNotNull('expires_at')->orWhereNotNull('parent_task_id'))
+            ->where(fn ($query) => $query->doesntHave('expiration')->orWhereHas('items', fn ($query) => $query->where('state', WorkItemState::Queued->value)))
+            ->orderBy('id')
+            ->get();
+
+        foreach ($candidates as $candidate) {
+            $expiry = $this->gate->effectiveExpiry($candidate);
+            if ($expiry === null || $expiry['at']->gt($now)) {
+                continue;
+            }
+
+            $afterIdentified?->__invoke($candidate);
+            DB::transaction(function () use ($candidate, $now): void {
+                resolve(WorkOrchestrationLock::class)->tasks($candidate->id);
+                $task = WorkTask::query()->whereKey($candidate->id)->firstOrFail();
+                $expiry = $this->gate->effectiveExpiry($task);
+                if ($expiry === null || $expiry['at']->gt($now)) {
+                    return;
+                }
+
+                foreach ($task->items()->where('state', WorkItemState::Queued->value)->orderBy('id')->get() as $item) {
+                    $this->states->transition($item, WorkItemState::Expired, 'system', 'task-expiry', $now);
+                }
+
+                WorkTaskExpiration::query()->firstOrCreate(
+                    ['work_task_id' => $task->id],
+                    [
+                        'owner_actor' => $task->owner_actor,
+                        'priority' => $task->priority,
+                        'waited_seconds' => max(0, (int) $task->created_at->diffInSeconds($now, false)),
+                        'reason' => $expiry['reason'],
+                        'expired_at' => $now,
+                    ],
+                );
+                $this->dependencies->signalFailed($task);
             }, 5);
         }
     }

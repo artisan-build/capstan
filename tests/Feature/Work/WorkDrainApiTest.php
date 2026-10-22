@@ -34,6 +34,7 @@ function workDrainTeam(array $attributes = []): Team
         'name' => 'Work drain team '.$suffix,
         'slug' => 'work-drain-'.$suffix,
         'is_default' => false,
+        'pool_work' => true,
     ], $attributes));
 }
 

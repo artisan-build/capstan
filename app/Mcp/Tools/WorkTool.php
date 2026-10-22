@@ -3,6 +3,7 @@
 namespace App\Mcp\Tools;
 
 use App\Enums\WorkItemState;
+use App\Enums\WorkPriority;
 use App\Http\ApiErrorException;
 use App\Mcp\DurableWriteCoordinator;
 use App\Mcp\OwnerSubjectResolver;
@@ -42,6 +43,11 @@ abstract class WorkTool extends CapstanTool
                 'failover' => $schema->boolean(),
                 'required_capabilities' => $schema->array()->items($schema->string()->min(1)->max(64))->max(25)->unique(),
                 'timebox_minutes' => $schema->integer()->min(1)->max(1440),
+                'owner_actor' => $schema->string()->min(1)->max(19),
+                'priority' => $schema->string()->enum(WorkPriority::class),
+                'depends_on' => $schema->array()->items($schema->string())->max(25)->unique(),
+                'expires_at' => $schema->string(),
+                'pr' => $schema->string()->min(1)->max(2048),
             ],
             'revise_brief' => ['task_id' => $schema->string()->required(), 'brief' => $schema->string()->min(1)->max(32000)->required()],
             'queue_item' => ['task_id' => $schema->string()->required(), 'role' => $schema->string()->min(1)->max(64)->required()],
@@ -120,15 +126,20 @@ abstract class WorkTool extends CapstanTool
                 'task_id', 'item_id' => [($field === 'item_id' && $this->name() === 'steer') || $this->name() === 'list_work' ? 'sometimes' : 'required', 'required', 'string', 'uuid'],
                 'failover' => ['sometimes', 'required', 'boolean'],
                 'pool_work' => ['required', 'boolean'],
-                'user_actor_address' => ['sometimes', 'required', 'string', 'regex:/\A[1-9][0-9]{0,18}\z/D'],
+                'user_actor_address', 'owner_actor' => ['sometimes', 'required', 'string', 'regex:/\A[1-9][0-9]{0,18}\z/D'],
                 'timebox_minutes' => ['sometimes', 'required', 'integer', 'min:1', 'max:1440'],
                 'required_capabilities' => ['sometimes', 'array', 'list', 'max:25'],
+                'depends_on' => ['sometimes', 'array', 'list', 'max:25'],
+                'priority' => ['sometimes', 'required', Rule::enum(WorkPriority::class)],
+                'expires_at' => ['sometimes', 'required', 'date'],
+                'pr' => ['sometimes', 'required', 'string', 'min:1', 'max:2048'],
                 'limit' => ['sometimes', 'required', 'integer', 'min:1', 'max:25'],
                 'state' => ['sometimes', 'required', Rule::enum(WorkItemState::class)],
                 default => throw new \LogicException('Unknown Work input.'),
             };
         }
         $rules['required_capabilities.*'] = ['required', 'string', 'min:1', 'max:64', 'distinct:strict'];
+        $rules['depends_on.*'] = ['required', 'string', 'uuid', 'distinct:strict'];
         $input = $request->validate($rules);
         $owner = $owners->resolve();
         $user = User::query()->find($owner->actorId);
@@ -154,6 +165,9 @@ abstract class WorkTool extends CapstanTool
             if (isset($input['user_actor_address']) && ! User::query()->whereKey($input['user_actor_address'])->where('status', 'active')->exists()) {
                 throw ValidationException::withMessages(['user_actor_address' => ['Work actor is unavailable.']]);
             }
+            if (isset($input['owner_actor']) && ! User::query()->whereKey($input['owner_actor'])->where('status', 'active')->exists()) {
+                throw ValidationException::withMessages(['owner_actor' => ['Work owner is unavailable.']]);
+            }
             // Freeze only caller-specified intent in the durable claim; defaults may change on replay.
         }
         if ($this->isWrite()) {
@@ -167,10 +181,14 @@ abstract class WorkTool extends CapstanTool
                         return ['policy' => $policy->present($team), 'changed' => $changed];
                     }
                     if ($this->name() === 'create_task') {
-                        $input += ['failover' => (bool) $team->default_failover, 'required_capabilities' => [], 'timebox_minutes' => 30];
-                        if (! $team->pool_work) {
-                            $input += ['user_actor_address' => $owner->actorId];
-                        }
+                        $input += [
+                            'failover' => (bool) $team->default_failover,
+                            'required_capabilities' => [],
+                            'timebox_minutes' => 30,
+                            'owner_actor' => $owner->actorId,
+                            'priority' => WorkPriority::P2->value,
+                            'depends_on' => [],
+                        ];
                     }
 
                     return $work->write($this->name(), $input, $owner->actorId);

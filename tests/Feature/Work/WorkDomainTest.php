@@ -25,6 +25,8 @@ function workDomainTask(array $attributes = []): WorkTask
         'required_capabilities' => ['php'],
         'timebox_minutes' => 30,
         'creator_actor' => 'actor@test',
+        'owner_actor' => 'actor@test',
+        'priority' => 'P2',
     ], $attributes));
 }
 
@@ -94,6 +96,8 @@ test('tasks reserve routing fields and items carry one open vocabulary scalar ro
         'required_capabilities' => '[]',
         'timebox_minutes' => 15,
         'creator_actor' => 'actor@test',
+        'owner_actor' => 'actor@test',
+        'priority' => 'P2',
         'created_at' => now(),
         'updated_at' => now(),
     ]);
@@ -175,9 +179,10 @@ test('brief revisions append in order and newest content is canonical', function
 
 test('closed work vocabularies persist as portable strings', function (): void {
     expect(array_column(WorkItemState::cases(), 'value'))
-        ->toBe(['queued', 'claimed', 'delivered', 'routed', 'acted', 'failed', 'cancelled'])
+        ->toBe(['queued', 'claimed', 'delivered', 'routed', 'acted', 'failed', 'cancelled', 'expired'])
         ->not->toContain('superseded')
         ->and(WorkItemState::Cancelled->isTerminal())->toBeTrue()
+        ->and(WorkItemState::Expired->isTerminal())->toBeTrue()
         ->and(array_column(WorkMilestoneKind::cases(), 'value'))->toBe([
             'started', 'blocked', 'pr_opened', 'done', 'failed', 'released', 'note',
         ])

@@ -6,7 +6,8 @@ cron starts a new Python process each minute, and that process starts a fresh wo
 a working recipe for an organisation to adapt, not a required runtime or a launcher framework.
 
 Work is available on every installation. Pooled Work is off by default for each team, so new tasks stay
-addressed to their creators unless an Owner or Admin explicitly changes that team policy.
+routed to their owners unless an Owner or Admin explicitly changes that team policy. A root task's owner
+defaults to its creator. Ownership remains separate from the creator and from any explicit routing override.
 
 ## The drain credential
 
@@ -22,18 +23,39 @@ in an environment variable, or mint a separate Work credential.
 
 ## Who can claim a task
 
-A drain is offered only tasks that are unaddressed or addressed to its own `actor_id`. By default,
-`create_task` and the orchestrator's `create_child` address each new task to the person who created it, so
-a drain running as a separate service account never sees the tasks its colleagues create.
+A drain is offered work according to the task's owner, the team policy, and any explicit address. When
+`user_actor_address` is set, only that actor can claim the task. Without an override, a team with pooled
+work off when the task is created routes it to `owner_actor`; a task created while pooled work is on can go
+to an eligible team machine. The creator is recorded separately and does not control routing after another
+owner has been assigned.
 
-Pooled work changes that default for one team. When it is on, new tasks can be claimed by any of the team's
-machines: they are created unaddressed, and any eligible drain on the team can claim them. When it is off,
-new tasks go back to being addressed to their creator. In both cases a creator who passes
-`user_actor_address` gets exactly that address, so you can send a single task to a service account
-without changing the setting.
+Pooled work changes the no-override route for one team. In both policy states, a caller who passes
+`user_actor_address` gets exactly that address, so one task can go to a service account without changing
+the team setting. Orchestrator-created descendants inherit the root task's owner and priority, including
+grandchildren. Changing the immediate child's input does not create a second ownership boundary.
 
 Existing tasks are not affected. A task created while pooled work was off stays addressed to its creator
 after it is turned on, and only tasks created after the change follow the new setting.
+
+## Priority, dependencies, and expiry
+
+Root tasks default to priority `P2`. The four priorities are `P0`, `P1`, `P2`, and `P3`, in that order.
+Claims take the highest eligible priority first, then use the UUIDv7 item id as FIFO within a priority.
+An owner can have only one uncancelled `P0` root. An orchestrator can lower its root's priority but cannot
+raise it; the lower priority is applied to the existing descendants as well.
+
+`depends_on` is a list of task ids. Each dependency must exist in the same team and cannot be the task
+itself, one of its descendants, or an edge that closes a cycle. A dependent item stays queued until every
+dependency is successful. Success means the dependency is not cancelled, has at least one item, and every
+item is `acted`. Failed, cancelled, and expired dependencies do not satisfy the gate. They wake the root's
+orchestrator when it has one, or create one owner-addressed signal when it does not. The dependent task is
+not cancelled automatically.
+
+A task may set `expires_at`; `pr` is optional task metadata. A descendant's effective expiry is the earliest
+expiry on itself or any ancestor. An elapsed expiry blocks new claims immediately. The expiration sweep
+moves queued items to the terminal `expired` state and leaves claimed, delivered, or routed items running.
+It records one durable expiration row per task with the owner, priority, waited seconds, and whether the
+deadline came from the task or an ancestor. Repeated sweeps do not duplicate the record or transition.
 
 Only an Owner or Admin can change it. The Work page at `/work` has a Pooled work section that names the
 team it changes (the default team) and a button that turns it on or off. A Member sees the button
@@ -194,6 +216,9 @@ Removing a stale PID entry by hand can let local concurrency exceed its intended
 claim. Check the PID, item state, and fence first. Revoking or replacing the bound credential stops future
 drain calls but does not kill already launched processes; stop those processes separately, then let their
 leases expire or release the items with a valid replacement credential.
+
+The server runs liveness, failover, orchestration, and expiration sweeps once a minute. Drains do not need
+to send the new task fields, and the existing claim request and response remain valid.
 
 ## Coordinator-driven verification
 

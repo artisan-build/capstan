@@ -68,6 +68,7 @@ function routingPayload(array $overrides = []): array
 
 function routingItem(Team $team, array $task = []): WorkItem
 {
+    $team->update(['pool_work' => true]);
     $workTask = WorkTask::query()->create(array_replace([
         'team_id' => $team->id,
         'title' => 'Routing '.Str::random(8),

@@ -159,7 +159,7 @@ function assertWorkSchema(mixed $value, array $schema): void
     }
 }
 
-test('creator addressing pool defaults and explicit addresses persist with UUIDv7 revisions', function (): void {
+test('owner routing pool defaults and explicit addresses persist with UUIDv7 revisions', function (): void {
     $user = capstanUser(['role' => 'owner']);
     $token = workMcpToken($user);
     $other = capstanUser();
@@ -169,15 +169,65 @@ test('creator addressing pool defaults and explicit addresses persist with UUIDv
         expect($result['outcome'])->toBe('accepted')
             ->and($result['revision']['sequence'])->toBe(1)
             ->and($result['task']['id'][14])->toBe('7')
-            ->and($result['revision']['id'][14])->toBe('7');
-        if ($pool) {
-            expect($result['task'])->not->toHaveKey('user_actor_address');
-        } else {
-            expect($result['task']['user_actor_address'])->toBe((string) $user->id);
-        }
+            ->and($result['revision']['id'][14])->toBe('7')
+            ->and($result['task']['owner_actor'])->toBe((string) $user->id)
+            ->and($result['task']['priority'])->toBe('P2')
+            ->and($result['task']['depends_on'])->toBe([])
+            ->and($result['task'])->not->toHaveKey('user_actor_address');
         $explicit = workMcpCreate($team, $token, ['user_actor_address' => (string) $other->id]);
         expect($explicit['task']['user_actor_address'])->toBe((string) $other->id);
     }
+});
+
+test('root creation exposes ownership priority dependencies expiry and PR metadata atomically', function (): void {
+    $user = capstanUser(['role' => 'owner']);
+    $otherOwner = capstanUser();
+    $token = workMcpToken($user);
+    $team = workMcpTeam();
+    $dependency = workMcpCreate($team, $token)['task'];
+    $expiresAt = now()->addHour()->startOfSecond();
+    $result = workMcpCreate($team, $token, [
+        'owner_actor' => (string) $otherOwner->id,
+        'priority' => 'P1',
+        'depends_on' => [$dependency['id']],
+        'expires_at' => $expiresAt->toJSON(),
+        'pr' => 'https://example.test/pulls/123',
+    ]);
+
+    expect($result['task']['owner_actor'])->toBe((string) $otherOwner->id)
+        ->and($result['task']['priority'])->toBe('P1')
+        ->and($result['task']['depends_on'])->toBe([$dependency['id']])
+        ->and($result['task']['expires_at'])->toBe($expiresAt->toJSON())
+        ->and($result['task']['pr'])->toBe('https://example.test/pulls/123');
+
+    $before = WorkTask::query()->count();
+    $refused = workMcpResult('create_task', [
+        'team_id' => $team->id,
+        'idempotency_key' => 'invalid-dependency-create',
+        'title' => 'Invalid dependency',
+        'brief' => 'Invalid dependency brief',
+        'depends_on' => [(string) Str::uuid7()],
+    ], $token);
+    expect($refused)->toBe(['outcome' => 'refused', 'reason' => 'invalid_dependencies'])
+        ->and(WorkTask::query()->count())->toBe($before);
+});
+
+test('one active P0 root per owner is enforced and cancellation releases the slot', function (): void {
+    $user = capstanUser(['role' => 'owner']);
+    $token = workMcpToken($user);
+    $team = workMcpTeam();
+    $first = workMcpCreate($team, $token, ['priority' => 'P0', 'idempotency_key' => 'first-p0']);
+    expect($first['outcome'])->toBe('accepted');
+
+    $second = workMcpCreate($team, $token, ['priority' => 'P0', 'idempotency_key' => 'second-p0']);
+    expect($second)->toBe(['outcome' => 'refused', 'reason' => 'active_p0_exists']);
+
+    workMcpResult('cancel_task', [
+        'team_id' => $team->id,
+        'task_id' => $first['task']['id'],
+        'idempotency_key' => 'cancel-first-p0',
+    ], $token);
+    expect(workMcpCreate($team, $token, ['priority' => 'P0', 'idempotency_key' => 'third-p0'])['outcome'])->toBe('accepted');
 });
 
 test('device pins require explicit failover and unpinned work follows team defaults', function (): void {
@@ -612,6 +662,9 @@ test('interactive MCP context and exact action envelope exercise the full subtre
         'action' => $action, 'input' => $input, 'idempotency_key' => $key,
     ], $token));
     $created = $call('create_child', ['under_task_id' => $parent->id, 'title' => 'Created child', 'brief' => 'Created brief'], 'interactive-create');
+    expect($call('set_priority', ['priority' => 'P1'], 'interactive-priority-raise'))
+        ->toBe(['outcome' => 'refused', 'reason' => 'orchestration_forbidden']);
+    $lowered = $call('set_priority', ['priority' => 'P3'], 'interactive-priority-lower');
     $call('revise_brief', ['task_id' => $child->id, 'brief' => 'Revised child'], 'interactive-revise');
     $queued = $call('queue_item', ['task_id' => $child->id, 'role' => 'builder'], 'interactive-queue');
     expect($call('queue_item', ['task_id' => $child->id, 'role' => 'builder'], 'interactive-queue')['outcome'])->toBe('already_accepted');
@@ -625,6 +678,9 @@ test('interactive MCP context and exact action envelope exercise the full subtre
     $failed = $call('finish', ['state' => 'failed'], 'interactive-failed');
 
     expect($created['task_id'])->not->toBe($parent->id)
+        ->and($lowered['status'])->toBe('completed')
+        ->and($parent->fresh()->priority->value)->toBe('P3')
+        ->and(WorkTask::query()->findOrFail($created['task_id'])->priority->value)->toBe('P3')
         ->and($finished['status'])->toBe('completed')
         ->and($failed['status'])->toBe('completed')
         ->and(WorkOrchestratorSeat::query()->where('work_task_id', $parent->id)->sole()->children_created)->toBe(1)

@@ -323,5 +323,7 @@ test('turning pooled work on does not unpin tasks that already exist', function 
 
     expect(poolDrainClaim($team, $service))->toBe([$pooled])
         ->and(WorkItem::query()->findOrFail($pinned)->state)->toBe(WorkItemState::Queued)
-        ->and(WorkItem::query()->findOrFail($pinned)->workTask->user_actor_address)->toBe((string) $creator->id);
+        ->and(WorkItem::query()->findOrFail($pinned)->workTask->user_actor_address)->toBeNull()
+        ->and(WorkItem::query()->findOrFail($pinned)->workTask->owner_actor)->toBe((string) $creator->id)
+        ->and(WorkItem::query()->findOrFail($pinned)->workTask->routing_pool_work)->toBeFalse();
 });
