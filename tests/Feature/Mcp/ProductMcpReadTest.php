@@ -186,7 +186,7 @@ test('keeps the exact read-effect tools on the read door when the write door is 
             ->and(data_get($tool, 'inputSchema.additionalProperties'))->toBeFalse();
     }
 
-    foreach (['send_postmaster_message', 'ack_postmaster_messages', 'answer_escalation', 'apply_brand_draft', 'create_artifact_share', 'publish_page', 'release_seat', 'take_seat', 'update_brand_draft', 'update_page', 'upload_brand_asset'] as $excluded) {
+    foreach (['send_postmaster_message', 'ack_postmaster_messages', 'answer_escalation', 'apply_brand_draft', 'create_artifact_share', 'publish_page', 'reassign_task', 'release_seat', 'take_seat', 'update_brand_draft', 'update_page', 'upload_brand_asset'] as $excluded) {
         $response = capstanMcpReadCall($excluded, (object) [], $token);
         expect($response->status())->toBeIn([200, 400])
             ->and($response->getContent())->not->toContain('storage_key')
@@ -219,6 +219,7 @@ test('keeps the exact read-effect tools on the read door when the write door is 
             'preview_brand_draft',
             'publish_page',
             'queue_item',
+            'reassign_task',
             'release_seat',
             'revise_brief',
             'send_postmaster_message',
