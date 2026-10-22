@@ -129,7 +129,7 @@ test('owner sees latest and prior immutable versions while another user sees nei
     }
 });
 
-test('guest viewer lookups are opaque before page or version queries', function (): void {
+test('a guest viewer is sent to sign in identically before any page or version query', function (): void {
     $owner = capstanUser();
     $title = 'Guest-private title '.Str::random(10);
     $recipe = 'Guest-private recipe '.Str::random(10);
@@ -154,11 +154,19 @@ test('guest viewer lookups are opaque before page or version queries', function 
         }
     });
 
-    foreach (['text/html', 'application/json'] as $accept) {
+    // A browser is sent into sign-in so the completed handoff can return it to
+    // the URL it asked for; a JSON caller keeps the opaque not-found. Either
+    // answer is the same for every page id, and none of them reaches a query.
+    foreach (['text/html' => 302, 'application/json' => 404] as $accept => $status) {
         $responses = collect($urls)->map(
-            fn (string $url) => $this->get($url, ['Accept' => $accept])->assertNotFound(),
+            fn (string $url) => $this->get($url, ['Accept' => $accept])->assertStatus($status),
         );
         $expectedBody = $responses->firstOrFail()->getContent();
+        $expectedLocation = $responses->firstOrFail()->headers->get('Location');
+
+        if ($accept === 'text/html') {
+            expect($expectedLocation)->toBe(route('bfc.login'));
+        }
         $expectedCookieNames = collect($responses->firstOrFail()->headers->getCookies())
             ->map(fn ($cookie): string => $cookie->getName())
             ->sort()
@@ -167,6 +175,7 @@ test('guest viewer lookups are opaque before page or version queries', function 
 
         foreach ($responses as $response) {
             expect($response->getContent())->toBe($expectedBody)
+                ->and($response->headers->get('Location'))->toBe($expectedLocation)
                 ->and(collect($response->headers->getCookies())->map(fn ($cookie): string => $cookie->getName())->sort()->values()->all())
                 ->toBe($expectedCookieNames);
 
@@ -217,10 +226,12 @@ test('viewer preserves authoritative account admission behind its opaque boundar
         ->toContain('signature=', 'expires=');
     $privateLookups = [];
 
+    // A session the installation has already retired is no longer an
+    // authenticated human, so it is sent to sign in rather than refused.
     $staleResponse = $this->actingAs($stale)
         ->withSession([StandaloneAccess::SESSION_VERSION_KEY => $stale->auth_session_version + 1])
         ->get(route('pages.show', ['page' => $stalePage]))
-        ->assertNotFound()
+        ->assertRedirect(route('bfc.login'))
         ->assertSessionMissing(StandaloneAccess::SESSION_VERSION_KEY);
     $inactiveResponse = $this->actingAsVersioned($inactive)
         ->get(route('pages.show', ['page' => $inactivePage]))
@@ -231,8 +242,11 @@ test('viewer preserves authoritative account admission behind its opaque boundar
         ->assertNotFound()
         ->assertSessionMissing(StandaloneAccess::SESSION_VERSION_KEY);
 
+    foreach ([$stalePage->id, 'stale private', 'Stale recipe', 'Stale page', 'signature=', 'expires='] as $privateValue) {
+        expect($staleResponse->getContent())->not->toContain($privateValue);
+    }
+
     foreach ([
-        [$staleResponse, $stalePage, 'stale private', 'Stale recipe', 'Stale page'],
         [$inactiveResponse, $inactivePage, 'inactive private', 'Inactive recipe', 'Inactive page'],
         [$offboardedResponse, $offboardedPage, 'offboarded private', 'Offboarded recipe', 'Offboarded page'],
     ] as [$response, $page, $html, $recipe, $title]) {

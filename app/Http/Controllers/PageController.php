@@ -71,13 +71,17 @@ class PageController extends Controller
         ]);
     }
 
-    public function show(Request $request, string $page, ArtifactRenderOrigin $origin): Response
+    public function show(Request $request, string $page, ArtifactRenderOrigin $origin): RedirectResponse|Response
     {
         return $this->viewer($request, $page, null, $origin);
     }
 
-    public function version(Request $request, string $page, string $version, ArtifactRenderOrigin $origin): Response
-    {
+    public function version(
+        Request $request,
+        string $page,
+        string $version,
+        ArtifactRenderOrigin $origin,
+    ): RedirectResponse|Response {
         return $this->viewer($request, $page, $version, $origin);
     }
 
@@ -148,14 +152,24 @@ class PageController extends Controller
         string $pageId,
         ?string $versionId,
         ArtifactRenderOrigin $origin,
-    ): Response {
+    ): RedirectResponse|Response {
         if (! Feature::active(Artifacts::class)
             || ! $origin->isConfigured()
             || $request->getHost() === $origin->renderHost()) {
             return $this->pageNotFound();
         }
 
-        $user = $this->access->admittedUser($request);
+        $admission = $this->access->admit($request);
+
+        // A visitor with no session goes to sign-in carrying this URL, so the
+        // handoff returns them here. The redirect is the same whatever page id
+        // was asked for, and it is issued before any page is looked up, so a
+        // signed-out caller still learns nothing about what exists.
+        if ($admission instanceof RedirectResponse) {
+            return $admission;
+        }
+
+        $user = $admission;
 
         if ($user === null
             || ! Str::isUuid($pageId)
