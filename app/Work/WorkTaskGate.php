@@ -55,6 +55,7 @@ final class WorkTaskGate
     public function successful(WorkTask $task): bool
     {
         return $task->cancelled_at === null
+            && ! $task->expiration()->exists()
             && $task->items()->exists()
             && ! $task->items()->where('state', '!=', WorkItemState::Acted->value)->exists();
     }

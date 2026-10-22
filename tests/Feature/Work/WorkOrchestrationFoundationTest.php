@@ -19,6 +19,7 @@ use App\Work\WorkItemStateService;
 use App\Work\WorkOrchestrationService;
 use App\Work\WorkRepresentation;
 use App\Work\WorkSweepService;
+use App\Work\WorkTaskGate;
 use App\Work\WorkToolService;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\QueryException;
@@ -210,6 +211,28 @@ test('a dependency completed before expiry stays successful after its deadline',
         ->and($dependency->expiration()->doesntExist())->toBeTrue()
         ->and(WorkOrchestrationEvent::query()->where('kind', 'dependency_failed')->count())->toBe(0)
         ->and(WorkEscalation::query()->count())->toBe(0);
+});
+
+test('a dependency that finishes after durable expiry remains unsuccessful and unclaimable', function (): void {
+    $team = Team::query()->create(['name' => 'Post-expiry dependency', 'slug' => 'post-expiry-dependency', 'pool_work' => false]);
+    $spoke = foundationSpoke('worker');
+    $dependency = foundationTask($team, ['owner_actor' => 'worker', 'expires_at' => now()->subMinute()]);
+    $running = $dependency->items()->create(['role' => 'dependency-builder', 'state' => WorkItemState::Routed]);
+    $dependent = foundationTask($team, ['owner_actor' => 'worker']);
+    resolve(WorkDependencyService::class)->replace($dependent, [$dependency->id]);
+    $dependentItem = $dependent->items()->create(['role' => 'builder']);
+
+    resolve(WorkSweepService::class)->expiration(CarbonImmutable::now());
+    resolve(WorkItemStateService::class)->transition($running, WorkItemState::Acted, 'spoke', 'worker');
+    $claimed = resolve(WorkClaimService::class)->claim(
+        $team->id, 'worker', $spoke->id, ['builder'], [], 1, CarbonImmutable::now(), 300,
+    );
+
+    expect($dependency->expiration()->exists())->toBeTrue()
+        ->and($running->fresh()->state)->toBe(WorkItemState::Acted)
+        ->and(resolve(WorkTaskGate::class)->successful($dependency))->toBeFalse()
+        ->and($claimed)->toBe([])
+        ->and($dependentItem->fresh()->state)->toBe(WorkItemState::Queued);
 });
 
 test('a failed dependency signals the root owner once without cancelling the dependent', function (): void {
