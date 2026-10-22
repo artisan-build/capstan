@@ -74,8 +74,8 @@ Work alerts are stored as Laravel database notifications as well as written to t
 escalation goes to its addressee. Reassignment, stalled-item, pinned-host, and seat-waiting alerts go to the
 effective escalation actor; a machine heartbeat alert goes to that machine's owner. Notification payloads
 carry only bounded ids and state. The state change and notification insert share one database transaction.
-If the notification cannot be stored, neither change is committed and the same MCP idempotency key can be
-retried.
+If the notification insert fails before an effect is accepted, neither change is committed and the same MCP
+idempotency key can be retried. Ambiguous outcomes remain unavailable for retry.
 
 ## Priority, dependencies, and expiry
 
