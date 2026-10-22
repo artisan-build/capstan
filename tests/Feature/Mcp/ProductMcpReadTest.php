@@ -223,6 +223,7 @@ test('keeps the exact read-effect tools on the read door when the write door is 
             'release_seat',
             'revise_brief',
             'send_postmaster_message',
+            'set_task_priority',
             'set_team_work_policy',
             'steer',
             'take_seat',

@@ -783,6 +783,9 @@ namespace App\Models{
  * @property CarbonImmutable|null $claimed_at
  * @property int $fence
  * @property int $attempts
+ * @property CarbonImmutable|null $release_requested_at
+ * @property CarbonImmutable|null $release_deadline
+ * @property string|null $release_for_item_id
  * @property int|null $turn_cursor
  * @property int|null $turn_upper_bound
  * @property int|null $seat_fence
@@ -815,6 +818,9 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereId($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereLastProgress($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereLeaseUntil($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereReleaseDeadline($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereReleaseForItemId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereReleaseRequestedAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereRole($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereSeatFence($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereStalledAt($value)

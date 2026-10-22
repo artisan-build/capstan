@@ -140,6 +140,7 @@ test('advertises the four exact page tools through their effect doors', function
         'release_seat',
         'revise_brief',
         'send_postmaster_message',
+        'set_task_priority',
         'set_team_work_policy',
         'steer',
         'take_seat',
