@@ -20,8 +20,18 @@ final readonly class MachineWorkArbiter
     ) {}
 
     /** @param list<string> $requiredCapabilities */
-    public function isWinner(int $teamId, string $role, array $requiredCapabilities, int $spokeId, CarbonImmutable $now, bool $allowPreemption = false): bool
-    {
+    public function isWinner(
+        int $teamId,
+        string $role,
+        array $requiredCapabilities,
+        int $spokeId,
+        CarbonImmutable $now,
+        bool $allowPreemption = false,
+        ?string $userActorAddress = null,
+        ?string $ownerActor = null,
+        bool $routingPoolWork = true,
+        ?int $deviceSpokeId = null,
+    ): bool {
         /** @var list<array{id: int, full: int, health: int, known: int, remaining: float|null, reset: int|null, count: int, ceiling: int}> $ranked */
         $ranked = [];
         $presences = MachineWorkPresence::query()
@@ -31,13 +41,16 @@ final readonly class MachineWorkArbiter
             ->get();
 
         foreach ($presences as $presence) {
+            $machine = $presence->spoke;
             if (! in_array($role, $presence->roles, true)
                 || array_diff($requiredCapabilities, $presence->capabilities) !== []
-                || (! $allowPreemption && $presence->available_capacity < 1)) {
+                || (! $allowPreemption && $presence->available_capacity < 1)
+                || ($userActorAddress !== null && $machine->actor_id !== $userActorAddress)
+                || ($userActorAddress === null && ! $routingPoolWork && $machine->actor_id !== $ownerActor)
+                || ($deviceSpokeId !== null && $machine->id !== $deviceSpokeId)) {
                 continue;
             }
 
-            $machine = $presence->spoke;
             $setting = $this->runtime->eligibleSetting(
                 $teamId,
                 $machine->actor_id,

@@ -303,6 +303,10 @@ final readonly class WorkClaimService
                             $spokeId,
                             $now,
                             $ignoreCeiling,
+                            $candidate->user_actor_address,
+                            $candidate->owner_actor,
+                            (bool) $candidate->routing_pool_work,
+                            $candidate->device_spoke_id === null ? null : (int) $candidate->device_spoke_id,
                         ))) {
                     $eligible[] = $candidate;
                 }
@@ -388,6 +392,10 @@ final readonly class WorkClaimService
                             $spokeId,
                             $now,
                             $preemptOnly,
+                            $task->user_actor_address,
+                            $task->owner_actor,
+                            $task->routing_pool_work,
+                            $task->device_spoke_id,
                         ))) {
                         return null;
                     }

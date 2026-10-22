@@ -8,6 +8,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\UniqueConstraintViolationException;
 
 /**
+ * @property int $work_preemption_revision
+ *
  * @mixin IdeHelperTeam
  */
 class Team extends Model
@@ -28,6 +30,7 @@ class Team extends Model
             'is_default' => 'boolean',
             'pool_work' => 'boolean',
             'default_failover' => 'boolean',
+            'work_preemption_revision' => 'integer',
         ];
     }
 

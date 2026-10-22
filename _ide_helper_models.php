@@ -659,6 +659,7 @@ namespace App\Models{
  * @property \Carbon\CarbonImmutable|null $updated_at
  * @property bool $pool_work
  * @property bool $default_failover
+ * @property int $work_preemption_revision
  * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\Artifact> $artifacts
  * @property-read int|null $artifacts_count
  * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\WorkTask> $workTasks
@@ -674,6 +675,7 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Team wherePoolWork($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereSlug($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereUpdatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|Team whereWorkPreemptionRevision($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]

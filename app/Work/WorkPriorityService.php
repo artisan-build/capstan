@@ -70,6 +70,8 @@ final readonly class WorkPriorityService
     {
         return DB::transaction(function () use ($input, $actor, $sourceKey): array {
             $root = $this->authorize($input['team_id'], $input['task_id'], $actor);
+            // The work_tasks database guard acquires the team's plan revision row.
+            // Every row class read by plan() takes the same guard before mutation.
             $this->locks->tasks($root->id);
             $root = $this->authorize($input['team_id'], $root->id, $actor);
             $now = CarbonImmutable::now();

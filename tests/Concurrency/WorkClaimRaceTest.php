@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\WorkItemState;
+use App\Enums\WorkPriority;
 use App\Models\MachineTeamWorkSetting;
 use App\Models\MachineWorkPresence;
 use App\Models\Spoke;
@@ -13,6 +14,7 @@ use App\Work\WorkDependencyService;
 use App\Work\WorkDrainService;
 use App\Work\WorkItemStateService;
 use App\Work\WorkOrchestrationService;
+use App\Work\WorkPriorityService;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Carbon\CarbonImmutable;
@@ -859,6 +861,163 @@ test('simultaneous P0 root creation admits one active task per owner on PostgreS
         expect($results)->toBe(['accepted', 'conflict'])
             ->and(WorkTask::query()->where('owner_actor', 'concurrent-p0-owner')->where('priority', 'P0')->count())->toBe(1);
     } finally {
+        cleanupWorkRaceDatabase($database);
+    }
+});
+
+test('PostgreSQL confirmation waits for a plan writer and refuses its stale token', function (): void {
+    if (DB::getDriverName() !== 'pgsql') {
+        $this->markTestSkipped('Dedicated PostgreSQL preemption-plan serialization proof.');
+    }
+
+    $database = provisionWorkRaceDatabase();
+    $barrier = storage_path('framework/testing/preemption-plan-barrier-'.Str::lower(Str::random(16)));
+    mkdir($barrier, 0777, true);
+    $processes = [];
+
+    try {
+        $now = CarbonImmutable::now();
+        $team = Team::query()->create(['name' => 'Preemption plan race', 'slug' => 'preemption-plan-race']);
+        $user = new User;
+        $user->forceFill([
+            'name' => 'Plan race owner',
+            'email' => 'plan-race-owner@example.test',
+            'password' => bcrypt('test-created-password'),
+            'role' => UserRole::Member->value,
+            'status' => 'active',
+        ])->save();
+        $machine = Spoke::query()->create([
+            'actor_id' => (string) $user->id,
+            'credential_id' => (string) Str::uuid7(),
+            'credential_backed' => true,
+            'last_polled_at' => $now,
+            'probe_status' => 'green',
+        ]);
+        MachineTeamWorkSetting::query()->create([
+            'spoke_id' => $machine->id,
+            'team_id' => $team->id,
+            'enabled' => true,
+            'roles' => ['builder'],
+            'capabilities' => [],
+            'role_providers' => [],
+            'concurrency_ceiling' => 1,
+            'updated_by_actor' => (string) $user->id,
+        ]);
+        MachineWorkPresence::query()->create([
+            'spoke_id' => $machine->id,
+            'team_id' => $team->id,
+            'roles' => ['builder'],
+            'capabilities' => [],
+            'role_providers' => [],
+            'current_claimed_item_count' => 1,
+            'available_capacity' => 0,
+            'concurrency_ceiling' => 1,
+            'observed_at' => $now,
+        ]);
+        $victimTask = WorkTask::query()->create([
+            'team_id' => $team->id,
+            'title' => 'Plan race victim',
+            'required_capabilities' => [],
+            'timebox_minutes' => 30,
+            'creator_actor' => (string) $user->id,
+            'owner_actor' => (string) $user->id,
+            'priority' => 'P3',
+        ]);
+        $victim = $victimTask->items()->create([
+            'role' => 'builder',
+            'state' => 'claimed',
+            'claimant_spoke_id' => $machine->id,
+            'claimant_actor' => (string) $user->id,
+            'fence' => 7,
+            'claimed_at' => $now,
+            'lease_until' => $now->addMinutes(5),
+        ]);
+        $root = WorkTask::query()->create([
+            'team_id' => $team->id,
+            'title' => 'Plan race P0',
+            'required_capabilities' => [],
+            'timebox_minutes' => 30,
+            'creator_actor' => (string) $user->id,
+            'owner_actor' => (string) $user->id,
+        ]);
+        $root->items()->create(['role' => 'builder']);
+        $input = ['team_id' => $team->id, 'task_id' => $root->id, 'priority' => 'P0'];
+        $preview = resolve(WorkPriorityService::class)->change($input, (string) $user->id, 'postgres-plan-race-preview');
+        $arguments = [
+            base_path('tests/Support/work-preemption-plan-worker.php'),
+            '',
+            $barrier,
+            (string) $team->id,
+            $root->id,
+            (string) $user->id,
+            $preview['confirmation_token'],
+            $victim->id,
+            (string) $victim->fence,
+        ];
+        $environment = workRaceProcessEnvironment($database['connection']);
+
+        $arguments[1] = 'writer';
+        $writer = new Process([PHP_BINARY, ...$arguments], base_path(), $environment, null, 90);
+        $writer->start();
+        $processes[] = $writer;
+        $deadline = microtime(true) + 30;
+        while (! file_exists($barrier.'/writer-locked')) {
+            if ($writer->isTerminated() || microtime(true) >= $deadline) {
+                throw new RuntimeException('Plan writer did not acquire its guard: '.$writer->getErrorOutput());
+            }
+            Sleep::usleep(10_000);
+        }
+
+        $arguments[1] = 'confirm';
+        $confirmation = new Process([PHP_BINARY, ...$arguments], base_path(), $environment, null, 90);
+        $confirmation->start();
+        $processes[] = $confirmation;
+        while (! file_exists($barrier.'/confirm-pid')) {
+            if ($confirmation->isTerminated() || microtime(true) >= $deadline) {
+                throw new RuntimeException('Confirmation worker did not expose its database process: '.$confirmation->getErrorOutput());
+            }
+            Sleep::usleep(10_000);
+        }
+
+        $confirmationPid = (int) file_get_contents($barrier.'/confirm-pid');
+        do {
+            $waiting = DB::selectOne(
+                "SELECT wait_event_type = 'Lock' AS waiting FROM pg_stat_activity WHERE pid = ?",
+                [$confirmationPid],
+            );
+            if (($waiting?->waiting ?? false) === true) {
+                break;
+            }
+            if ($confirmation->isTerminated() || microtime(true) >= $deadline) {
+                throw new RuntimeException('Confirmation did not wait on the plan guard: '.$confirmation->getErrorOutput());
+            }
+            Sleep::usleep(10_000);
+        } while (true);
+
+        expect(file_exists($barrier.'/confirm-done'))->toBeFalse();
+        touch($barrier.'/release-writer');
+        expect($writer->wait())->toBe(0, $writer->getErrorOutput())
+            ->and($confirmation->wait())->toBe(0, $confirmation->getErrorOutput());
+        $result = json_decode($confirmation->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+        expect($result['confirmation_status'])->toBe('refused')
+            ->and($result['confirmation_token'])->not->toBe($preview['confirmation_token'])
+            ->and($result['preemptions'][0]['milestone_kind'])->toBe('note')
+            ->and($root->fresh()->priority)->toBe(WorkPriority::P2);
+    } finally {
+        if (is_dir($barrier) && ! file_exists($barrier.'/release-writer')) {
+            touch($barrier.'/release-writer');
+        }
+        foreach ($processes as $process) {
+            if ($process->isRunning()) {
+                $process->stop(1);
+            }
+        }
+        foreach (glob($barrier.'/*') ?: [] as $file) {
+            unlink($file);
+        }
+        if (is_dir($barrier)) {
+            rmdir($barrier);
+        }
         cleanupWorkRaceDatabase($database);
     }
 });

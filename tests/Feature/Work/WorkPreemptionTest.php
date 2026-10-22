@@ -19,6 +19,7 @@ use App\Work\WorkItemStateService;
 use App\Work\WorkPreemptionService;
 use App\Work\WorkPriorityService;
 use App\Work\WorkWorkerLinks;
+use App\Work\WorkWorkerService;
 use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\QueryException;
@@ -131,6 +132,40 @@ test('a changed preemption plan refuses confirmation and returns a fresh token',
         ->and($root->fresh()->priority)->toBe(WorkPriority::P2);
 });
 
+test('SQLite plan guards reject a token after a normal milestone writer changes its evidence', function (): void {
+    if (DB::getDriverName() !== 'sqlite') {
+        $this->markTestSkipped('Equivalent SQLite plan-guard proof.');
+    }
+
+    $owner = capstanUser();
+    $machine = preemptionMachine($owner);
+    $victim = preemptionRunning(preemptionTask($owner, 'P3'), $machine);
+    $root = preemptionTask($owner);
+    $root->items()->create(['role' => 'builder']);
+    $input = ['team_id' => Team::default()->id, 'task_id' => $root->id, 'priority' => 'P0'];
+    $service = resolve(WorkPriorityService::class);
+    $preview = $service->change($input, (string) $owner->id, 'sqlite-guard-preview');
+    $revision = Team::default()->work_preemption_revision;
+
+    resolve(WorkWorkerService::class)->milestone(
+        $victim->id,
+        $victim->fence,
+        WorkMilestoneKind::Note,
+        ['summary' => 'Plan evidence changed'],
+    );
+    $result = $service->change([
+        ...$input,
+        'confirmation_token' => $preview['confirmation_token'],
+        'reason' => 'Incident',
+    ], (string) $owner->id, 'sqlite-guard-confirm');
+
+    expect(Team::default()->work_preemption_revision)->toBeGreaterThan($revision)
+        ->and($result['confirmation_status'])->toBe('refused')
+        ->and($result['confirmation_token'])->not->toBe($preview['confirmation_token'])
+        ->and($result['preemptions'][0]['milestone_kind'])->toBe('note')
+        ->and($root->fresh()->priority)->toBe(WorkPriority::P2);
+});
+
 test('preview orders an exact multi machine plan with safe names latest milestones and omitted absent fields', function (): void {
     $owner = capstanUser();
     $firstMachine = preemptionMachine($owner);
@@ -204,6 +239,36 @@ test('preview and release use the same deterministic machine for an owner only o
     expect(preemptionClaim($winner))->toBe([])
         ->and($winnerVictim->fresh()->release_for_item_id)->toBe($opportunity->id);
 });
+
+test('task-ineligible free machines cannot suppress preview or release arbitration', function (string $route): void {
+    $owner = capstanUser();
+    $eligible = preemptionMachine($owner);
+    $victim = preemptionRunning(preemptionTask($owner, 'P3'), $eligible);
+    $competitorOwner = $route === 'owner' ? capstanUser() : $owner;
+    $ineligible = preemptionMachine($competitorOwner);
+    $root = preemptionTask($owner);
+    if ($route === 'pin') {
+        $root->update(['device_spoke_id' => $eligible->id]);
+    }
+    $opportunity = $root->items()->create(['role' => 'builder']);
+    $service = resolve(WorkPriorityService::class);
+    $input = ['team_id' => Team::default()->id, 'task_id' => $root->id, 'priority' => 'P0'];
+
+    $preview = $service->change($input, (string) $owner->id, $route.'-eligible-preview');
+    expect($preview['preemptions'])->toHaveCount(1)
+        ->and($preview['preemptions'][0]['machine_id'])->toBe($eligible->id)
+        ->and($preview['preemptions'][0]['item_id'])->toBe($victim->id);
+
+    $service->change([
+        ...$input,
+        'confirmation_token' => $preview['confirmation_token'],
+        'reason' => 'Incident response',
+    ], (string) $owner->id, $route.'-eligible-confirm');
+
+    expect(preemptionClaim($ineligible))->toBe([])
+        ->and(preemptionClaim($eligible))->toBe([])
+        ->and($victim->fresh()->release_for_item_id)->toBe($opportunity->id);
+})->with(['foreign owner' => 'owner', 'device pin' => 'pin']);
 
 test('an eligible machine with capacity prevents preemption on another machine', function (): void {
     $owner = capstanUser();
