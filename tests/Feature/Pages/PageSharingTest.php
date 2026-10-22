@@ -384,7 +384,14 @@ test('owner exports the current self-contained html while every other principal 
         contentType: 'text/html',
     );
 
-    $guestResponse = $this->get(route('pages.export', ['page' => $page]))->assertNotFound();
+    // A signed-out browser is offered sign-in instead of the dead 404 it used
+    // to get, and a JSON caller keeps the opaque not-found.
+    $this->get(route('pages.export', ['page' => $page]))
+        ->assertRedirect(route('bfc.login'));
+    $guestResponse = $this->get(
+        route('pages.export', ['page' => $page]),
+        ['Accept' => 'application/json'],
+    )->assertNotFound();
     Livewire::forceAssetInjection();
     $export = $this->actingAsVersioned($owner)->get(route('pages.export', ['page' => $page]))
         ->assertOk()
