@@ -2,6 +2,7 @@
 
 namespace App\Work;
 
+use App\Enums\WorkItemState;
 use App\Models\WorkItem;
 use App\Models\WorkMilestone;
 use App\Models\WorkTask;
@@ -15,6 +16,9 @@ final readonly class WorkEventProjector
         if ($item->state->isTerminal()) {
             $this->project($item, 'terminal:'.$item->id.':'.$item->state->value, 'child_'.$item->state->value);
             $this->engine->ended($item);
+            if (in_array($item->state, [WorkItemState::Failed, WorkItemState::Cancelled, WorkItemState::Expired], true)) {
+                resolve(WorkDependencyService::class)->signalFailed($item->workTask);
+            }
         }
     }
 

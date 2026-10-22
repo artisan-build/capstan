@@ -1063,6 +1063,12 @@ namespace App\Models{
  * @property list<string> $required_capabilities
  * @property int $timebox_minutes
  * @property string $creator_actor
+ * @property string $owner_actor
+ * @property WorkPriority $priority
+ * @property int $dependency_version
+ * @property bool $routing_pool_work
+ * @property CarbonImmutable|null $expires_at
+ * @property array{repo: string, number: int, url: string}|null $pr
  * @property CarbonImmutable|null $cancelled_at
  * @property string|null $parent_task_id
  * @property string|null $workflow_ref
@@ -1072,6 +1078,9 @@ namespace App\Models{
  * @property-read Spoke|null $deviceSpoke
  * @property-read WorkTask|null $parent
  * @property-read Collection<int, WorkTask> $children
+ * @property-read Collection<int, WorkTask> $dependencies
+ * @property-read Collection<int, WorkTask> $dependents
+ * @property-read WorkTaskExpiration|null $expiration
  * @property-read Collection<int, WorkBriefRevision> $briefRevisions
  * @property-read WorkBriefRevision|null $latestBriefRevision
  * @property-read Collection<int, WorkItem> $items
@@ -1079,6 +1088,8 @@ namespace App\Models{
  * @property-read Collection<int, WorkSteer> $steers
  * @property-read int|null $brief_revisions_count
  * @property-read int|null $children_count
+ * @property-read int|null $dependencies_count
+ * @property-read int|null $dependents_count
  * @property-read int|null $items_count
  * @property-read int|null $milestones_count
  * @property-read int|null $steers_count
@@ -1088,11 +1099,17 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereCancelledAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereCreatedAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereCreatorActor($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereDependencyVersion($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereDeviceSpokeId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereExpiresAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereFailover($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereOwnerActor($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereParentTaskId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask wherePr($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask wherePriority($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereRequiredCapabilities($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereRoutingPoolWork($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereTeamId($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereTimeboxMinutes($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereTitle($value)
@@ -1103,6 +1120,36 @@ namespace App\Models{
  */
 	#[\AllowDynamicProperties]
 	class IdeHelperWorkTask {}
+}
+
+namespace App\Models{
+/**
+ * @property string $id
+ * @property string $work_task_id
+ * @property string $owner_actor
+ * @property WorkPriority $priority
+ * @property int $waited_seconds
+ * @property WorkExpirationProvenance $provenance
+ * @property WorkExpirationCause $cause
+ * @property CarbonImmutable $expired_at
+ * @property CarbonImmutable $created_at
+ * @property-read WorkTask $workTask
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration whereCause($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration whereExpiredAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration whereOwnerActor($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration wherePriority($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration whereProvenance($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration whereWaitedSeconds($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTaskExpiration whereWorkTaskId($value)
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperWorkTaskExpiration {}
 }
 
 namespace App\Models{

@@ -3,6 +3,7 @@
 namespace App\Work;
 
 use App\Enums\WorkItemState;
+use App\Enums\WorkPriority;
 use App\Http\ApiErrorException;
 use App\Models\Spoke;
 use App\Models\Team;
@@ -65,6 +66,7 @@ final readonly class WorkOrchestrationSurface
                 $input['brief'],
                 $now,
             )),
+            'set_priority' => $this->created($action, $this->capability->setPriority($context, $input['priority'], $now)),
             'revise_brief' => $this->created($action, $this->capability->reviseBrief($context, $input['task_id'], $input['brief'], $now)),
             'queue_item' => $this->queued($action, $this->capability->queue($context, $input['task_id'], $input['role'], $now)),
             'cancel_item' => $this->created($action, $this->capability->cancelItem($context, $input['item_id'], $now)),
@@ -83,7 +85,8 @@ final readonly class WorkOrchestrationSurface
     public function validate(string $action, array $input): array
     {
         $shape = match ($action) {
-            'create_child' => ['under_task_id', 'title', 'brief', 'user_actor_address', 'device_spoke_id', 'failover', 'required_capabilities', 'timebox_minutes', 'workflow_ref'],
+            'create_child' => ['under_task_id', 'title', 'brief', 'user_actor_address', 'device_spoke_id', 'failover', 'required_capabilities', 'timebox_minutes', 'workflow_ref', 'owner_actor', 'priority', 'depends_on', 'expires_at', 'pr'],
+            'set_priority' => ['priority'],
             'revise_brief' => ['task_id', 'brief'],
             'queue_item' => ['task_id', 'role'],
             'cancel_item' => ['item_id'],
@@ -104,7 +107,15 @@ final readonly class WorkOrchestrationSurface
                 'device_spoke_id' => ['sometimes', 'integer', 'min:1'], 'failover' => ['sometimes', 'boolean'],
                 'required_capabilities' => ['sometimes', 'array', 'list', 'max:25'], 'required_capabilities.*' => ['string', 'min:1', 'max:64', 'distinct'],
                 'timebox_minutes' => ['sometimes', 'integer', 'min:1', 'max:1440'], 'workflow_ref' => ['sometimes', 'string', 'max:2048'],
+                'owner_actor' => ['sometimes', 'required', 'string', 'regex:/\A[1-9][0-9]{0,18}\z/D'],
+                'priority' => ['sometimes', 'required', Rule::enum(WorkPriority::class)],
+                'depends_on' => ['sometimes', 'array', 'list', 'max:25'], 'depends_on.*' => ['required', 'uuid', 'distinct:strict'],
+                'expires_at' => ['sometimes', 'required', 'date'], 'pr' => ['sometimes', 'required', 'array'],
+                'pr.repo' => ['required_with:pr', 'string', 'min:1', 'max:255'],
+                'pr.number' => ['required_with:pr', 'integer', 'min:1'],
+                'pr.url' => ['required_with:pr', 'string', 'max:2048', 'url:https'],
             ],
+            'set_priority' => ['priority' => ['required', Rule::enum(WorkPriority::class)]],
             'revise_brief' => ['task_id' => ['required', 'uuid'], 'brief' => ['required', 'string', 'min:1', 'max:32000']],
             'queue_item' => ['task_id' => ['required', 'uuid'], 'role' => ['required', 'string', 'min:1', 'max:64', Rule::notIn([WorkItem::ROLE_HUMAN, WorkItem::ROLE_ORCHESTRATOR])]],
             'cancel_item' => ['item_id' => ['required', 'uuid']],
@@ -117,6 +128,13 @@ final readonly class WorkOrchestrationSurface
         $validator = Validator::make($input, $rules);
         if ($validator->fails()) {
             throw $this->invalid();
+        }
+        if (isset($input['pr']) && is_array($input['pr'])) {
+            $prKeys = array_keys($input['pr']);
+            sort($prKeys);
+            if ($prKeys !== ['number', 'repo', 'url']) {
+                throw $this->invalid();
+            }
         }
         $validated = $validator->validated();
         if ($action === 'create_child') {
@@ -132,12 +150,15 @@ final readonly class WorkOrchestrationSurface
             if (isset($validated['user_actor_address']) && ! User::query()->whereKey($validated['user_actor_address'])->where('status', 'active')->exists()) {
                 throw $this->invalid();
             }
+            if (isset($validated['owner_actor']) && ! User::query()->whereKey($validated['owner_actor'])->where('status', 'active')->exists()) {
+                throw $this->invalid();
+            }
             $under = WorkTask::query()->whereKey($validated['under_task_id'])->first();
             $team = $under instanceof WorkTask ? Team::query()->find($under->team_id) : null;
             if (! $team instanceof Team) {
                 throw $this->invalid();
             }
-            $validated += ['required_capabilities' => [], 'timebox_minutes' => 30, 'failover' => (bool) $team->default_failover];
+            $validated += ['required_capabilities' => [], 'timebox_minutes' => 30, 'failover' => (bool) $team->default_failover, 'depends_on' => []];
         }
         if ($action === 'decide' && (! $this->safeEvidence($validated['evidence']) || strlen(JsonCanonicalizer::encode($validated['evidence'])) > 8000)) {
             throw $this->invalid();

@@ -4,6 +4,7 @@ namespace App\Work;
 
 use App\Enums\WorkItemState;
 use App\Enums\WorkMilestoneKind;
+use App\Enums\WorkPriority;
 use App\Models\WorkBriefRevision;
 use App\Models\WorkItem;
 use App\Models\WorkMilestone;
@@ -18,7 +19,10 @@ final class WorkRepresentation
     /** @return array<string, mixed> */
     public function task(WorkTask $task): array
     {
-        return $this->present($task, 'task');
+        return [
+            ...$this->present($task, 'task'),
+            'depends_on' => $task->dependencies()->orderBy('work_tasks.id')->pluck('work_tasks.id')->all(),
+        ];
     }
 
     /** @return array<string, mixed> */
@@ -78,12 +82,19 @@ final class WorkRepresentation
                 'integer' => $schema->integer(),
                 'boolean' => $schema->boolean(),
                 'strings' => $schema->array()->items($schema->string()),
+                'pr' => $schema->object([
+                    'repo' => $schema->string()->required(),
+                    'number' => $schema->integer()->required(),
+                    'url' => $schema->string()->required(),
+                ])->withoutAdditionalProperties(),
                 default => $schema->string(),
             };
             if ($field === 'state') {
                 $property = $schema->string()->enum(WorkItemState::class);
             } elseif ($field === 'kind') {
                 $property = $schema->string()->enum(WorkMilestoneKind::class);
+            } elseif ($field === 'priority') {
+                $property = $schema->string()->enum(WorkPriority::class);
             }
             $properties[$field] = $optional ? $property : $property->required();
         }
@@ -96,6 +107,8 @@ final class WorkRepresentation
                 'url' => $schema->string(),
                 'summary' => $schema->string(),
             ])->withoutAdditionalProperties()->required();
+        } elseif ($kind === 'task') {
+            $properties['depends_on'] = $schema->array()->items($schema->string())->required();
         }
 
         return $schema->object($properties)->withoutAdditionalProperties();
@@ -109,7 +122,8 @@ final class WorkRepresentation
                 'id' => 'string', 'team_id' => 'integer', 'title' => 'string',
                 'user_actor_address' => 'string?', 'device_spoke_id' => 'integer?',
                 'failover' => 'boolean', 'required_capabilities' => 'strings',
-                'timebox_minutes' => 'integer', 'creator_actor' => 'string',
+                'timebox_minutes' => 'integer', 'creator_actor' => 'string', 'owner_actor' => 'string',
+                'priority' => 'string', 'expires_at' => 'string?', 'pr' => 'pr?',
                 'cancelled_at' => 'string?', 'created_at' => 'string',
             ],
             'item' => [

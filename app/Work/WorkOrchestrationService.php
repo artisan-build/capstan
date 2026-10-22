@@ -275,6 +275,25 @@ final readonly class WorkOrchestrationService
         }, 5);
     }
 
+    /** @param array<string, mixed> $metadata */
+    public function signalOwner(WorkTask $root, string $key, string $question, array $metadata): WorkEscalation
+    {
+        return DB::transaction(function () use ($root, $key, $question, $metadata): WorkEscalation {
+            $this->locks->tasks($root->id);
+
+            return $this->createEscalation(
+                $root,
+                $key,
+                $root->owner_actor,
+                $question,
+                $metadata + [
+                    'options' => ['Review the dependent task', 'Cancel the dependent task'],
+                    'recommendation' => 'Review the dependent task',
+                ],
+            );
+        }, 5);
+    }
+
     public function answer(WorkEscalation $escalation, string $actor, string $answer, CarbonImmutable $now): WorkEscalation
     {
         return DB::transaction(function () use ($escalation, $actor, $answer, $now): WorkEscalation {

@@ -9,6 +9,7 @@ use App\Models\WorkItem;
 use App\Models\WorkOrchestratorSeat;
 use App\Models\WorkTask;
 use App\Work\WorkClaimService;
+use App\Work\WorkDependencyService;
 use App\Work\WorkDrainService;
 use App\Work\WorkItemStateService;
 use App\Work\WorkOrchestrationService;
@@ -123,7 +124,7 @@ function seedWorkRaceQueue(int $count, ?int $teamId = null): array
         'name' => 'Work claim race team',
         'slug' => 'work-claim-race-'.Str::lower(Str::random(8)),
         'is_default' => false,
-        'pool_work' => false,
+        'pool_work' => true,
         'default_failover' => true,
         'created_at' => $now,
         'updated_at' => $now,
@@ -151,6 +152,9 @@ function seedWorkRaceQueue(int $count, ?int $teamId = null): array
         'required_capabilities' => json_encode(['php'], JSON_THROW_ON_ERROR),
         'timebox_minutes' => 30,
         'creator_actor' => 'race-test',
+        'owner_actor' => 'race-test',
+        'priority' => 'P2',
+        'routing_pool_work' => true,
         'created_at' => $now,
         'updated_at' => $now,
     ]);
@@ -340,6 +344,68 @@ function runMachineDrainProcesses(int $teamId, array $workers, array $connection
     }
 }
 
+/** @param array<string, mixed> $connection
+ * @return list<string>
+ */
+function runP0CreationProcesses(int $teamId, string $owner, array $connection): array
+{
+    $barrier = storage_path('framework/testing/work-p0-barrier-'.Str::lower(Str::random(16)));
+    mkdir($barrier, 0777, true);
+    $processes = [];
+
+    try {
+        foreach (range(0, 1) as $worker) {
+            $process = new Process([
+                PHP_BINARY,
+                base_path('tests/Support/work-p0-worker.php'),
+                (string) $worker,
+                $barrier,
+                (string) $teamId,
+                $owner,
+                'Concurrent P0 '.$worker,
+            ], base_path(), workRaceProcessEnvironment($connection), null, 90);
+            $process->start();
+            $processes[] = $process;
+        }
+
+        $deadline = microtime(true) + 30;
+        while (count(glob($barrier.'/ready-*') ?: []) !== 2) {
+            foreach ($processes as $process) {
+                if ($process->isTerminated()) {
+                    throw new RuntimeException('P0 worker failed before release: '.$process->getErrorOutput());
+                }
+            }
+            if (microtime(true) >= $deadline) {
+                throw new RuntimeException('P0 workers did not reach the barrier.');
+            }
+            Sleep::usleep(10_000);
+        }
+
+        touch($barrier.'/release');
+        $results = [];
+        foreach ($processes as $process) {
+            expect($process->wait())->toBe(0, $process->getErrorOutput());
+            $result = json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+            $results[$result['worker']] = $result['status'];
+        }
+        ksort($results);
+
+        return array_values($results);
+    } finally {
+        foreach ($processes as $process) {
+            if ($process->isRunning()) {
+                $process->stop(1);
+            }
+        }
+        foreach (glob($barrier.'/*') ?: [] as $file) {
+            unlink($file);
+        }
+        if (is_dir($barrier)) {
+            rmdir($barrier);
+        }
+    }
+}
+
 /**
  * @return array{team_id: int, item_id: string, first: array{actor: string, spoke: int, credential: string}, second: array{actor: string, spoke: int, credential: string}}
  */
@@ -350,7 +416,7 @@ function seedWorkFenceScenario(): array
         'name' => 'Work fence race team',
         'slug' => 'work-fence-race-'.Str::lower(Str::random(8)),
         'is_default' => false,
-        'pool_work' => false,
+        'pool_work' => true,
         'default_failover' => true,
         'created_at' => $now,
         'updated_at' => $now,
@@ -365,6 +431,9 @@ function seedWorkFenceScenario(): array
         'required_capabilities' => '[]',
         'timebox_minutes' => 30,
         'creator_actor' => 'race-test',
+        'owner_actor' => 'fence-first-actor',
+        'priority' => 'P2',
+        'routing_pool_work' => true,
         'created_at' => $now,
         'updated_at' => $now,
     ]);
@@ -669,6 +738,188 @@ test('simultaneous production drains preserve the deterministic machine winner o
     }
 });
 
+test('simultaneous healthy owner contenders route non-pooled work only to its owner on PostgreSQL', function (): void {
+    if (DB::getDriverName() !== 'pgsql') {
+        $this->markTestSkipped('Dedicated PostgreSQL owner-routing race proof.');
+    }
+
+    $database = provisionWorkRaceDatabase();
+
+    try {
+        $now = CarbonImmutable::parse('2026-10-17 16:00:00 UTC');
+        $team = Team::query()->create([
+            'name' => 'PostgreSQL owner routing race',
+            'slug' => 'postgresql-owner-routing-race',
+            'pool_work' => false,
+        ]);
+        $workers = [];
+        foreach (range(1, 2) as $index) {
+            $user = new User;
+            $user->forceFill([
+                'name' => "Owner routing worker {$index}",
+                'email' => "owner-routing-worker-{$index}@example.test",
+                'password' => bcrypt('test-created-password'),
+                'role' => UserRole::Member->value,
+                'status' => 'active',
+            ])->save();
+            $credential = (string) Str::uuid7();
+            $machine = Spoke::query()->create([
+                'actor_id' => (string) $user->id,
+                'credential_id' => $credential,
+                'credential_backed' => true,
+                'last_polled_at' => $now,
+                'probe_status' => 'green',
+            ]);
+            MachineTeamWorkSetting::query()->create([
+                'spoke_id' => $machine->id,
+                'team_id' => $team->id,
+                'enabled' => true,
+                'roles' => ['builder'],
+                'capabilities' => ['php'],
+                'role_providers' => ['builder' => 'codex'],
+                'concurrency_ceiling' => 1,
+                'updated_by_actor' => (string) $user->id,
+            ]);
+            expect(resolve(WorkDrainService::class)->claim(
+                $team->id, (string) $user->id, $credential, 0, ['builder'], ['php'], ['builder' => 'codex'], 0, $now,
+            ))->toBe([]);
+            $workers[] = ['actor' => (string) $user->id, 'spoke' => $machine->id, 'credential' => $credential];
+        }
+        $task = WorkTask::query()->create([
+            'team_id' => $team->id,
+            'title' => 'Owner-only claim',
+            'required_capabilities' => ['php'],
+            'timebox_minutes' => 30,
+            'creator_actor' => $workers[0]['actor'],
+            'owner_actor' => $workers[0]['actor'],
+        ]);
+        $item = $task->items()->create(['role' => 'builder']);
+
+        $results = runMachineDrainProcesses($team->id, $workers, $database['connection']);
+        expect($results[0])->toBe([$item->id])
+            ->and($results[1])->toBe([])
+            ->and($item->fresh()->claimant_spoke_id)->toBe($workers[0]['spoke']);
+    } finally {
+        cleanupWorkRaceDatabase($database);
+    }
+});
+
+test('simultaneous P0 root creation admits one active task per owner on PostgreSQL', function (): void {
+    if (DB::getDriverName() !== 'pgsql') {
+        $this->markTestSkipped('Dedicated PostgreSQL active-P0 race proof.');
+    }
+
+    $database = provisionWorkRaceDatabase();
+    try {
+        $teamId = (int) DB::table('teams')->where('is_default', true)->value('id');
+        $results = runP0CreationProcesses($teamId, 'concurrent-p0-owner', $database['connection']);
+        sort($results);
+        expect($results)->toBe(['accepted', 'conflict'])
+            ->and(WorkTask::query()->where('owner_actor', 'concurrent-p0-owner')->where('priority', 'P0')->count())->toBe(1);
+    } finally {
+        cleanupWorkRaceDatabase($database);
+    }
+});
+
+test('dependency invalidation cannot cross the locked claim gate on PostgreSQL', function (): void {
+    if (DB::getDriverName() !== 'pgsql') {
+        $this->markTestSkipped('Dedicated PostgreSQL dependency gate serialization proof.');
+    }
+
+    $database = provisionWorkRaceDatabase();
+    $barrier = storage_path('framework/testing/dependency-gate-barrier-'.Str::lower(Str::random(16)));
+    mkdir($barrier, 0777, true);
+    $processes = [];
+
+    try {
+        $team = Team::query()->create([
+            'name' => 'Dependency gate race',
+            'slug' => 'dependency-gate-race',
+            'pool_work' => false,
+        ]);
+        $spoke = Spoke::query()->create([
+            'actor_id' => 'dependency-gate-owner',
+            'credential_id' => (string) Str::uuid7(),
+        ]);
+        $dependency = WorkTask::query()->create([
+            'team_id' => $team->id,
+            'title' => 'Completed dependency',
+            'required_capabilities' => [],
+            'timebox_minutes' => 30,
+            'creator_actor' => 'dependency-gate-owner',
+        ]);
+        $dependency->items()->create(['role' => 'dependency-builder', 'state' => WorkItemState::Acted]);
+        $dependent = WorkTask::query()->create([
+            'team_id' => $team->id,
+            'title' => 'Dependent claim target',
+            'required_capabilities' => [],
+            'timebox_minutes' => 30,
+            'creator_actor' => 'dependency-gate-owner',
+        ]);
+        resolve(WorkDependencyService::class)->replace($dependent, [$dependency->id]);
+        $item = $dependent->items()->create(['role' => 'builder']);
+        $environment = workRaceProcessEnvironment($database['connection']);
+
+        $claim = new Process([
+            PHP_BINARY, base_path('tests/Support/work-dependency-gate-worker.php'),
+            'claim', $barrier, (string) $team->id, 'dependency-gate-owner', (string) $spoke->id,
+        ], base_path(), $environment, null, 90);
+        $claim->start();
+        $processes[] = $claim;
+        $deadline = microtime(true) + 30;
+        while (! file_exists($barrier.'/claim-gated')) {
+            if ($claim->isTerminated() || microtime(true) >= $deadline) {
+                throw new RuntimeException('Claim worker did not reach the dependency gate: '.$claim->getErrorOutput());
+            }
+            Sleep::usleep(10_000);
+        }
+
+        $invalidate = new Process([
+            PHP_BINARY, base_path('tests/Support/work-dependency-gate-worker.php'),
+            'invalidate', $barrier, (string) $team->id, 'dependency-gate-owner', $dependency->id,
+        ], base_path(), $environment, null, 90);
+        $invalidate->start();
+        $processes[] = $invalidate;
+        while (! file_exists($barrier.'/invalidate-attempting')) {
+            if ($invalidate->isTerminated() || microtime(true) >= $deadline) {
+                throw new RuntimeException('Invalidation worker did not attempt its task lock: '.$invalidate->getErrorOutput());
+            }
+            Sleep::usleep(10_000);
+        }
+
+        Sleep::usleep(250_000);
+        expect($invalidate->isRunning())->toBeTrue('Dependency invalidation crossed the locked claim gate.')
+            ->and(file_exists($barrier.'/invalidate-done'))->toBeFalse();
+        touch($barrier.'/release-claim');
+
+        expect($claim->wait())->toBe(0, $claim->getErrorOutput())
+            ->and($invalidate->wait())->toBe(0, $invalidate->getErrorOutput());
+        $claimResult = json_decode($claim->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+        $invalidationResult = json_decode($invalidate->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+        expect($claimResult)->toBe(['status' => 'claimed', 'ids' => [$item->id]])
+            ->and($invalidationResult['status'])->toBe('invalidated')
+            ->and($invalidationResult['cancelled_at'])->not->toBeNull()
+            ->and($dependency->fresh()->cancelled_at)->not->toBeNull()
+            ->and($item->fresh()->state)->toBe(WorkItemState::Claimed);
+    } finally {
+        if (is_dir($barrier) && ! file_exists($barrier.'/release-claim')) {
+            touch($barrier.'/release-claim');
+        }
+        foreach ($processes as $process) {
+            if ($process->isRunning()) {
+                $process->stop(1);
+            }
+        }
+        foreach (glob($barrier.'/*') ?: [] as $file) {
+            unlink($file);
+        }
+        if (is_dir($barrier)) {
+            rmdir($barrier);
+        }
+        cleanupWorkRaceDatabase($database);
+    }
+});
+
 test('transition and renew lose atomically when another process reclaims the fence', function (): void {
     $database = provisionWorkRaceDatabase();
 
@@ -771,6 +1022,8 @@ test('retirement and interactive seat acquisition serialize on the active spoke'
             'required_capabilities' => '[]',
             'timebox_minutes' => 30,
             'creator_actor' => $actor,
+            'owner_actor' => $actor,
+            'priority' => 'P2',
             'created_at' => now(),
             'updated_at' => now(),
         ]);
@@ -860,6 +1113,8 @@ test('retirement waits for an in-flight signed action holding the active spoke l
             'required_capabilities' => '[]',
             'timebox_minutes' => 30,
             'creator_actor' => $actor,
+            'owner_actor' => $actor,
+            'priority' => 'P2',
             'created_at' => $now,
             'updated_at' => $now,
         ]);

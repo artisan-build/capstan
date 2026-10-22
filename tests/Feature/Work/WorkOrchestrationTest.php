@@ -2,6 +2,7 @@
 
 use App\Enums\WorkItemState;
 use App\Enums\WorkMilestoneKind;
+use App\Enums\WorkPriority;
 use App\Http\ApiErrorException;
 use App\Livewire\Work\Index;
 use App\Models\Spoke;
@@ -43,9 +44,10 @@ beforeEach(function (): void {
     ]);
     Feature::flushCache();
     Date::setTestNow('2026-10-17 12:00:00');
+    Team::default()->update(['pool_work' => true]);
 });
 
-test('new children inherit their parent owner only while pooling is off and policy changes never rewrite them', function (): void {
+test('non-pooled children stay pinned to the root owner while pooled children allow explicit routing', function (): void {
     $team = Team::default();
     $team->update(['pool_work' => false]);
     $parentOwner = capstanUser();
@@ -56,6 +58,7 @@ test('new children inherit their parent owner only while pooling is off and poli
         'required_capabilities' => [],
         'timebox_minutes' => 30,
         'creator_actor' => 'root-creator',
+        'owner_actor' => (string) $parentOwner->id,
     ]);
     orchestrationEvent($parent, 'routing-policy');
     $host = orchestrationHost((string) $parentOwner->id);
@@ -68,25 +71,54 @@ test('new children inherit their parent owner only while pooling is off and poli
         'title' => 'Owner child',
         'brief' => 'Owned brief',
     ], CarbonImmutable::now());
-    expect(WorkTask::query()->findOrFail($owned['id'])->user_actor_address)->toBe((string) $parentOwner->id);
+    expect(WorkTask::query()->findOrFail($owned['id'])->user_actor_address)->toBe((string) $parentOwner->id)
+        ->and(WorkTask::query()->findOrFail($owned['id'])->owner_actor)->toBe((string) $parentOwner->id);
 
     $differentActor = capstanUser();
-    $explicitlyRedirected = $surface->act($context, 'create_child', [
+    $beforeRefusal = WorkTask::query()->count();
+    expect(fn () => $surface->act($context, 'create_child', [
         'under_task_id' => $parent->id,
         'title' => 'Caller-directed child',
         'brief' => 'Caller-directed brief',
         'user_actor_address' => (string) $differentActor->id,
+    ], CarbonImmutable::now()))->toThrow(ApiErrorException::class, 'use reassign_task');
+    expect(WorkTask::query()->count())->toBe($beforeRefusal);
+
+    $explicitOwner = $surface->act($context, 'create_child', [
+        'under_task_id' => $parent->id,
+        'title' => 'Explicit owner child',
+        'brief' => 'Explicit owner brief',
+        'user_actor_address' => (string) $parentOwner->id,
     ], CarbonImmutable::now());
-    expect(WorkTask::query()->findOrFail($explicitlyRedirected['id'])->user_actor_address)->toBe((string) $parentOwner->id);
+    expect(WorkTask::query()->findOrFail($explicitOwner['id'])->user_actor_address)->toBe((string) $parentOwner->id);
 
     $team->update(['pool_work' => true]);
     $pooled = $surface->act($context, 'create_child', [
         'under_task_id' => $parent->id,
         'title' => 'Pooled child',
         'brief' => 'Pooled brief',
+        'user_actor_address' => (string) $differentActor->id,
     ], CarbonImmutable::now());
-    expect(WorkTask::query()->findOrFail($pooled['id'])->user_actor_address)->toBeNull()
+    expect(WorkTask::query()->findOrFail($pooled['id'])->user_actor_address)->toBe((string) $differentActor->id)
         ->and(WorkTask::query()->findOrFail($owned['id'])->user_actor_address)->toBe((string) $parentOwner->id);
+});
+
+test('an orchestrator can lower root priority but cannot raise it', function (): void {
+    $parent = orchestrationTask();
+    $parent->update(['priority' => WorkPriority::P1]);
+    $child = orchestrationTask($parent);
+    orchestrationEvent($parent, 'priority-change');
+    $turn = orchestrationClaims($parent, orchestrationHost('priority-host'))[0];
+    $surface = resolve(WorkOrchestrationSurface::class);
+    $context = $surface->claimed($turn->id, $turn->fence);
+
+    expect(fn () => $surface->act($context, 'set_priority', ['priority' => 'P0'], CarbonImmutable::now()))
+        ->toThrow(ApiErrorException::class, 'An orchestrator may lower priority but cannot raise it.');
+
+    $result = $surface->act($context, 'set_priority', ['priority' => 'P3'], CarbonImmutable::now());
+    expect($result['status'])->toBe('completed')
+        ->and($parent->fresh()->priority)->toBe(WorkPriority::P3)
+        ->and($child->fresh()->priority)->toBe(WorkPriority::P3);
 });
 
 function orchestrationTask(?WorkTask $parent = null): WorkTask
@@ -1187,7 +1219,7 @@ test('an answered escalation reaches the woken turn with its answer and never an
     expect($siblingRead->getContent())->not->toContain($answer);
 
     // AC3: and the same holds across teams.
-    $otherTeam = Team::query()->create(['name' => 'Other team', 'slug' => 'other-team-'.Str::random(8)]);
+    $otherTeam = Team::query()->create(['name' => 'Other team', 'slug' => 'other-team-'.Str::random(8), 'pool_work' => true]);
     $otherTask = WorkTask::query()->create([
         'team_id' => $otherTeam->id, 'title' => 'Other team task', 'required_capabilities' => [],
         'timebox_minutes' => 10, 'creator_actor' => 'supervisor',

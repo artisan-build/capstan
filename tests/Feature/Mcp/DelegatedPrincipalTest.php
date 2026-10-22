@@ -622,6 +622,7 @@ test('the delegated enforcement harness reaches every tool through the canonical
         'postmaster:mark-inactive-machines',
         'postmaster:probe-sweep',
         'postmaster:retire-dead-spokes --local',
+        'work:expiration-sweep',
         'work:failover-sweep',
         'work:liveness-sweep',
         'work:orchestration-sweep',
