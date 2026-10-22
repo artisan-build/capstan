@@ -3,9 +3,9 @@
 namespace App\Work;
 
 use App\Enums\WorkItemState;
+use App\Enums\WorkPriority;
 use App\Http\ApiErrorException;
 use App\Models\Spoke;
-use App\Models\Team;
 use App\Models\WorkBriefRevision;
 use App\Models\WorkEscalation;
 use App\Models\WorkItem;
@@ -31,6 +31,7 @@ final readonly class WorkOrchestrationCapability
         private WorkOrchestrationService $orchestration,
         private BriefRevisionService $briefs,
         private WorkItemStateService $states,
+        private WorkDependencyService $dependencies,
     ) {}
 
     /** @param array<string, mixed> $attributes */
@@ -38,23 +39,41 @@ final readonly class WorkOrchestrationCapability
     {
         return $this->authorised($context, $now, function (WorkTask $parent) use ($underTaskId, $attributes, $brief, $context): WorkTask {
             $under = $this->target($parent, $underTaskId, allowParent: true);
-            $team = Team::query()->whereKey($parent->team_id)->lockForUpdate()->firstOrFail();
-            if (! $team->pool_work) {
-                $attributes['user_actor_address'] = $under->user_actor_address ?? $under->creator_actor;
-            }
             if (isset($attributes['device_spoke_id']) && ! Spoke::query()->workEligible()
                 ->whereKey($attributes['device_spoke_id'])->lockForUpdate()->exists()) {
                 throw $this->forbidden('Work host is unavailable.');
             }
             $child = WorkTask::query()->create([
-                ...array_intersect_key($attributes, array_flip(['title', 'user_actor_address', 'device_spoke_id', 'failover', 'required_capabilities', 'timebox_minutes', 'workflow_ref'])),
+                ...array_intersect_key($attributes, array_flip([
+                    'title', 'user_actor_address', 'device_spoke_id', 'failover', 'required_capabilities',
+                    'timebox_minutes', 'workflow_ref', 'owner_actor', 'priority', 'expires_at', 'pr',
+                ])),
                 'team_id' => $parent->team_id,
                 'parent_task_id' => $under->id,
                 'creator_actor' => $context->actorId,
             ]);
+            $this->dependencies->replace($child, $attributes['depends_on'] ?? []);
             $this->briefs->append($child, $brief, $context->actorId);
 
             return $child;
+        });
+    }
+
+    public function setPriority(WorkOrchestrationContext $context, string $priority, CarbonImmutable $now): WorkTask
+    {
+        return $this->authorised($context, $now, function (WorkTask $parent) use ($priority): WorkTask {
+            $requested = WorkPriority::from($priority);
+            if (! $requested->isLowerThan($parent->priority) && $requested !== $parent->priority) {
+                throw $this->forbidden('An orchestrator may lower priority but cannot raise it.');
+            }
+
+            $ids = [$parent->id];
+            for ($offset = 0; $offset < count($ids); $offset++) {
+                $ids = [...$ids, ...WorkTask::query()->where('parent_task_id', $ids[$offset])->pluck('id')->all()];
+            }
+            WorkTask::query()->whereKey($ids)->update(['priority' => $requested->value]);
+
+            return $parent->refresh();
         });
     }
 
@@ -100,7 +119,10 @@ final readonly class WorkOrchestrationCapability
             return array_filter([
                 'task' => array_filter([
                     'id' => $parent->id, 'team_id' => $parent->team_id, 'title' => $parent->title,
-                    'workflow_ref' => $parent->workflow_ref,
+                    'workflow_ref' => $parent->workflow_ref, 'owner_actor' => $parent->owner_actor,
+                    'priority' => $parent->priority->value,
+                    'depends_on' => $parent->dependencies()->orderBy('work_tasks.id')->pluck('work_tasks.id')->all(),
+                    'expires_at' => $parent->expires_at?->toJSON(), 'pr' => $parent->pr,
                 ], fn (mixed $value): bool => $value !== null),
                 'brief' => $brief === null ? null : ['id' => $brief->id, 'sequence' => $brief->sequence, 'content' => $brief->content],
                 'state' => $state === null ? null : [

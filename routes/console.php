@@ -27,8 +27,12 @@ Artisan::command('work:liveness-sweep', function (WorkSweepService $sweeps): voi
 Artisan::command('work:failover-sweep', function (WorkSweepService $sweeps): void {
     $sweeps->failover(CarbonImmutable::now());
 });
+Artisan::command('work:expiration-sweep', function (WorkSweepService $sweeps): void {
+    $sweeps->expiration(CarbonImmutable::now());
+});
 Schedule::command('work:liveness-sweep')->everyMinute()->withoutOverlapping(5);
 Schedule::command('work:failover-sweep')->everyMinute()->withoutOverlapping(5);
+Schedule::command('work:expiration-sweep')->everyMinute()->withoutOverlapping(5);
 
 Artisan::command('work:orchestration-sweep', function (WorkOrchestrationService $engine, WorkSeatService $seats): void {
     $now = CarbonImmutable::now();

@@ -2,11 +2,13 @@
 
 namespace App\Models;
 
+use App\Enums\WorkPriority;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Database\Eloquent\Relations\HasOne;
@@ -21,6 +23,11 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property list<string> $required_capabilities
  * @property int $timebox_minutes
  * @property string $creator_actor
+ * @property string $owner_actor
+ * @property WorkPriority $priority
+ * @property bool $routing_pool_work
+ * @property CarbonImmutable|null $expires_at
+ * @property string|null $pr
  * @property CarbonImmutable|null $cancelled_at
  * @property string|null $parent_task_id
  * @property string|null $workflow_ref
@@ -30,6 +37,9 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property-read Spoke|null $deviceSpoke
  * @property-read WorkTask|null $parent
  * @property-read Collection<int, WorkTask> $children
+ * @property-read Collection<int, WorkTask> $dependencies
+ * @property-read Collection<int, WorkTask> $dependents
+ * @property-read WorkTaskExpiration|null $expiration
  * @property-read Collection<int, WorkBriefRevision> $briefRevisions
  * @property-read WorkBriefRevision|null $latestBriefRevision
  * @property-read Collection<int, WorkItem> $items
@@ -45,6 +55,7 @@ class WorkTask extends Model
     /** @var array<string, mixed> */
     protected $attributes = [
         'failover' => true,
+        'priority' => WorkPriority::P2->value,
     ];
 
     /** @var list<string> */
@@ -57,6 +68,11 @@ class WorkTask extends Model
         'required_capabilities',
         'timebox_minutes',
         'creator_actor',
+        'owner_actor',
+        'priority',
+        'routing_pool_work',
+        'expires_at',
+        'pr',
         'cancelled_at',
         'parent_task_id',
         'workflow_ref',
@@ -70,8 +86,33 @@ class WorkTask extends Model
             'failover' => 'boolean',
             'required_capabilities' => 'array',
             'timebox_minutes' => 'integer',
+            'priority' => WorkPriority::class,
+            'routing_pool_work' => 'boolean',
+            'expires_at' => 'immutable_datetime',
             'cancelled_at' => 'datetime',
         ];
+    }
+
+    protected static function booted(): void
+    {
+        static::creating(function (WorkTask $task): void {
+            if (! $task->isDirty('routing_pool_work')) {
+                $task->routing_pool_work = (bool) $task->team()->value('pool_work');
+            }
+            if ($task->parent_task_id === null) {
+                $task->owner_actor ??= $task->creator_actor;
+                $task->priority ??= WorkPriority::P2;
+
+                return;
+            }
+
+            $root = self::query()->findOrFail($task->parent_task_id);
+            while ($root->parent_task_id !== null) {
+                $root = self::query()->findOrFail($root->parent_task_id);
+            }
+            $task->owner_actor = $root->owner_actor;
+            $task->priority = $root->priority;
+        });
     }
 
     /** @return BelongsTo<Team, $this> */
@@ -96,6 +137,34 @@ class WorkTask extends Model
     public function children(): HasMany
     {
         return $this->hasMany(self::class, 'parent_task_id');
+    }
+
+    /** @return BelongsToMany<WorkTask, $this> */
+    public function dependencies(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            self::class,
+            'work_task_dependencies',
+            'work_task_id',
+            'depends_on_task_id',
+        );
+    }
+
+    /** @return BelongsToMany<WorkTask, $this> */
+    public function dependents(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            self::class,
+            'work_task_dependencies',
+            'depends_on_task_id',
+            'work_task_id',
+        );
+    }
+
+    /** @return HasOne<WorkTaskExpiration, $this> */
+    public function expiration(): HasOne
+    {
+        return $this->hasOne(WorkTaskExpiration::class);
     }
 
     /** @return HasMany<WorkBriefRevision, $this> */

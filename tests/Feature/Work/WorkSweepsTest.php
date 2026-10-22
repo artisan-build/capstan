@@ -37,7 +37,7 @@ beforeEach(function (): void {
 /** @param array<string, mixed> $attributes */
 function sweepItem(array $attributes = []): WorkItem
 {
-    $team = Team::query()->create(['name' => 'Sweep test', 'slug' => (string) Str::uuid7()]);
+    $team = Team::query()->create(['name' => 'Sweep test', 'slug' => (string) Str::uuid7(), 'pool_work' => true]);
     $task = WorkTask::query()->create([
         'team_id' => $team->id, 'title' => 'Sweep task', 'required_capabilities' => [],
         'timebox_minutes' => 10, 'creator_actor' => 'creator',
@@ -66,7 +66,7 @@ test('lease expiry is an atomic one time release retaining progress', function (
 test('recovery sweeps requeue claims from newly ineligible machines without restoring authority', function (string $lifecycle): void {
     $owner = capstanUser();
     $issued = capstanBoundBearer($owner, CapstanCredentialDeclaration::MACHINE);
-    $team = Team::query()->create(['name' => 'Recovery split', 'slug' => 'recovery-split-'.Str::random(8)]);
+    $team = Team::query()->create(['name' => 'Recovery split', 'slug' => 'recovery-split-'.Str::random(8), 'pool_work' => true]);
     $task = WorkTask::query()->create([
         'team_id' => $team->id,
         'title' => 'Recovery authority split',
@@ -330,7 +330,7 @@ test('failover respects own queued age cancellation reserved roles and a racing 
 
 test('work schedules run every minute without overlapping', function (): void {
     $events = collect(resolve(Schedule::class)->events())->filter(fn ($event): bool => str_contains($event->command ?? '', 'work:'));
-    expect($events)->toHaveCount(3);
+    expect($events)->toHaveCount(4);
     foreach ($events as $event) {
         expect($event->expression)->toBe('* * * * *')->and($event->withoutOverlapping)->toBeTrue();
     }

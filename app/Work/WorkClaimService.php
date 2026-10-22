@@ -9,6 +9,7 @@ use App\Models\Spoke;
 use App\Models\WorkItem;
 use App\Models\WorkItemTransition;
 use App\Models\WorkOrchestratorSeat;
+use App\Models\WorkTask;
 use Carbon\CarbonImmutable;
 use Closure;
 use Illuminate\Database\QueryException;
@@ -24,6 +25,7 @@ final readonly class WorkClaimService
         private WorkOrchestrationLock $locks,
         private MachineWorkRuntime $runtime,
         private MachineWorkArbiter $arbiter,
+        private WorkTaskGate $gate,
     ) {}
 
     private const int CANDIDATE_PAGE_SIZE = 200;
@@ -140,7 +142,7 @@ final readonly class WorkClaimService
             $wanted = min($wanted, $setting->concurrency_ceiling - $this->runtime->authoritativeClaimedCount($spokeId));
         }
         $eligible = [];
-        $afterCreatedAt = null;
+        $afterPriority = null;
         $afterId = null;
 
         do {
@@ -148,12 +150,19 @@ final readonly class WorkClaimService
                 ->join('work_tasks', 'work_tasks.id', '=', 'work_items.work_task_id')
                 ->where('work_tasks.team_id', $teamId)
                 ->whereNull('work_tasks.cancelled_at')
+                ->where(fn ($query) => $query->whereNull('work_tasks.expires_at')->orWhere('work_tasks.expires_at', '>', $now))
                 ->where('work_items.state', WorkItemState::Queued->value)
                 ->whereIn('work_items.role', $roles)
                 ->where('work_items.role', '!=', WorkItem::ROLE_HUMAN)
                 ->where(function ($query) use ($actorId): void {
-                    $query->whereNull('work_tasks.user_actor_address')
-                        ->orWhere('work_tasks.user_actor_address', $actorId);
+                    $query->where('work_tasks.user_actor_address', $actorId)
+                        ->orWhere(function ($query) use ($actorId): void {
+                            $query->whereNull('work_tasks.user_actor_address')
+                                ->where(function ($query) use ($actorId): void {
+                                    $query->where('work_tasks.routing_pool_work', true)
+                                        ->orWhere('work_tasks.owner_actor', $actorId);
+                                });
+                        });
                 })
                 ->where(function ($query) use ($spokeId): void {
                     $query->whereNull('work_tasks.device_spoke_id')
@@ -165,22 +174,24 @@ final readonly class WorkClaimService
                     'work_items.work_task_id',
                     'work_items.role',
                     'work_items.fence',
-                    'work_items.created_at',
                     'work_items.updated_at as item_updated_at',
                     'work_tasks.updated_at as task_updated_at',
                     'work_tasks.required_capabilities',
                     'work_tasks.device_spoke_id',
                     'work_tasks.user_actor_address',
+                    'work_tasks.owner_actor',
+                    'work_tasks.priority',
+                    'work_tasks.routing_pool_work',
                 ])
-                ->oldest('work_items.created_at')
+                ->orderBy('work_tasks.priority')
                 ->orderBy('work_items.id')
                 ->limit(self::CANDIDATE_PAGE_SIZE);
 
-            if ($afterCreatedAt !== null && $afterId !== null) {
-                $query->where(function ($query) use ($afterCreatedAt, $afterId): void {
-                    $query->where('work_items.created_at', '>', $afterCreatedAt)
-                        ->orWhere(function ($query) use ($afterCreatedAt, $afterId): void {
-                            $query->where('work_items.created_at', $afterCreatedAt)
+            if ($afterPriority !== null && $afterId !== null) {
+                $query->where(function ($query) use ($afterPriority, $afterId): void {
+                    $query->where('work_tasks.priority', '>', $afterPriority)
+                        ->orWhere(function ($query) use ($afterPriority, $afterId): void {
+                            $query->where('work_tasks.priority', $afterPriority)
                                 ->where('work_items.id', '>', $afterId);
                         });
                 });
@@ -189,6 +200,10 @@ final readonly class WorkClaimService
             $page = $query->get();
 
             foreach ($page as $candidate) {
+                $task = WorkTask::query()->find($candidate->work_task_id);
+                if (! $task instanceof WorkTask || ! $this->gate->claimable($task, $now)) {
+                    continue;
+                }
                 if ($candidate->role === WorkItem::ROLE_ORCHESTRATOR) {
                     $seat = WorkOrchestratorSeat::query()->where('work_task_id', $candidate->work_task_id)->first();
                     if (! $this->seats->eligible(
@@ -225,7 +240,7 @@ final readonly class WorkClaimService
             }
 
             $last = $page->last();
-            $afterCreatedAt = $last?->created_at;
+            $afterPriority = $last?->priority;
             $afterId = $last?->id;
         } while ($page->count() === self::CANDIDATE_PAGE_SIZE);
 
@@ -273,6 +288,10 @@ final readonly class WorkClaimService
                 if (! Spoke::query()->workEligible()->whereKey($spokeId)->where('actor_id', $actorId)->lockForUpdate()->exists()) {
                     return null;
                 }
+                $task = WorkTask::query()->whereKey($candidate->work_task_id)->first();
+                if (! $task instanceof WorkTask || ! $this->gate->claimable($task, $now)) {
+                    return null;
+                }
                 if ($requireMachineProfile) {
                     if ($roles === []) {
                         return null;
@@ -282,7 +301,7 @@ final readonly class WorkClaimService
                         || ! in_array($candidate->role, $roles, true)
                         || ! $this->hasEveryCapability($candidate->required_capabilities, $capabilities)
                         || $this->runtime->authoritativeClaimedCount($spokeId) >= $setting->concurrency_ceiling
-                        || ($this->isPooledUnpinned($candidate) && ! $this->arbiter->isWinner(
+                        || ($this->isPooledUnpinned($task) && ! $this->arbiter->isWinner(
                             $teamId,
                             $candidate->role,
                             $this->capabilities($candidate->required_capabilities),
@@ -312,12 +331,20 @@ final readonly class WorkClaimService
                     ->where('role', $candidate->role)
                     ->where('state', WorkItemState::Queued->value)
                     ->where('fence', $candidate->fence)
-                    ->whereHas('workTask', function ($query) use ($candidate, $teamId, $actorId, $spokeId, $seat): void {
+                    ->whereHas('workTask', function ($query) use ($candidate, $teamId, $actorId, $spokeId, $seat, $now): void {
                         $query->where('team_id', $teamId)
                             ->whereNull('cancelled_at')
+                            ->where(fn ($query) => $query->whereNull('expires_at')->orWhere('expires_at', '>', $now))
                             ->where('updated_at', $candidate->task_updated_at)
                             ->where(function ($query) use ($actorId): void {
-                                $query->whereNull('user_actor_address')->orWhere('user_actor_address', $actorId);
+                                $query->where('user_actor_address', $actorId)
+                                    ->orWhere(function ($query) use ($actorId): void {
+                                        $query->whereNull('user_actor_address')
+                                            ->where(function ($query) use ($actorId): void {
+                                                $query->where('owner_actor', $actorId)
+                                                    ->orWhere('routing_pool_work', true);
+                                            });
+                                    });
                             })
                             ->when($seat === null, fn ($query) => $query->where(function ($query) use ($spokeId): void {
                                 $query->whereNull('device_spoke_id')->orWhere('device_spoke_id', $spokeId);
@@ -412,9 +439,12 @@ final readonly class WorkClaimService
         return Spoke::query()->workEligible()->whereKey($spokeId)->where('actor_id', $actorId)->exists();
     }
 
-    private function isPooledUnpinned(stdClass $candidate): bool
+    private function isPooledUnpinned(stdClass|WorkTask $candidate): bool
     {
-        return $candidate->user_actor_address === null
+        $pooled = (bool) $candidate->routing_pool_work;
+
+        return $pooled
+            && $candidate->user_actor_address === null
             && $candidate->device_spoke_id === null;
     }
 }

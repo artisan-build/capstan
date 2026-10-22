@@ -59,7 +59,7 @@ abstract class WorkOrchestrationTool extends CapstanTool
                 'spoke_id' => $schema->integer()->min(1),
                 'seat_fence' => $schema->integer()->min(1)->required(),
                 'session_ref' => $schema->string()->min(1)->max(2048)->required(),
-                'action' => $schema->string()->enum(['create_child', 'revise_brief', 'queue_item', 'cancel_item', 'steer', 'decide', 'request_wake', 'escalate', 'finish'])->required(),
+                'action' => $schema->string()->enum(['create_child', 'set_priority', 'revise_brief', 'queue_item', 'cancel_item', 'steer', 'decide', 'request_wake', 'escalate', 'finish'])->required(),
                 'input' => $schema->object([
                     'under_task_id' => $schema->string(), 'task_id' => $schema->string(), 'item_id' => $schema->string(), 'event_id' => $schema->string(),
                     'title' => $schema->string()->min(1)->max(255), 'brief' => $schema->string()->min(1)->max(32000), 'role' => $schema->string()->min(1)->max(64), 'content' => $schema->string()->min(1)->max(100000),
@@ -69,6 +69,9 @@ abstract class WorkOrchestrationTool extends CapstanTool
                     'state' => $schema->string()->enum(['acted', 'failed']), 'user_actor_address' => $schema->string()->min(1)->max(19), 'device_spoke_id' => $schema->integer()->min(1),
                     'failover' => $schema->boolean(), 'required_capabilities' => $schema->array()->items($schema->string()->min(1)->max(64))->max(25)->unique(),
                     'timebox_minutes' => $schema->integer()->min(1)->max(1440), 'workflow_ref' => $schema->string()->max(2048),
+                    'owner_actor' => $schema->string()->min(1)->max(19), 'priority' => $schema->string()->enum(['P0', 'P1', 'P2', 'P3']),
+                    'depends_on' => $schema->array()->items($schema->string())->max(25)->unique(), 'expires_at' => $schema->string(),
+                    'pr' => $schema->string()->min(1)->max(2048),
                 ])->withoutAdditionalProperties()->required(),
                 'idempotency_key' => $schema->string()->min(1)->max(255)->required(),
             ],
@@ -98,6 +101,10 @@ abstract class WorkOrchestrationTool extends CapstanTool
         $task = $schema->object([
             'id' => $schema->string()->required(), 'team_id' => $schema->integer()->required(),
             'title' => $schema->string()->required(), 'workflow_ref' => $schema->string(),
+            'owner_actor' => $schema->string()->required(),
+            'priority' => $schema->string()->enum(['P0', 'P1', 'P2', 'P3'])->required(),
+            'depends_on' => $schema->array()->items($schema->string())->required(),
+            'expires_at' => $schema->string(), 'pr' => $schema->string(),
         ])->withoutAdditionalProperties();
         $brief = $schema->object(['id' => $schema->string()->required(), 'sequence' => $schema->integer()->required(), 'content' => $schema->string()->required()])->withoutAdditionalProperties();
         $state = $schema->object(['id' => $schema->string()->required(), 'sequence' => $schema->integer()->required(), 'through' => $schema->integer()->required(), 'content' => $schema->string()->required()])->withoutAdditionalProperties();
@@ -187,7 +194,7 @@ abstract class WorkOrchestrationTool extends CapstanTool
                 'seat_fence' => ['required', 'integer', 'min:1'],
                 'limit' => ['sometimes', 'required', 'integer', 'min:1', 'max:25'],
                 'answer' => ['required', 'string', 'min:1', 'max:10000'],
-                'action' => ['required', 'string', Rule::in(['create_child', 'revise_brief', 'queue_item', 'cancel_item', 'steer', 'decide', 'request_wake', 'escalate', 'finish'])],
+                'action' => ['required', 'string', Rule::in(['create_child', 'set_priority', 'revise_brief', 'queue_item', 'cancel_item', 'steer', 'decide', 'request_wake', 'escalate', 'finish'])],
                 'input' => ['required', 'array'],
                 'idempotency_key' => ['required', 'string', 'min:1', 'max:255'],
                 default => throw new \LogicException('Unknown Work orchestration input.'),

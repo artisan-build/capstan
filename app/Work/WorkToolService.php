@@ -3,11 +3,13 @@
 namespace App\Work;
 
 use App\Enums\WorkItemState;
+use App\Enums\WorkPriority;
 use App\Http\ApiErrorException;
 use App\Models\Spoke;
 use App\Models\WorkItem;
 use App\Models\WorkSteer;
 use App\Models\WorkTask;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 
 final readonly class WorkToolService
@@ -16,6 +18,7 @@ final readonly class WorkToolService
         private BriefRevisionService $briefs,
         private WorkItemStateService $states,
         private WorkRepresentation $representation,
+        private WorkDependencyService $dependencies,
     ) {}
 
     /**
@@ -30,10 +33,27 @@ final readonly class WorkToolService
                     ->whereKey($input['device_spoke_id'])->lockForUpdate()->exists()) {
                     throw new ApiErrorException(409, 'spoke_unavailable', 'Work host is unavailable.');
                 }
-                $task = WorkTask::query()->create([
-                    ...array_intersect_key($input, array_flip(['team_id', 'title', 'user_actor_address', 'device_spoke_id', 'failover', 'required_capabilities', 'timebox_minutes'])),
-                    'creator_actor' => $actor,
-                ]);
+                try {
+                    $task = WorkTask::query()->create([
+                        ...array_intersect_key($input, array_flip([
+                            'team_id', 'title', 'user_actor_address', 'device_spoke_id', 'failover',
+                            'required_capabilities', 'timebox_minutes', 'owner_actor', 'priority', 'expires_at', 'pr',
+                        ])),
+                        'creator_actor' => $actor,
+                        'owner_actor' => $input['owner_actor'] ?? $actor,
+                        'priority' => $input['priority'] ?? WorkPriority::P2->value,
+                    ]);
+                } catch (QueryException $exception) {
+                    $message = $exception->getMessage();
+                    if (($input['priority'] ?? WorkPriority::P2->value) === WorkPriority::P0->value
+                        && (str_contains($message, 'work_tasks_one_active_p0_per_owner')
+                            || str_contains($message, 'work_tasks.owner_actor'))) {
+                        throw new ApiErrorException(409, 'active_p0_exists', 'The owner already has an active P0 Work task.');
+                    }
+
+                    throw $exception;
+                }
+                $this->dependencies->replace($task, $input['depends_on'] ?? []);
                 $revision = $this->briefs->append($task, $input['brief'], $actor);
 
                 return ['task' => $this->representation->task($task), 'revision' => $this->representation->revision($revision)];
@@ -119,6 +139,7 @@ final readonly class WorkToolService
                 }
             }
         });
+        $this->dependencies->signalFailed($task->fresh());
 
         return ['task' => $this->representation->task($task)];
     }
