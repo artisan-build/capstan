@@ -651,6 +651,7 @@ namespace App\Models{
 
 namespace App\Models{
 /**
+ * @property int $work_preemption_revision
  * @property int $id
  * @property string $name
  * @property string $slug
@@ -659,7 +660,6 @@ namespace App\Models{
  * @property \Carbon\CarbonImmutable|null $updated_at
  * @property bool $pool_work
  * @property bool $default_failover
- * @property int $work_preemption_revision
  * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\Artifact> $artifacts
  * @property-read int|null $artifacts_count
  * @property-read \Illuminate\Database\Eloquent\Collection<int, \App\Models\WorkTask> $workTasks
