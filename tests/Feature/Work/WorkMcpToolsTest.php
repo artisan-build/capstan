@@ -2,6 +2,7 @@
 
 use App\Auth\CapstanCredentialDeclaration;
 use App\Enums\WorkItemState;
+use App\Machine\MachineWorkRuntime;
 use App\Mcp\CapstanServer;
 use App\Mcp\Tools\OrchestrateTool;
 use App\Mcp\WriteFaultInjector;
@@ -287,6 +288,52 @@ test('human priority accepts owner Members and same team managers and durably re
         ->and(WorkOrchestrationEvent::query()->count())->toBe($events)
         ->and($child->fresh()->priority->value)->toBe('P0');
 })->with(['member', 'admin', 'owner']);
+
+test('changed P0 plans refuse and durably replay the current token and inventory through MCP', function (): void {
+    $owner = capstanUser(['role' => 'member']);
+    $team = Team::default();
+    $token = workMcpToken($owner);
+    $root = WorkTask::query()->create([
+        'team_id' => $team->id, 'title' => 'Changing plan', 'creator_actor' => (string) $owner->id,
+        'required_capabilities' => [], 'timebox_minutes' => 30,
+    ]);
+    $root->items()->create(['role' => 'builder']);
+    $base = ['team_id' => $team->id, 'task_id' => $root->id, 'priority' => 'P0'];
+    $preview = workMcpResult('set_task_priority', [...$base, 'idempotency_key' => 'changing-plan-preview'], $token);
+    expect($preview['preemptions'])->toBe([]);
+
+    $drain = workMcpDrain($owner, $team, ['builder']);
+    MachineTeamWorkSetting::query()->where('spoke_id', $drain['spoke']->id)->update(['concurrency_ceiling' => 1]);
+    $victimTask = WorkTask::query()->create([
+        'team_id' => $team->id, 'title' => 'New victim', 'creator_actor' => (string) $owner->id,
+        'priority' => 'P3', 'required_capabilities' => [], 'timebox_minutes' => 30,
+    ]);
+    $victim = $victimTask->items()->create([
+        'role' => 'builder', 'state' => 'claimed', 'fence' => 1,
+        'claimant_spoke_id' => $drain['spoke']->id, 'claimant_actor' => (string) $owner->id,
+        'claimed_at' => now(), 'lease_until' => now()->addMinutes(5),
+    ]);
+    resolve(MachineWorkRuntime::class)->record(
+        $team->id, (string) $owner->id, $drain['spoke']->credential_id,
+        ['builder'], [], [], 0, 1, now()->toImmutable(),
+    );
+    $confirm = [
+        ...$base, 'idempotency_key' => 'changing-plan-confirm',
+        'confirmation_token' => $preview['confirmation_token'], 'reason' => 'Incident response',
+    ];
+    $refusal = workMcpResult('set_task_priority', $confirm, $token);
+    expect($refusal['outcome'])->toBe('refused')
+        ->and($refusal['reason'])->toBe('preemption_plan_changed')
+        ->and($refusal['confirmation_token'])->not->toBe($preview['confirmation_token'])
+        ->and($refusal['preemptions'])->toHaveCount(1)
+        ->and($refusal['preemptions'][0]['item_id'])->toBe($victim->id)
+        ->and($root->fresh()->priority->value)->toBe('P2');
+    $claims = DB::table('mcp_write_claims')->count();
+    expect(workMcpResult('set_task_priority', $confirm, $token))->toBe($refusal)
+        ->and(DB::table('mcp_write_claims')->count())->toBe($claims)
+        ->and(WorkOrchestrationDecision::query()->count())->toBe(0)
+        ->and(WorkOrchestrationEvent::query()->count())->toBe(0);
+});
 
 test('priority child and foreign task ids and non admitted callers never acquire write claims', function (string $case): void {
     $owner = capstanUser(['role' => 'member']);

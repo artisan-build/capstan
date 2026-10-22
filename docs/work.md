@@ -101,7 +101,11 @@ wakes the root orchestrator. Retrying the same confirmation key replays its resu
 When an eligible ordinary `P0` item encounters a full machine, Capstan requests one ordinary worker's
 release. It selects `P3` before `P2` before `P1`, then `claimed` before `delivered` before `routed`, then
 the lowest UUIDv7 item id. Human, orchestrator, P0, lease-dead, and already-requested claims are excluded.
+If the item fits more than one machine, the normal deterministic machine rank chooses one before Capstan
+plans or requests a release. A machine with free capacity wins over one that would require preemption.
 Repeated full-machine polls wait for the outstanding release instead of requesting more victims.
+The capacity-zero poll sent by a full reference drain still performs this release check; it never claims
+another item while the machine is full.
 
 Brief and steer JSON responses include `release_requested` only while a request is live, with its request
 time, deadline, and reason. Markdown briefs also show the request. Save branch/progress through the existing

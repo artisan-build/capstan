@@ -68,7 +68,7 @@ final readonly class DatabaseWorkNotifier implements WorkNotifier
                 'state' => 'release_requested',
             ]);
         }
-        DB::afterCommit(fn () => $this->logger->preempted($item));
+        DB::afterCommit(fn () => $this->logger->preempted($item, $actor));
     }
 
     public function missedHeartbeat(Spoke $spoke): void
@@ -111,7 +111,18 @@ final readonly class DatabaseWorkNotifier implements WorkNotifier
 
     private function taskEscalationActor(string $taskId): ?string
     {
-        return WorkTask::query()->find($taskId)?->effectiveEscalationActor();
+        $task = WorkTask::query()->find($taskId);
+        if (! $task instanceof WorkTask) {
+            return null;
+        }
+
+        foreach ([$task->escalation_actor, $task->owner_actor] as $actor) {
+            if (is_string($actor) && preg_match('/\A[1-9][0-9]{0,18}\z/D', $actor) === 1 && User::query()->whereKey($actor)->exists()) {
+                return $actor;
+            }
+        }
+
+        return null;
     }
 
     /** @param array<string, int|string> $data */

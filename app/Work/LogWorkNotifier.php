@@ -36,13 +36,13 @@ final class LogWorkNotifier implements WorkNotifier
         Log::warning('Work item stalled.', ['item_id' => $item->id, 'fence' => $item->fence]);
     }
 
-    public function preempted(WorkItem $item): void
+    public function preempted(WorkItem $item, ?string $escalationActor = null): void
     {
         Log::warning('Work item preempted.', [
             'task_id' => $item->work_task_id,
             'item_id' => $item->id,
             'fence' => $item->fence,
-            'escalation_actor' => $item->workTask->effectiveEscalationActor(),
+            'escalation_actor' => $escalationActor ?? $item->workTask->effectiveEscalationActor(),
         ]);
     }
 

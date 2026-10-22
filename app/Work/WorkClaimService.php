@@ -54,7 +54,7 @@ final readonly class WorkClaimService
             if ($setting === null || $this->runtime->authoritativeClaimedCount($machine->id) < $setting->concurrency_ceiling) {
                 continue;
             }
-            $eligible = $this->candidates($root->team_id, $machine->actor_id, $machine->id, $roles, $presence->capabilities, 25, $now, $presence->role_providers, true, true, $taskIds);
+            $eligible = $this->candidates($root->team_id, $machine->actor_id, $machine->id, $roles, $presence->capabilities, 25, $now, $presence->role_providers, true, true, $taskIds, false, true);
             foreach ($eligible as $candidate) {
                 if (isset($opportunities[$candidate->id]) || WorkItem::query()->where('release_for_item_id', $candidate->id)->exists()) {
                     continue;
@@ -63,7 +63,7 @@ final readonly class WorkClaimService
                 if ($victim === null) {
                     break;
                 }
-                $milestone = $victim->milestones()->orderByDesc('id')->first();
+                $milestone = $victim->milestones()->latest('created_at')->orderByDesc('id')->first();
                 $plan[] = array_filter([
                     'item_id' => $victim->id, 'role' => $victim->role,
                     'machine_id' => $machine->id,
@@ -104,14 +104,14 @@ final readonly class WorkClaimService
         ?Closure $afterCandidates = null,
         ?Closure $afterDependencyGate = null,
     ): array {
-        if ($capacity === 0 || ! $this->activeSpokeExists($actorId, $spokeId, $teamId, $roles, $capabilities, $roleProviders, $now, $requireMachineProfile)) {
+        if (! $this->activeSpokeExists($actorId, $spokeId, $teamId, $roles, $capabilities, $roleProviders, $now, $requireMachineProfile)) {
             return [];
         }
 
         $claimed = [];
 
         if ($requireMachineProfile) {
-            foreach ($this->candidates($teamId, $actorId, $spokeId, $roles, $capabilities, 1, $now, $roleProviders, true, true, ordinaryOnly: true) as $candidate) {
+            foreach ($this->candidates($teamId, $actorId, $spokeId, $roles, $capabilities, 1, $now, $roleProviders, true, true, ordinaryOnly: true, arbitrateMachine: true) as $candidate) {
                 if ($candidate->priority === 'P0' && ! in_array($candidate->role, [WorkItem::ROLE_HUMAN, WorkItem::ROLE_ORCHESTRATOR], true)) {
                     $this->claimCandidate($candidate, $teamId, $actorId, $spokeId, $now, $leaseSeconds, $roles, $capabilities, $roleProviders, true, preemptOnly: true);
                 }
@@ -199,6 +199,7 @@ final readonly class WorkClaimService
         bool $ignoreCeiling = false,
         ?array $taskIds = null,
         bool $ordinaryOnly = false,
+        bool $arbitrateMachine = false,
     ): array {
         if ($requireMachineProfile) {
             $setting = $this->runtime->eligibleSetting($teamId, $actorId, $spokeId, $roles, $capabilities, $roleProviders, $now);
@@ -294,7 +295,7 @@ final readonly class WorkClaimService
                     }
                 }
                 if ($this->hasEveryCapability($candidate->required_capabilities, $capabilities)
-                    && (! $requireMachineProfile || ! $this->isPooledUnpinned($candidate)
+                    && (! $requireMachineProfile || (! $arbitrateMachine && ! $this->isPooledUnpinned($candidate))
                         || $this->arbiter->isWinner(
                             $teamId,
                             $candidate->role,
@@ -380,7 +381,7 @@ final readonly class WorkClaimService
                     if (! $setting instanceof MachineTeamWorkSetting
                         || ! in_array($candidate->role, $roles, true)
                         || ! $this->hasEveryCapability($candidate->required_capabilities, $capabilities)
-                        || ($this->isPooledUnpinned($task) && ! $this->arbiter->isWinner(
+                        || (($preemptOnly || $this->isPooledUnpinned($task)) && ! $this->arbiter->isWinner(
                             $teamId,
                             $candidate->role,
                             $this->capabilities($candidate->required_capabilities),

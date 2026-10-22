@@ -99,6 +99,7 @@ abstract class WorkTool extends CapstanTool
                 'priority' => $schema->string()->enum(WorkPriority::class),
                 'confirmation_status' => $schema->string()->enum(['required', 'refused']),
                 'confirmation_token' => $schema->string(),
+                'reason' => $schema->string()->enum(['preemption_plan_changed']),
                 'preemptions' => $schema->array()->items($schema->object([
                     'item_id' => $schema->string()->required(), 'role' => $schema->string()->required(),
                     'machine_id' => $schema->integer()->required(), 'machine_name' => $schema->string()->required(),

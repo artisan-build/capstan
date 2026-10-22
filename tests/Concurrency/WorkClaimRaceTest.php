@@ -566,6 +566,12 @@ test('concurrent full machine claims request one release and concurrent grace sw
             'roles' => ['builder'], 'capabilities' => ['php'], 'role_providers' => ['builder' => 'codex'],
             'concurrency_ceiling' => 2, 'updated_by_actor' => (string) $user->id,
         ]);
+        MachineWorkPresence::query()->create([
+            'spoke_id' => $machine->id, 'team_id' => $team->id,
+            'roles' => ['builder'], 'capabilities' => ['php'], 'role_providers' => ['builder' => 'codex'],
+            'current_claimed_item_count' => 2, 'available_capacity' => 0,
+            'concurrency_ceiling' => 2, 'observed_at' => $now,
+        ]);
         $task = WorkTask::query()->create(['team_id' => $team->id, 'title' => 'Victims', 'required_capabilities' => ['php'], 'timebox_minutes' => 30, 'creator_actor' => (string) $user->id, 'priority' => 'P3']);
         foreach (range(1, 2) as $index) {
             $task->items()->create(['role' => 'builder', 'state' => 'claimed', 'claimant_spoke_id' => $machine->id, 'claimant_actor' => (string) $user->id, 'fence' => 4, 'claimed_at' => $now, 'lease_until' => $now->addMinutes(5)]);
