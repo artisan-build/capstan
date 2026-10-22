@@ -580,7 +580,7 @@ final readonly class BrandChromeSanitizer
         foreach ($patterns as $base => $pattern) {
             preg_match_all($pattern, $html, $references);
 
-            foreach ($references[1] ?? [] as $digits) {
+            foreach ($references[1] as $digits) {
                 $codePoint = 0;
 
                 foreach (str_split($digits) as $digit) {
