@@ -127,6 +127,7 @@ class WorkItemStateService
                 $at,
             )->update([
                 'state' => $to->value,
+                ...($to->isTerminal() ? WorkPreemptionService::cleared() : []),
                 'updated_at' => $at,
             ]);
 
@@ -167,6 +168,7 @@ class WorkItemStateService
                 $at,
             )->update([
                 'state' => WorkItemState::Queued->value,
+                ...WorkPreemptionService::cleared(),
                 'attempts' => DB::raw('attempts + 1'),
                 'claimant_spoke_id' => null,
                 'claimant_actor' => null,
@@ -253,6 +255,7 @@ class WorkItemStateService
             $locked->lease_until = null;
             $locked->claimed_at = null;
             $locked->stalled_at = null;
+            $locked->fill(WorkPreemptionService::cleared());
 
             $requeued = $this->persist(
                 $locked,
@@ -333,6 +336,9 @@ class WorkItemStateService
     ): WorkItem {
         $this->assertNotTurnDone($item, $to);
         $item->state = $to;
+        if ($to->isTerminal()) {
+            $item->fill(WorkPreemptionService::cleared());
+        }
         $item->save();
 
         $this->appendTransition($item, $from, $to, $actorKind, $actorId, $at);

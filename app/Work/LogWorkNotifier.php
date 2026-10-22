@@ -36,6 +36,16 @@ final class LogWorkNotifier implements WorkNotifier
         Log::warning('Work item stalled.', ['item_id' => $item->id, 'fence' => $item->fence]);
     }
 
+    public function preempted(WorkItem $item): void
+    {
+        Log::warning('Work item preempted.', [
+            'task_id' => $item->work_task_id,
+            'item_id' => $item->id,
+            'fence' => $item->fence,
+            'escalation_actor' => $item->workTask->effectiveEscalationActor(),
+        ]);
+    }
+
     public function missedHeartbeat(Spoke $spoke): void
     {
         Log::warning('Work host missed heartbeat.', ['spoke_id' => $spoke->id]);

@@ -553,6 +553,42 @@ function runWorkFenceProcess(string $mode, array $connection, array $scenario, C
     }
 }
 
+test('concurrent full machine claims request one release and concurrent grace sweeps fence once', function (): void {
+    $database = provisionWorkRaceDatabase();
+    try {
+        $now = CarbonImmutable::parse('2026-10-17 16:00:00 UTC');
+        $team = Team::query()->create(['name' => 'Preemption race', 'slug' => 'preemption-race']);
+        $user = new User;
+        $user->forceFill(['name' => 'Preemption worker', 'email' => 'preemption-worker@example.test', 'password' => bcrypt('test-password'), 'role' => 'member', 'status' => 'active'])->save();
+        $machine = Spoke::query()->create(['actor_id' => (string) $user->id, 'credential_id' => (string) Str::uuid7(), 'last_polled_at' => $now]);
+        MachineTeamWorkSetting::query()->create([
+            'spoke_id' => $machine->id, 'team_id' => $team->id, 'enabled' => true,
+            'roles' => ['builder'], 'capabilities' => ['php'], 'role_providers' => ['builder' => 'codex'],
+            'concurrency_ceiling' => 2, 'updated_by_actor' => (string) $user->id,
+        ]);
+        $task = WorkTask::query()->create(['team_id' => $team->id, 'title' => 'Victims', 'required_capabilities' => ['php'], 'timebox_minutes' => 30, 'creator_actor' => (string) $user->id, 'priority' => 'P3']);
+        foreach (range(1, 2) as $index) {
+            $task->items()->create(['role' => 'builder', 'state' => 'claimed', 'claimant_spoke_id' => $machine->id, 'claimant_actor' => (string) $user->id, 'fence' => 4, 'claimed_at' => $now, 'lease_until' => $now->addMinutes(5)]);
+        }
+        $p0 = WorkTask::query()->create(['team_id' => $team->id, 'title' => 'P0 race', 'required_capabilities' => ['php'], 'timebox_minutes' => 30, 'creator_actor' => (string) $user->id, 'priority' => 'P0']);
+        $opportunity = $p0->items()->create(['role' => 'builder']);
+        $workers = array_fill(0, 3, ['actor' => (string) $user->id, 'spoke' => $machine->id]);
+        expect(array_merge(...runWorkClaimProcesses('machine-routing', $team->id, $workers, [1, 1, 1], $database['connection'])))->toBe([]);
+        $victim = WorkItem::query()->whereNotNull('release_requested_at')->sole();
+        expect($victim->release_for_item_id)->toBe($opportunity->id)
+            ->and(DB::table('notifications')->count())->toBe(1);
+        runWorkClaimProcesses('preemption-timeout', $team->id, $workers, [1, 1, 1], $database['connection']);
+        expect($victim->fresh()->state)->toBe(WorkItemState::Queued)
+            ->and($victim->fresh()->fence)->toBe(5)
+            ->and($victim->fresh()->attempts)->toBe(1)
+            ->and($victim->transitions()->count())->toBe(1)
+            ->and(DB::table('notifications')->count())->toBe(1);
+        expect(resolve(WorkClaimService::class)->claim($team->id, (string) $user->id, $machine->id, ['builder'], ['php'], 1, $now->addSeconds(60), 300, ['builder' => 'codex'], true)[0]->id)->toBe($opportunity->id);
+    } finally {
+        cleanupWorkRaceDatabase($database);
+    }
+});
+
 test('conditional claim guard survives a real multiprocess race and the unsafe control duplicates', function (): void {
     $database = provisionWorkRaceDatabase();
     $capacities = [20, 21, 22, 23, 24, 25, 25, 25, 25, 25];

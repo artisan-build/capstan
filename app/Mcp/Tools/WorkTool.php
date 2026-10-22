@@ -11,6 +11,7 @@ use App\Mcp\ToolResponse;
 use App\Models\Spoke;
 use App\Models\Team;
 use App\Work\TeamWorkPolicy;
+use App\Work\WorkPriorityService;
 use App\Work\WorkReassignmentService;
 use App\Work\WorkRepresentation;
 use App\Work\WorkToolService;
@@ -67,6 +68,12 @@ abstract class WorkTool extends CapstanTool
                 'mode' => $schema->string()->enum([WorkReassignmentService::MODE_MOVE, WorkReassignmentService::MODE_ESCALATIONS])->required(),
                 'note' => $schema->string()->min(1)->max(2000),
             ],
+            'set_task_priority' => [
+                'task_id' => $schema->string()->required(),
+                'priority' => $schema->string()->enum(WorkPriority::class)->required(),
+                'confirmation_token' => $schema->string()->min(64)->max(64),
+                'reason' => $schema->string()->min(1)->max(2000),
+            ],
             default => ['task_id' => $schema->string()->required()],
         }];
     }
@@ -87,6 +94,18 @@ abstract class WorkTool extends CapstanTool
             'queue_item', 'cancel_item' => ['item' => $representation->schema($schema, 'item')],
             'steer' => ['steer' => $representation->schema($schema, 'steer')],
             'cancel_task' => ['task' => $representation->schema($schema, 'task')],
+            'set_task_priority' => [
+                'task_id' => $schema->string(), 'priority_changed' => $schema->boolean(),
+                'priority' => $schema->string()->enum(WorkPriority::class),
+                'confirmation_status' => $schema->string()->enum(['required', 'refused']),
+                'confirmation_token' => $schema->string(),
+                'preemptions' => $schema->array()->items($schema->object([
+                    'item_id' => $schema->string()->required(), 'role' => $schema->string()->required(),
+                    'machine_id' => $schema->integer()->required(), 'machine_name' => $schema->string()->required(),
+                    'owner_actor' => $schema->string()->required(),
+                    'milestone_kind' => $schema->string(), 'milestone_at' => $schema->string(),
+                ])->withoutAdditionalProperties()),
+            ],
             'reassign_task' => [
                 'task_id' => $schema->string(),
                 'old_owner' => $schema->string(),
@@ -119,7 +138,7 @@ abstract class WorkTool extends CapstanTool
         return $properties;
     }
 
-    public function handle(Request $request, OwnerSubjectResolver $owners, DurableWriteCoordinator $writes, WorkToolService $work, TeamWorkPolicy $policy, WorkReassignmentService $reassignments): Response|ResponseFactory
+    public function handle(Request $request, OwnerSubjectResolver $owners, DurableWriteCoordinator $writes, WorkToolService $work, TeamWorkPolicy $policy, WorkReassignmentService $reassignments, WorkPriorityService $priorities): Response|ResponseFactory
     {
         $schema = $this->schema(new JsonSchemaTypeFactory);
         $this->requireExactArguments($request, array_keys($schema));
@@ -149,7 +168,7 @@ abstract class WorkTool extends CapstanTool
                 'timebox_minutes' => ['sometimes', 'required', 'integer', 'min:1', 'max:1440'],
                 'required_capabilities' => ['sometimes', 'array', 'list', 'max:25'],
                 'depends_on' => ['sometimes', 'array', 'list', 'max:25'],
-                'priority' => ['sometimes', 'required', Rule::enum(WorkPriority::class)],
+                'priority' => [$this->name() === 'set_task_priority' ? 'required' : 'sometimes', 'required', Rule::enum(WorkPriority::class)],
                 'expires_at' => ['sometimes', 'required', 'date'],
                 'pr' => ['sometimes', 'required', 'array'],
                 'limit' => ['sometimes', 'required', 'integer', 'min:1', 'max:25'],
@@ -157,6 +176,8 @@ abstract class WorkTool extends CapstanTool
                 'to_actor' => ['required', 'string', 'regex:/\A[1-9][0-9]{0,18}\z/D'],
                 'mode' => ['required', 'string', Rule::in([WorkReassignmentService::MODE_MOVE, WorkReassignmentService::MODE_ESCALATIONS])],
                 'note' => ['sometimes', 'required', 'string', 'min:1', 'max:2000'],
+                'confirmation_token' => ['sometimes', 'required', 'string', 'regex:/\A[a-f0-9]{64}\z/D'],
+                'reason' => ['sometimes', 'required', 'string', 'min:1', 'max:2000'],
                 default => throw new \LogicException('Unknown Work input.'),
             };
         }
@@ -174,12 +195,20 @@ abstract class WorkTool extends CapstanTool
             }
         }
         $input = $request->validate($rules);
+        if ($this->name() === 'set_task_priority') {
+            if (isset($input['confirmation_token']) && (($input['priority'] ?? null) !== 'P0' || ! isset($input['reason']))) {
+                throw ValidationException::withMessages(['reason' => ['P0 confirmation requires a reason.']]);
+            }
+            if (isset($input['reason']) && (! isset($input['confirmation_token']) || preg_match('~https?://|signature=|bearer\s|(?:token|password|secret|api[_-]?key)\s*[:=]|\b(?:sk-|ghp_|github_pat_)~i', $input['reason']) === 1)) {
+                throw ValidationException::withMessages(['reason' => ['Use a short reason without URLs or credentials, only when confirming P0.']]);
+            }
+        }
         $owner = $owners->resolve();
         $user = User::query()->find($owner->actorId);
         $admitted = $user instanceof User && $user->status === 'active'
             && RolePolicy::canUseProduct($user->role)
             && ! OffboardedSubject::userIsOffboarded($owner->actorId);
-        if (! $admitted || ($this->name() !== 'reassign_task' && ! RolePolicy::canManageMembers($user->role))) {
+        if (! $admitted || (! in_array($this->name(), ['reassign_task', 'set_task_priority'], true) && ! RolePolicy::canManageMembers($user->role))) {
             throw new AuthorizationException($this->name() === 'reassign_task'
                 ? 'Only an admitted user may reassign Work.'
                 : 'Only an admitted Owner or Admin may manage Work.');
@@ -187,6 +216,13 @@ abstract class WorkTool extends CapstanTool
         $team = Team::query()->find($input['team_id']);
         if (! $team instanceof Team) {
             return Response::error('Work team is unavailable.');
+        }
+        if ($this->name() === 'set_task_priority') {
+            try {
+                $priorities->authorize($team->id, $input['task_id'], $owner->actorId);
+            } catch (ApiErrorException) {
+                return Response::error('Work task is unavailable.');
+            }
         }
         if ($this->name() === 'create_task') {
             if (isset($input['device_spoke_id']) && ! array_key_exists('failover', $input)) {
@@ -210,7 +246,10 @@ abstract class WorkTool extends CapstanTool
             $result = $writes->run(
                 owner: $owner, tool: $this->name(), idempotencyKey: $input['idempotency_key'],
                 intent: $input, targetType: 'work',
-                operation: function (string $targetId, string $claimId) use ($work, $policy, $reassignments, $input, $team, $owner, $user): array {
+                operation: function (string $targetId, string $claimId) use ($work, $policy, $reassignments, $priorities, $input, $team, $owner, $user): array {
+                    if ($this->name() === 'set_task_priority') {
+                        return $priorities->change($input, $owner->actorId, $claimId);
+                    }
                     if ($this->name() === 'set_team_work_policy') {
                         $changed = $policy->setPoolWork($team, $user, $input['pool_work'], TeamWorkPolicy::SURFACE_MCP);
 
@@ -251,6 +290,9 @@ abstract class WorkTool extends CapstanTool
             }
         }
         // Durable replay decodes JSON objects as arrays. Preserve the published empty-object payload shape.
+        if (($result['confirmation_status'] ?? null) === 'refused') {
+            $result['outcome'] = 'refused';
+        }
         if (isset($result['item']['latest_milestone']['payload'])) {
             $result['item']['latest_milestone']['payload'] = (object) $result['item']['latest_milestone']['payload'];
         }

@@ -239,23 +239,95 @@ test('root creation exposes ownership priority dependencies expiry and PR metada
         ->and(WorkTask::query()->count())->toBe($before);
 });
 
-test('one active P0 root per owner is enforced and cancellation releases the slot', function (): void {
+test('P0 creation is refused and priority confirmation enforces one active root until cancellation', function (): void {
     $user = capstanUser(['role' => 'owner']);
     $token = workMcpToken($user);
     $team = workMcpTeam();
-    $first = workMcpCreate($team, $token, ['priority' => 'P0', 'idempotency_key' => 'first-p0']);
-    expect($first['outcome'])->toBe('accepted');
+    expect(workMcpCreate($team, $token, ['priority' => 'P0', 'idempotency_key' => 'direct-p0']))
+        ->toBe(['outcome' => 'refused', 'reason' => 'p0_confirmation_required']);
+    $first = workMcpCreate($team, $token, ['idempotency_key' => 'first-p0']);
+    $second = workMcpCreate($team, $token, ['idempotency_key' => 'second-p0']);
+    $confirm = function (string $taskId, string $key) use ($team, $token): array {
+        $input = ['team_id' => $team->id, 'task_id' => $taskId, 'priority' => 'P0'];
+        $preview = workMcpResult('set_task_priority', [...$input, 'idempotency_key' => $key.'-preview'], $token);
 
-    $second = workMcpCreate($team, $token, ['priority' => 'P0', 'idempotency_key' => 'second-p0']);
-    expect($second)->toBe(['outcome' => 'refused', 'reason' => 'active_p0_exists']);
+        return workMcpResult('set_task_priority', [...$input, 'idempotency_key' => $key.'-confirm', 'confirmation_token' => $preview['confirmation_token'], 'reason' => 'Incident response'], $token);
+    };
+    expect($confirm($first['task']['id'], 'first')['outcome'])->toBe('accepted');
+    $secondRefusal = $confirm($second['task']['id'], 'second');
+    expect($secondRefusal)->toBe(['outcome' => 'refused', 'reason' => 'active_p0_exists']);
 
     workMcpResult('cancel_task', [
         'team_id' => $team->id,
         'task_id' => $first['task']['id'],
         'idempotency_key' => 'cancel-first-p0',
     ], $token);
-    expect(workMcpCreate($team, $token, ['priority' => 'P0', 'idempotency_key' => 'third-p0'])['outcome'])->toBe('accepted');
+    expect($confirm($second['task']['id'], 'third')['outcome'])->toBe('accepted');
 });
+
+test('human priority accepts owner Members and same team managers and durably replays one decision', function (string $role): void {
+    $owner = capstanUser(['role' => 'member']);
+    $caller = $role === 'member' ? $owner : capstanUser(['role' => $role]);
+    $team = Team::default();
+    $root = WorkTask::query()->create(['team_id' => $team->id, 'title' => 'Human priority', 'creator_actor' => (string) $owner->id, 'required_capabilities' => [], 'timebox_minutes' => 30]);
+    $child = WorkTask::query()->create(['team_id' => $team->id, 'title' => 'Child priority', 'creator_actor' => (string) $owner->id, 'parent_task_id' => $root->id, 'required_capabilities' => [], 'timebox_minutes' => 30]);
+    $token = workMcpToken($caller);
+    $input = ['team_id' => $team->id, 'task_id' => $root->id, 'priority' => 'P1', 'idempotency_key' => 'direct-human'];
+    expect(workMcpResult('set_task_priority', $input, $token)['priority_changed'])->toBeTrue()
+        ->and($child->fresh()->priority->value)->toBe('P1');
+    $input['priority'] = 'P0';
+    $input['idempotency_key'] = 'preview-human';
+    $preview = workMcpResult('set_task_priority', $input, $token);
+    expect($preview['confirmation_status'])->toBe('required')->and($preview['preemptions'])->toBe([]);
+    $input = [...$input, 'idempotency_key' => 'confirm-human', 'confirmation_token' => $preview['confirmation_token'], 'reason' => 'Incident response'];
+    expect(workMcpResult('set_task_priority', $input, $token)['priority_changed'])->toBeTrue();
+    $events = WorkOrchestrationEvent::query()->count();
+    expect(workMcpResult('set_task_priority', $input, $token)['outcome'])->toBe('already_accepted')
+        ->and(WorkOrchestrationDecision::query()->count())->toBe(1)
+        ->and(WorkOrchestrationEvent::query()->count())->toBe($events)
+        ->and($child->fresh()->priority->value)->toBe('P0');
+})->with(['member', 'admin', 'owner']);
+
+test('priority child and foreign task ids and non admitted callers never acquire write claims', function (string $case): void {
+    $owner = capstanUser(['role' => 'member']);
+    $caller = capstanUser(['role' => 'member']);
+    $team = Team::default();
+    $root = WorkTask::query()->create(['team_id' => $team->id, 'title' => 'Opaque root', 'creator_actor' => (string) $owner->id, 'required_capabilities' => [], 'timebox_minutes' => 30]);
+    $taskId = $root->id;
+    if ($case === 'child') {
+        $caller = $owner;
+        $taskId = WorkTask::query()->create(['team_id' => $team->id, 'title' => 'Opaque child', 'creator_actor' => (string) $owner->id, 'parent_task_id' => $root->id, 'required_capabilities' => [], 'timebox_minutes' => 30])->id;
+    } elseif ($case === 'foreign') {
+        $caller->forceFill(['role' => 'admin'])->save();
+        $team = workMcpTeam();
+    } elseif ($case === 'inactive') {
+        $caller = $owner;
+        $caller->forceFill(['status' => 'inactive'])->save();
+    } elseif ($case === 'offboarded') {
+        $caller = $owner;
+        OffboardedSubject::query()->create(['subject_type' => SubjectType::UserPrincipal, 'subject_ref' => 'capstan-user:'.$caller->id, 'user_id' => (string) $caller->id, 'offboarded_at' => now()]);
+    } elseif ($case === 'nonadmitted') {
+        $caller = $owner;
+        $caller->forceFill(['role' => 'pending'])->save();
+    }
+    $before = DB::table('mcp_write_claims')->count();
+    workMcpCall('set_task_priority', ['team_id' => $team->id, 'task_id' => $taskId, 'priority' => 'P1', 'idempotency_key' => 'opaque'], workMcpToken($caller));
+    expect(DB::table('mcp_write_claims')->count())->toBe($before)
+        ->and($root->fresh()->priority->value)->toBe('P2');
+})->with(['child', 'foreign', 'inactive', 'offboarded', 'nonadmitted', 'other-member']);
+
+test('priority schema refuses missing priority extra fields wrong types and unsafe confirmation reasons', function (array $invalid): void {
+    $owner = capstanUser();
+    $team = Team::default();
+    $root = WorkTask::query()->create(['team_id' => $team->id, 'title' => 'Validation', 'creator_actor' => (string) $owner->id, 'required_capabilities' => [], 'timebox_minutes' => 30]);
+    $input = ['team_id' => $team->id, 'task_id' => $root->id, 'idempotency_key' => 'invalid'];
+    workMcpCall('set_task_priority', [...$input, ...$invalid], workMcpToken($owner));
+    expect(DB::table('mcp_write_claims')->count())->toBe(0);
+})->with([
+    [[]], [['priority' => 0]], [['priority' => 'P0', 'unexpected' => true]],
+    [['priority' => 'P0', 'confirmation_token' => str_repeat('a', 64)]],
+    [['priority' => 'P0', 'confirmation_token' => str_repeat('a', 64), 'reason' => 'https://example.test/?signature=secret']],
+]);
 
 test('device pins require explicit failover and unpinned work follows team defaults', function (): void {
     $user = capstanUser(['role' => 'admin']);

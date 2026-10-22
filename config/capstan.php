@@ -29,6 +29,7 @@ return [
     ],
 
     'work' => [
+        'preemption_grace_seconds' => 60,
         'lease_seconds' => env('CAPSTAN_WORK_LEASE_SECONDS', 300),
         'link_grace_seconds' => 60,
         'steer_recent_seconds' => 86400,

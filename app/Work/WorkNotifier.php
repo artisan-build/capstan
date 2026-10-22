@@ -16,6 +16,8 @@ interface WorkNotifier
 
     public function stalled(WorkItem $item): void;
 
+    public function preempted(WorkItem $item): void;
+
     public function missedHeartbeat(Spoke $spoke): void;
 
     public function waitingOnHost(WorkItem $item): void;

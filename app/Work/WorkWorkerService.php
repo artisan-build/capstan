@@ -76,6 +76,7 @@ final class WorkWorkerService
                 'task' => ['id' => $item->work_task_id, 'title' => $item->workTask->title],
                 'item' => ['id' => $item->id, 'role' => $item->role, 'fence' => $item->fence],
                 'revision' => $revision === null ? null : ['id' => $revision->id, 'sequence' => $revision->sequence, 'content' => $revision->content],
+                ...WorkPreemptionService::representation($item),
             ], fn ($value): bool => $value !== null);
         }, $afterIdentified);
     }
@@ -106,6 +107,7 @@ final class WorkWorkerService
             }
             if ($target !== null) {
                 $item->state = $target;
+                $item->fill(WorkPreemptionService::cleared());
                 if ($target === WorkItemState::Queued) {
                     $item->attempts++;
                     $item->claimant_actor = null;

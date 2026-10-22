@@ -42,6 +42,7 @@ final class CapstanServer extends Server
         Tools\SteerTool::class,
         Tools\CancelTaskTool::class,
         Tools\ReassignTaskTool::class,
+        Tools\SetTaskPriorityTool::class,
         Tools\GetTeamWorkPolicyTool::class,
         Tools\SetTeamWorkPolicyTool::class,
         Tools\TakeSeatTool::class,

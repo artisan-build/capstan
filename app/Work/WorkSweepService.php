@@ -25,6 +25,7 @@ final readonly class WorkSweepService
 
     public function liveness(CarbonImmutable $now, ?Closure $afterIdentified = null): void
     {
+        resolve(WorkPreemptionService::class)->sweep($now);
         foreach ($this->workers->recoveryQuery()->with('workTask')->get() as $item) {
             $afterIdentified?->__invoke($item);
             DB::transaction(function () use ($item, $now): void {
@@ -51,6 +52,7 @@ final readonly class WorkSweepService
                 if ($item->lease_until !== null && $item->lease_until->lte($now)) {
                     $updated = $this->sameClaim($item)->where('lease_until', '<=', $now)->update([
                         'state' => 'queued', 'attempts' => DB::raw('attempts + 1'),
+                        ...WorkPreemptionService::cleared(),
                         'claimant_spoke_id' => null, 'claimant_actor' => null,
                         'claimed_at' => null, 'lease_until' => null, 'stalled_at' => null,
                         'updated_at' => $now,
