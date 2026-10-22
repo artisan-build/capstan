@@ -47,7 +47,7 @@ beforeEach(function (): void {
     Team::default()->update(['pool_work' => true]);
 });
 
-test('new children inherit root ownership while explicit routing remains independent of pooling', function (): void {
+test('non-pooled children stay pinned to the root owner while pooled children allow explicit routing', function (): void {
     $team = Team::default();
     $team->update(['pool_work' => false]);
     $parentOwner = capstanUser();
@@ -71,27 +71,36 @@ test('new children inherit root ownership while explicit routing remains indepen
         'title' => 'Owner child',
         'brief' => 'Owned brief',
     ], CarbonImmutable::now());
-    expect(WorkTask::query()->findOrFail($owned['id'])->user_actor_address)->toBeNull()
+    expect(WorkTask::query()->findOrFail($owned['id'])->user_actor_address)->toBe((string) $parentOwner->id)
         ->and(WorkTask::query()->findOrFail($owned['id'])->owner_actor)->toBe((string) $parentOwner->id);
 
     $differentActor = capstanUser();
-    $explicitlyRedirected = $surface->act($context, 'create_child', [
+    $beforeRefusal = WorkTask::query()->count();
+    expect(fn () => $surface->act($context, 'create_child', [
         'under_task_id' => $parent->id,
         'title' => 'Caller-directed child',
         'brief' => 'Caller-directed brief',
         'user_actor_address' => (string) $differentActor->id,
+    ], CarbonImmutable::now()))->toThrow(ApiErrorException::class, 'use reassign_task');
+    expect(WorkTask::query()->count())->toBe($beforeRefusal);
+
+    $explicitOwner = $surface->act($context, 'create_child', [
+        'under_task_id' => $parent->id,
+        'title' => 'Explicit owner child',
+        'brief' => 'Explicit owner brief',
+        'user_actor_address' => (string) $parentOwner->id,
     ], CarbonImmutable::now());
-    expect(WorkTask::query()->findOrFail($explicitlyRedirected['id'])->user_actor_address)->toBe((string) $differentActor->id)
-        ->and(WorkTask::query()->findOrFail($explicitlyRedirected['id'])->owner_actor)->toBe((string) $parentOwner->id);
+    expect(WorkTask::query()->findOrFail($explicitOwner['id'])->user_actor_address)->toBe((string) $parentOwner->id);
 
     $team->update(['pool_work' => true]);
     $pooled = $surface->act($context, 'create_child', [
         'under_task_id' => $parent->id,
         'title' => 'Pooled child',
         'brief' => 'Pooled brief',
+        'user_actor_address' => (string) $differentActor->id,
     ], CarbonImmutable::now());
-    expect(WorkTask::query()->findOrFail($pooled['id'])->user_actor_address)->toBeNull()
-        ->and(WorkTask::query()->findOrFail($owned['id'])->user_actor_address)->toBeNull();
+    expect(WorkTask::query()->findOrFail($pooled['id'])->user_actor_address)->toBe((string) $differentActor->id)
+        ->and(WorkTask::query()->findOrFail($owned['id'])->user_actor_address)->toBe((string) $parentOwner->id);
 });
 
 test('an orchestrator can lower root priority but cannot raise it', function (): void {

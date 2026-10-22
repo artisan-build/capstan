@@ -29,10 +29,11 @@ work off when the task is created routes it to `owner_actor`; a task created whi
 to an eligible team machine. The creator is recorded separately and does not control routing after another
 owner has been assigned.
 
-Pooled work changes the no-override route for one team. In both policy states, a caller who passes
-`user_actor_address` gets exactly that address, so one task can go to a service account without changing
-the team setting. Orchestrator-created descendants inherit the root task's owner and priority, including
-grandchildren. Changing the immediate child's input does not create a second ownership boundary.
+Pooled work changes the no-override route for one team. In a pooled team, a caller who passes
+`user_actor_address` gets exactly that address. In a non-pooled team, an orchestrator-created child is pinned
+to the root owner; moving it to another person requires `reassign_task`. Descendants inherit the root task's
+owner and priority, including grandchildren. Changing the immediate child's input does not create a second
+ownership boundary.
 
 Existing tasks are not affected. A task created while pooled work was off stays addressed to its creator
 after it is turned on, and only tasks created after the change follow the new setting.

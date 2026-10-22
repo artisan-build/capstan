@@ -39,6 +39,13 @@ final readonly class WorkOrchestrationCapability
     {
         return $this->authorised($context, $now, function (WorkTask $parent) use ($underTaskId, $attributes, $brief, $context): WorkTask {
             $under = $this->target($parent, $underTaskId, allowParent: true);
+            $team = $parent->team()->lockForUpdate()->firstOrFail();
+            if (! $team->pool_work) {
+                if (isset($attributes['user_actor_address']) && $attributes['user_actor_address'] !== $parent->owner_actor) {
+                    throw $this->forbidden('A non-pooled child must stay with the root owner; use reassign_task to move work between people.');
+                }
+                $attributes['user_actor_address'] = $parent->owner_actor;
+            }
             if (isset($attributes['device_spoke_id']) && ! Spoke::query()->workEligible()
                 ->whereKey($attributes['device_spoke_id'])->lockForUpdate()->exists()) {
                 throw $this->forbidden('Work host is unavailable.');
