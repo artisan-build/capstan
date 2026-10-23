@@ -312,7 +312,9 @@ remain unique and continue across episodes so the earlier history is not replace
 
 The extended claim request accepts `held_items`. Each entry has an item id and fence and may report a directive
 id with a `succeeded` or `failed` outcome. A successful respawn also reports its new nonce and session reference.
-The response always has `items` and `directives`; an old drain can ignore the added key.
+The response always has `spoke_id`, `items`, and `directives`. `spoke_id` is the machine identity resolved
+from the bound credential, not a caller-supplied value. A Solo launcher uses it in the authoritative session
+reference instead of guessing the machine identity. An old drain can ignore the added key.
 
 Leaf and orchestrator concurrency are separate when `orchestrator_capacity` is present. `capacity` admits only
 ordinary leaf roles, while `orchestrator_capacity` admits only the reserved orchestrator role. A full leaf pool

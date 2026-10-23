@@ -25,6 +25,7 @@ final readonly class WorkDrainService
         private WorkItemStateService $states,
         private MachineWorkRuntime $runtime,
         private WorkDirectiveService $directives,
+        private WorkSeatService $seats,
     ) {}
 
     /**
@@ -55,7 +56,7 @@ final readonly class WorkDrainService
      * @param  list<string>  $capabilities
      * @param  array<string, string>  $roleProviders
      * @param  list<array<string, mixed>>  $heldItems
-     * @return array{items: list<WorkItem>, directives: list<array<string, mixed>>}
+     * @return array{spoke_id: int|null, items: list<WorkItem>, directives: list<array<string, mixed>>}
      */
     public function tick(
         int $teamId,
@@ -117,6 +118,7 @@ final readonly class WorkDrainService
         });
 
         return [
+            'spoke_id' => $tick['spoke_id'],
             'items' => $tick['items'],
             'directives' => $tick['spoke_id'] === null
                 ? []
@@ -163,6 +165,7 @@ final readonly class WorkDrainService
                         'handed_off_session_ref' => $sessionRef,
                         'launch_nonce' => $launchNonce,
                     ])->save();
+                    $this->seats->adoptVerifiedSession($transitioned, $now);
                 }
 
                 $this->spokes->heartbeat($spoke, $now);

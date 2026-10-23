@@ -54,6 +54,35 @@ final readonly class WorkSeatService
         }, 5);
     }
 
+    public function adoptVerifiedSession(WorkItem $item, CarbonImmutable $now): bool
+    {
+        $current = WorkItem::query()
+            ->whereKey($item->id)
+            ->where('role', WorkItem::ROLE_ORCHESTRATOR)
+            ->where('fence', $item->fence)
+            ->whereIn('state', [WorkItemState::Claimed->value, WorkItemState::Delivered->value, WorkItemState::Routed->value])
+            ->whereNotNull('first_fetched_at')
+            ->whereNotNull('handed_off_at')
+            ->whereNotNull('handed_off_session_ref')
+            ->whereNotNull('claimant_actor')
+            ->whereNotNull('claimant_spoke_id')
+            ->whereNotNull('seat_fence')
+            ->first();
+        if (! $current instanceof WorkItem) {
+            return false;
+        }
+
+        return WorkOrchestratorSeat::query()
+            ->where('work_task_id', $current->work_task_id)
+            ->where('active_item_id', $current->id)
+            ->where('fence', $current->seat_fence)
+            ->where('holder_actor', $current->claimant_actor)
+            ->where('holder_spoke_id', $current->claimant_spoke_id)
+            ->whereNull('stopped_at')
+            ->where('lease_until', '>', $now)
+            ->update(['session_ref' => $current->handed_off_session_ref]) === 1;
+    }
+
     public function release(WorkTask $parent, string $actor, int $spoke, int $fence, CarbonImmutable $now): WorkOrchestratorSeat
     {
         return DB::transaction(function () use ($parent, $actor, $spoke, $fence, $now): WorkOrchestratorSeat {

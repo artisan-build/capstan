@@ -14,7 +14,7 @@ final readonly class WorkDirectiveService
 {
     private const array REPAIRS = ['send_enter', 'resend_pointer', 'respawn', 'respawn'];
 
-    public function __construct(private WorkWorkerLinks $links) {}
+    public function __construct(private WorkWorkerLinks $links, private WorkSeatService $seats) {}
 
     /**
      * @param  list<array<string, mixed>>  $heldItems
@@ -63,32 +63,48 @@ final readonly class WorkDirectiveService
                 ->where('work_item_id', $locked->id)
                 ->where('claimant_spoke_id', $locked->claimant_spoke_id)
                 ->where('fence', $locked->fence)
-                ->where('status', 'pending')
                 ->lockForUpdate()
                 ->first();
             if (! $directive instanceof WorkDirective) {
                 return;
             }
 
-            $outcome = ['result' => $held['directive_outcome']];
-            $directive->fill([
-                'status' => $held['directive_outcome'],
-                'outcome' => $outcome,
-                'completed_at' => $now,
-            ])->save();
+            $directiveResult = $directive->outcome['result'] ?? null;
+            $settledByFetch = $directive->status === 'succeeded'
+                && in_array($directiveResult, ['succeeded', 'resolved_by_fetch'], true)
+                && (($directive->outcome['receipt'] ?? false) === true || $directiveResult === 'resolved_by_fetch');
+            if ($directive->status !== 'pending'
+                && ! ($settledByFetch && $directive->kind === 'respawn' && $held['directive_outcome'] === 'succeeded')) {
+                return;
+            }
+
+            if ($directive->status === 'pending') {
+                $directive->fill([
+                    'status' => $held['directive_outcome'],
+                    'outcome' => ['result' => $held['directive_outcome']],
+                    'completed_at' => $now,
+                ])->save();
+            }
 
             if ($directive->kind === 'respawn' && $held['directive_outcome'] === 'succeeded'
                 && isset($held['launch_nonce'], $held['session_ref'])
                 && hash_equals((string) ($directive->payload['launch_nonce'] ?? ''), $held['launch_nonce'])) {
-                WorkItem::query()->whereKey($locked->id)->where('fence', $locked->fence)->update([
-                    'launch_nonce' => $held['launch_nonce'],
-                    'handed_off_session_ref' => $held['session_ref'],
-                    'handed_off_at' => $now,
-                    'first_fetched_at' => null,
-                    'agent_model' => null,
-                    'fetched_brief_revision_id' => null,
-                    'fetched_page_version_id' => null,
-                ]);
+                $accepted = WorkItem::query()->whereKey($locked->id)
+                    ->where('fence', $locked->fence)
+                    ->where('launch_nonce', $held['launch_nonce'])
+                    ->whereNull('handed_off_session_ref')
+                    ->update([
+                        'handed_off_session_ref' => $held['session_ref'],
+                        'handed_off_at' => $now,
+                    ]);
+                $current = $locked->refresh();
+                $idempotent = $current->launch_nonce !== null
+                    && hash_equals($current->launch_nonce, $held['launch_nonce'])
+                    && $current->handed_off_session_ref !== null
+                    && hash_equals($current->handed_off_session_ref, $held['session_ref']);
+                if ($accepted === 1 || $idempotent) {
+                    $this->seats->adoptVerifiedSession($current, $now);
+                }
             }
         });
     }
