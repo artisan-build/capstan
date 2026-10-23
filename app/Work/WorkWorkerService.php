@@ -44,12 +44,17 @@ final readonly class WorkWorkerService
      * @param  Closure(WorkItem): T  $operation
      * @return T
      */
-    public function guarded(string $id, int $fence, Closure $operation, ?Closure $afterIdentified = null): mixed
+    public function guarded(string $id, int $fence, Closure $operation, ?Closure $afterIdentified = null, ?string $nonce = null): mixed
     {
-        return DB::transaction(function () use ($id, $fence, $operation, $afterIdentified): mixed {
+        return DB::transaction(function () use ($id, $fence, $operation, $afterIdentified, $nonce): mixed {
             $item = WorkItem::query()->with('workTask')->find($id);
             abort_if($item === null, 409, 'claim lost');
             abort_if($item->state === WorkItemState::Cancelled || $item->workTask->cancelled_at !== null, 410, 'cancelled');
+            abort_unless(in_array($item->state, [WorkItemState::Claimed, WorkItemState::Delivered, WorkItemState::Routed], true)
+                && $item->fence === $fence && $item->claimant_spoke_id !== null && $item->claimant_actor !== null, 409, 'claim lost');
+            if ($nonce !== null) {
+                abort_unless($item->launch_nonce !== null && hash_equals($item->launch_nonce, $nonce), 409, 'launch nonce mismatch');
+            }
             $spokeLocked = Spoke::query()->workEligible()
                 ->whereKey($item->claimant_spoke_id)
                 ->where('actor_id', $item->claimant_actor)
@@ -60,6 +65,7 @@ final readonly class WorkWorkerService
             $updated = $this->activeQuery()->whereKey($id)->where('fence', $fence)
                 ->where('claimant_spoke_id', $item->claimant_spoke_id)
                 ->where('claimant_actor', $item->claimant_actor)
+                ->when($nonce !== null, fn (Builder $query) => $query->where('launch_nonce', $nonce))
                 ->update(['fetched_brief_revision_id' => DB::raw('fetched_brief_revision_id')]);
             abort_unless($updated === 1, 409, 'claim lost');
 
@@ -70,8 +76,7 @@ final readonly class WorkWorkerService
     /** @return array<string, mixed> */
     public function brief(string $id, int $fence, string $nonce, ?string $model = null, ?Closure $afterIdentified = null): array
     {
-        return $this->guarded($id, $fence, function (WorkItem $item) use ($nonce, $model): array {
-            abort_unless($item->launch_nonce !== null && hash_equals($item->launch_nonce, $nonce), 409, 'launch nonce mismatch');
+        return $this->guarded($id, $fence, function (WorkItem $item) use ($model): array {
             $revision = $item->workTask->briefRevisions()->reorder()->orderByDesc('sequence')->first();
             $receipt = [
                 'fetched_brief_revision_id' => $revision?->id,
@@ -103,11 +108,11 @@ final readonly class WorkWorkerService
                 'revision' => $revision === null ? null : ['id' => $revision->id, 'sequence' => $revision->sequence, 'content' => $revision->content],
                 ...WorkPreemptionService::representation($item),
             ], fn ($value): bool => $value !== null);
-        }, $afterIdentified);
+        }, $afterIdentified, $nonce);
     }
 
     /** @param array{url?: string, summary?: string, pr?: array{repo: string, number: int, url: string}} $payload */
-    public function milestone(string $id, int $fence, WorkMilestoneKind $kind, array $payload, ?Closure $afterIdentified = null): WorkMilestone
+    public function milestone(string $id, int $fence, WorkMilestoneKind $kind, array $payload, ?Closure $afterIdentified = null, ?string $nonce = null): WorkMilestone
     {
         return $this->guarded($id, $fence, function (WorkItem $item) use ($kind, $payload): WorkMilestone {
             if ($kind === WorkMilestoneKind::PullRequestOpened) {
@@ -170,25 +175,28 @@ final readonly class WorkWorkerService
             resolve(WorkEventProjector::class)->blocked($item, $milestone);
 
             return $milestone;
-        }, $afterIdentified);
+        }, $afterIdentified, $nonce);
     }
 
-    public function evidence(string $id, int $fence, string $filename, string $bytes): WorkEvidence
+    public function evidence(string $id, int $fence, string $filename, string $bytes, ?string $nonce = null): WorkEvidence
     {
         $metadata = $this->evidence->inspect($filename, $bytes);
-        $actor = $this->guarded($id, $fence, fn (WorkItem $item): string => (string) $item->claimant_actor);
-        $this->evidence->throttle('actor:'.$actor);
         $attempts = new WorkEvidenceAttemptLog;
 
         return $attempts->settle(fn (): WorkEvidence => $this->guarded(
             $id,
             $fence,
-            fn (WorkItem $item): WorkEvidence => $this->evidence->store($item, $bytes, $metadata, $attempts),
+            function (WorkItem $item) use ($bytes, $metadata, $attempts): WorkEvidence {
+                $this->evidence->throttle('actor:'.(string) $item->claimant_actor);
+
+                return $this->evidence->store($item, $bytes, $metadata, $attempts);
+            },
+            nonce: $nonce,
         ));
     }
 
     /** @return list<array<string, mixed>> */
-    public function steers(string $id, int $fence): array
+    public function steers(string $id, int $fence, ?string $nonce = null): array
     {
         return $this->guarded($id, $fence, function (WorkItem $item): array {
             $now = CarbonImmutable::now();
@@ -203,6 +211,6 @@ final readonly class WorkWorkerService
                 'created_at' => $steer->created_at->toISOString(),
                 'read_at' => ($steer->fresh()->read_at)->toISOString(),
             ], fn ($value): bool => $value !== null))->all());
-        });
+        }, nonce: $nonce);
     }
 }

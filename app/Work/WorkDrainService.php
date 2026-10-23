@@ -81,6 +81,7 @@ final readonly class WorkDrainService
                 $capacity,
                 $reportedClaimedCount,
                 $now,
+                $orchestratorCapacity === null,
             );
             if ($presence === null) {
                 return ['items' => [], 'spoke_id' => null];
@@ -90,6 +91,7 @@ final readonly class WorkDrainService
                 $items = $this->claims->claim(
                     $teamId, $actorId, $spoke->id, $roles, $capabilities, $capacity, $now,
                     $this->leaseSeconds(), $roleProviders, true,
+                    combinedCapacity: true,
                 );
             } else {
                 $leafRoles = array_values(array_diff($roles, [WorkItem::ROLE_ORCHESTRATOR, WorkItem::ROLE_HUMAN]));
@@ -108,7 +110,7 @@ final readonly class WorkDrainService
                     }
                 }
             }
-            $this->runtime->refreshCount($presence);
+            $this->runtime->refreshCount($presence, $orchestratorCapacity === null);
             $this->spokes->heartbeat($spoke, $now);
 
             return ['items' => $items, 'spoke_id' => $spoke->id];

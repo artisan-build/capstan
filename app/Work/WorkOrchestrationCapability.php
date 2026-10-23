@@ -381,6 +381,10 @@ final readonly class WorkOrchestrationCapability
                 } catch (\Throwable) {
                     throw $this->forbidden('Orchestrator turn authority was lost.');
                 }
+                if ($context->launchNonce !== null
+                    && ($turn->launch_nonce === null || ! hash_equals($turn->launch_nonce, $context->launchNonce))) {
+                    throw $this->forbidden('Orchestrator turn authority was lost.');
+                }
                 if ($turn->work_task_id !== $parent->id || $seat->holder_actor !== $context->actorId
                     || $seat->holder_spoke_id !== $context->spokeId) {
                     throw $this->forbidden();

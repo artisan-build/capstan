@@ -39,7 +39,7 @@ return new class extends Migration
             $table->timestamp('completed_at')->nullable();
             $table->timestamps();
 
-            $table->unique(['work_item_id', 'fence', 'sequence']);
+            $table->unique(['work_item_id', 'fence', 'reason', 'sequence']);
             $table->index(['claimant_spoke_id', 'status']);
         });
     }

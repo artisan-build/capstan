@@ -280,17 +280,18 @@ values and `handed_off_at` without adding another item state, so the existing
 `delivered` without launch metadata.
 
 The first brief request with the claim's nonce records `first_fetched_at`, the exact brief revision and Page
-version served, and the optional agent-reported `model` query value. A signed request carrying another nonce
-fails without creating a receipt. Page-backed tasks serve the immutable Work brief copied from the Page
-version selected at creation.
+version served, and the optional agent-reported `model` query value. Every signed worker and orchestrator
+request must carry the claim's current nonce. A respawn rotates that nonce, so links held by the replaced
+session fail without reading or changing Work data. Page-backed tasks serve the immutable Work brief copied
+from the Page version selected at creation.
 
 The ordinary receipt deadline is 180 seconds. Orchestrator turns use a 60-second deadline. A machine may
 override these values through application configuration. After a missed deadline, the next machine tick
-returns one pending directive in this order: `send_enter`, `resend_pointer`, then `respawn`. The respawn
-directive carries a new nonce and fresh signed links. A pending directive is replayed unchanged until its
-outcome is recorded or a matching brief fetch proves it succeeded. The next repair cannot be issued until
-another deadline has elapsed. Exhausting the sequence creates one owner-addressed escalation for that item,
-fence, and failure reason.
+returns one pending directive in this order: `send_enter`, `resend_pointer`, first `respawn`, then second
+`respawn`. Each respawn carries a distinct new nonce and fresh signed links. A pending directive is replayed
+unchanged until its outcome is recorded or a matching brief fetch proves it succeeded. The next repair cannot
+be issued until another deadline has elapsed. After the second respawn completes and its deadline elapses,
+exhausting the sequence creates one owner-addressed escalation for that item, fence, and failure reason.
 
 Running items marked stalled use the same directive records and outcome rules. Directives are durable rows,
 separate from item transitions. Their item, fence, machine, sequence, reason, payload, status, timestamps, and

@@ -12,7 +12,7 @@ use Illuminate\Support\Str;
 
 final readonly class WorkDirectiveService
 {
-    private const array REPAIRS = ['send_enter', 'resend_pointer', 'respawn'];
+    private const array REPAIRS = ['send_enter', 'resend_pointer', 'respawn', 'respawn'];
 
     public function __construct(private WorkWorkerLinks $links) {}
 

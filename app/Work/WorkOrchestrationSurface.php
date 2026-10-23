@@ -22,7 +22,7 @@ final readonly class WorkOrchestrationSurface
 {
     public function __construct(private WorkOrchestrationCapability $capability) {}
 
-    public function claimed(string $itemId, int $itemFence): WorkOrchestrationContext
+    public function claimed(string $itemId, int $itemFence, ?string $launchNonce = null): WorkOrchestrationContext
     {
         $item = WorkItem::query()->whereKey($itemId)->where('role', WorkItem::ROLE_ORCHESTRATOR)->first();
         if (! $item instanceof WorkItem || $item->claimant_actor === null || $item->claimant_spoke_id === null
@@ -38,6 +38,7 @@ final readonly class WorkOrchestrationSurface
             null,
             $item->id,
             $itemFence,
+            $launchNonce,
         );
     }
 

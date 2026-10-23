@@ -105,6 +105,7 @@ final readonly class WorkClaimService
         ?Closure $afterCandidates = null,
         ?Closure $afterDependencyGate = null,
         bool $ignoreCapacityCeiling = false,
+        bool $combinedCapacity = false,
     ): array {
         if (! $this->activeSpokeExists($actorId, $spokeId, $teamId, $roles, $capabilities, $roleProviders, $now, $requireMachineProfile)) {
             return [];
@@ -132,6 +133,7 @@ final readonly class WorkClaimService
                 $roleProviders,
                 $requireMachineProfile,
                 $ignoreCapacityCeiling,
+                combinedCapacity: $combinedCapacity,
             );
 
             if ($candidates === []) {
@@ -157,6 +159,7 @@ final readonly class WorkClaimService
                     $requireMachineProfile,
                     $afterDependencyGate,
                     ignoreCapacityCeiling: $ignoreCapacityCeiling,
+                    combinedCapacity: $combinedCapacity,
                 );
                 $afterDependencyGate = null;
 
@@ -171,7 +174,7 @@ final readonly class WorkClaimService
             }
 
             if ($won === 0 && (! $this->activeSpokeExists($actorId, $spokeId, $teamId, $roles, $capabilities, $roleProviders, $now, $requireMachineProfile)
-                || $this->candidates($teamId, $actorId, $spokeId, $roles, $capabilities, 1, $now, $roleProviders, $requireMachineProfile, $ignoreCapacityCeiling) === [])) {
+                || $this->candidates($teamId, $actorId, $spokeId, $roles, $capabilities, 1, $now, $roleProviders, $requireMachineProfile, $ignoreCapacityCeiling, combinedCapacity: $combinedCapacity) === [])) {
                 break;
             }
         }
@@ -204,15 +207,16 @@ final readonly class WorkClaimService
         ?array $taskIds = null,
         bool $ordinaryOnly = false,
         bool $arbitrateMachine = false,
+        bool $combinedCapacity = false,
     ): array {
         if ($requireMachineProfile) {
             $setting = $this->runtime->eligibleSetting($teamId, $actorId, $spokeId, $roles, $capabilities, $roleProviders, $now);
             if (! $setting instanceof MachineTeamWorkSetting
-                || (! $ignoreCeiling && $this->runtime->authoritativeClaimedCount($spokeId) >= $setting->concurrency_ceiling)) {
+                || (! $ignoreCeiling && $this->runtime->authoritativeClaimedCount($spokeId, $combinedCapacity) >= $setting->concurrency_ceiling)) {
                 return [];
             }
             if (! $ignoreCeiling) {
-                $wanted = min($wanted, $setting->concurrency_ceiling - $this->runtime->authoritativeClaimedCount($spokeId));
+                $wanted = min($wanted, $setting->concurrency_ceiling - $this->runtime->authoritativeClaimedCount($spokeId, $combinedCapacity));
             }
         }
         $eligible = [];
@@ -364,12 +368,13 @@ final readonly class WorkClaimService
         ?Closure $afterDependencyGate = null,
         bool $preemptOnly = false,
         bool $ignoreCapacityCeiling = false,
+        bool $combinedCapacity = false,
     ): ?WorkItem {
         $attempt = 0;
 
         beginning:
         try {
-            return DB::transaction(function () use ($candidate, $teamId, $actorId, $spokeId, $now, $leaseSeconds, $roles, $capabilities, $roleProviders, $requireMachineProfile, $afterDependencyGate, $preemptOnly, $ignoreCapacityCeiling): ?WorkItem {
+            return DB::transaction(function () use ($candidate, $teamId, $actorId, $spokeId, $now, $leaseSeconds, $roles, $capabilities, $roleProviders, $requireMachineProfile, $afterDependencyGate, $preemptOnly, $ignoreCapacityCeiling, $combinedCapacity): ?WorkItem {
                 if (! Spoke::query()->workEligible()->whereKey($spokeId)->where('actor_id', $actorId)->lockForUpdate()->exists()) {
                     return null;
                 }
@@ -405,7 +410,7 @@ final readonly class WorkClaimService
                         ))) {
                         return null;
                     }
-                    if (! $ignoreCapacityCeiling && $this->runtime->authoritativeClaimedCount($spokeId) >= $setting->concurrency_ceiling) {
+                    if (! $ignoreCapacityCeiling && $this->runtime->authoritativeClaimedCount($spokeId, $combinedCapacity) >= $setting->concurrency_ceiling) {
                         if (($task->user_actor_address !== null && $task->user_actor_address !== $actorId)
                             || ($task->user_actor_address === null && ! $task->routing_pool_work && $task->owner_actor !== $actorId)
                             || ($task->device_spoke_id !== null && $task->device_spoke_id !== $spokeId)

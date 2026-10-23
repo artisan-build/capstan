@@ -18,7 +18,9 @@ use App\Work\WorkSweepService;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Date;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
 
@@ -224,15 +226,105 @@ test('missed receipts replay one pending directive advance in order and escalate
     Date::setTestNow(now()->addSeconds(181));
     $third = $poll($held)->assertJsonPath('directives.0.kind', 'respawn');
     $thirdId = $third->json('directives.0.id');
-    expect($third->json('directives.0.payload.launch_nonce'))->toBe($item->fresh()->launch_nonce)
+    $firstRespawnNonce = $third->json('directives.0.payload.launch_nonce');
+    expect($firstRespawnNonce)->toBe($item->fresh()->launch_nonce)
         ->and($third->json('directives.0.links.brief'))->toBeString();
     expect($poll([...$held, 'directive_id' => $thirdId, 'directive_outcome' => 'failed'])->json('directives'))->toBe([]);
 
     Date::setTestNow(now()->addSeconds(181));
+    $fourth = $poll($held)->assertJsonPath('directives.0.kind', 'respawn');
+    $fourthId = $fourth->json('directives.0.id');
+    $secondRespawnNonce = $fourth->json('directives.0.payload.launch_nonce');
+    expect($secondRespawnNonce)->not->toBe($firstRespawnNonce)
+        ->and($secondRespawnNonce)->toBe($item->fresh()->launch_nonce)
+        ->and(WorkEscalation::query()->count())->toBe(0);
+    expect($poll([...$held, 'directive_id' => $fourthId, 'directive_outcome' => 'failed'])->json('directives'))->toBe([])
+        ->and(WorkEscalation::query()->count())->toBe(0);
+
+    Date::setTestNow(now()->addSeconds(179));
+    expect($poll($held)->json('directives'))->toBe([])
+        ->and(WorkEscalation::query()->count())->toBe(0);
+    Date::setTestNow(now()->addSecond());
     expect($poll($held)->json('directives'))->toBe([]);
     expect($poll($held)->json('directives'))->toBe([]);
-    expect(WorkDirective::query()->pluck('kind')->all())->toBe(['send_enter', 'resend_pointer', 'respawn'])
+    expect(WorkDirective::query()->pluck('kind')->all())->toBe(['send_enter', 'resend_pointer', 'respawn', 'respawn'])
         ->and(WorkEscalation::query()->where('request_key', 'directive-exhausted:'.$item->id.':1:receipt')->count())->toBe(1);
+});
+
+test('respawn nonce rotation revokes every old signed capability while fresh links succeed', function (): void {
+    Date::setTestNow('2026-10-23 11:30:00');
+    Storage::fake();
+    config(['capstan.work.orchestration.receipt_deadline_seconds' => 60]);
+    $team = workDrainTeam();
+    $issued = workDrainCredential(capstanUser());
+    $task = workDrainTask($team, ['user_actor_address' => $issued['spoke']->actor_id]);
+    $task->briefRevisions()->create(['sequence' => 1, 'content' => 'Rotated brief', 'author_actor' => 'creator']);
+    $unread = $task->steers()->create(['text' => 'Unread before rotation', 'author_actor' => 'creator']);
+    resolve(WorkOrchestrationService::class)->event($task, 'nonce-rotation', 'test_event');
+    $item = $task->items()->where('role', WorkItem::ROLE_ORCHESTRATOR)->sole();
+    $claim = $this->withHeaders($issued['headers'])->postJson(route('api.work.claim', $team), [
+        ...workDrainClaimPayload(0, ['orchestrator']),
+        'orchestrator_capacity' => 1,
+        'held_items' => [],
+    ])->assertOk()->assertJsonPath('items.0.id', $item->id);
+    $oldLinks = $claim->json('items.0.links');
+    $this->withHeaders($issued['headers'])->postJson(route('api.work.transition', $team), [
+        'item_id' => $item->id,
+        'fence' => 1,
+        'state' => 'delivered',
+        'launch_nonce' => $claim->json('items.0.launch_nonce'),
+        'session_ref' => 'solo:replaced-session',
+    ])->assertOk();
+
+    $held = ['item_id' => $item->id, 'fence' => 1];
+    $poll = fn (array $reported) => $this->withHeaders($issued['headers'])->postJson(route('api.work.claim', $team), [
+        ...workDrainClaimPayload(0, ['orchestrator']),
+        'orchestrator_capacity' => 0,
+        'held_items' => [$reported],
+    ])->assertOk();
+    Date::setTestNow(now()->addSeconds(61));
+    $first = $poll($held)->assertJsonPath('directives.0.kind', 'send_enter');
+    $poll([...$held, 'directive_id' => $first->json('directives.0.id'), 'directive_outcome' => 'failed']);
+    Date::setTestNow(now()->addSeconds(61));
+    $second = $poll($held)->assertJsonPath('directives.0.kind', 'resend_pointer');
+    $poll([...$held, 'directive_id' => $second->json('directives.0.id'), 'directive_outcome' => 'failed']);
+    Date::setTestNow(now()->addSeconds(61));
+    $respawn = $poll($held)->assertJsonPath('directives.0.kind', 'respawn');
+    $freshLinks = $respawn->json('directives.0.links');
+
+    $this->getJson($oldLinks['brief'])->assertConflict();
+    $this->postJson($oldLinks['milestone'], ['kind' => 'note', 'payload' => ['summary' => 'Must not persist']])->assertConflict();
+    $this->getJson($oldLinks['steers'])->assertConflict();
+    $this->post($oldLinks['evidence'], ['file' => UploadedFile::fake()->createWithContent('stale.txt', "stale\n")])->assertConflict();
+    $this->getJson($oldLinks['orchestration'])->assertForbidden();
+    $this->postJson($oldLinks['orchestrate'], [
+        'action' => 'set_priority',
+        'input' => ['priority' => 'P3'],
+        'idempotency_key' => 'nonce-rotation-priority',
+    ])->assertForbidden();
+
+    expect($item->fresh()->first_fetched_at)->toBeNull()
+        ->and($item->milestones()->count())->toBe(0)
+        ->and($item->evidence()->count())->toBe(0)
+        ->and($unread->fresh()->read_at)->toBeNull()
+        ->and($task->fresh()->priority->value)->toBe('P2');
+
+    $this->getJson($freshLinks['brief'])->assertOk();
+    $this->postJson($freshLinks['milestone'], ['kind' => 'note', 'payload' => ['summary' => 'Fresh session']])->assertCreated();
+    $this->getJson($freshLinks['steers'])->assertOk()->assertJsonPath('steers.0.id', $unread->id);
+    $this->post($freshLinks['evidence'], ['file' => UploadedFile::fake()->createWithContent('fresh.txt', "fresh\n")])->assertCreated();
+    $this->getJson($freshLinks['orchestration'])->assertOk();
+    $this->postJson($freshLinks['orchestrate'], [
+        'action' => 'set_priority',
+        'input' => ['priority' => 'P3'],
+        'idempotency_key' => 'nonce-rotation-priority',
+    ])->assertOk()->assertJsonPath('outcome', 'accepted');
+
+    expect($item->fresh()->first_fetched_at)->not->toBeNull()
+        ->and($item->milestones()->count())->toBe(1)
+        ->and($item->evidence()->count())->toBe(1)
+        ->and($unread->fresh()->read_at)->not->toBeNull()
+        ->and($task->fresh()->priority->value)->toBe('P3');
 });
 
 test('orchestrator capacity remains available when leaf capacity is full', function (): void {
@@ -259,6 +351,96 @@ test('orchestrator capacity remains available when leaf capacity is full', funct
     expect($response->json('items.*.id'))->toBe([$orchestrator->id])
         ->and($queuedLeaf->fresh()->state)->toBe(WorkItemState::Queued)
         ->and($orchestrator->fresh()->state)->toBe(WorkItemState::Claimed);
+});
+
+test('omitted orchestrator capacity shares one legacy ceiling in either claim order', function (): void {
+    Date::setTestNow('2026-10-23 12:30:00');
+
+    $orchestratorFirstTeam = workDrainTeam();
+    $orchestratorFirst = workDrainCredential(capstanUser());
+    MachineTeamWorkSetting::query()->where('spoke_id', $orchestratorFirst['spoke']->id)->where('team_id', $orchestratorFirstTeam->id)
+        ->update(['concurrency_ceiling' => 1]);
+    $orchestratorTask = workDrainTask($orchestratorFirstTeam);
+    resolve(WorkOrchestrationService::class)->event($orchestratorTask, 'legacy-orchestrator-first', 'test_event');
+    $orchestrator = $orchestratorTask->items()->where('role', WorkItem::ROLE_ORCHESTRATOR)->sole();
+    $queuedLeaf = workDrainItem(workDrainTask($orchestratorFirstTeam));
+    $this->withHeaders($orchestratorFirst['headers'])
+        ->postJson(route('api.work.claim', $orchestratorFirstTeam), workDrainClaimPayload(1, ['orchestrator']))
+        ->assertOk()->assertJsonPath('items.0.id', $orchestrator->id);
+    $this->withHeaders($orchestratorFirst['headers'])
+        ->postJson(route('api.work.claim', $orchestratorFirstTeam), workDrainClaimPayload(1, ['builder']))
+        ->assertOk()->assertJsonCount(0, 'items');
+    expect($queuedLeaf->fresh()->state)->toBe(WorkItemState::Queued);
+
+    $leafFirstTeam = workDrainTeam();
+    $leafFirst = workDrainCredential(capstanUser());
+    MachineTeamWorkSetting::query()->where('spoke_id', $leafFirst['spoke']->id)->where('team_id', $leafFirstTeam->id)
+        ->update(['concurrency_ceiling' => 1]);
+    $leaf = workDrainItem(workDrainTask($leafFirstTeam));
+    $leafOrchestratorTask = workDrainTask($leafFirstTeam);
+    resolve(WorkOrchestrationService::class)->event($leafOrchestratorTask, 'legacy-leaf-first', 'test_event');
+    $queuedOrchestrator = $leafOrchestratorTask->items()->where('role', WorkItem::ROLE_ORCHESTRATOR)->sole();
+    $this->withHeaders($leafFirst['headers'])
+        ->postJson(route('api.work.claim', $leafFirstTeam), workDrainClaimPayload(1, ['builder']))
+        ->assertOk()->assertJsonPath('items.0.id', $leaf->id);
+    $this->withHeaders($leafFirst['headers'])
+        ->postJson(route('api.work.claim', $leafFirstTeam), workDrainClaimPayload(1, ['orchestrator']))
+        ->assertOk()->assertJsonCount(0, 'items');
+    expect($queuedOrchestrator->fresh()->state)->toBe(WorkItemState::Queued);
+});
+
+test('receipt and stall repairs coexist on one item fence and stall escalation is singular', function (): void {
+    Date::setTestNow('2026-10-23 12:45:00');
+    config(['capstan.work.receipt_deadline_seconds' => 60]);
+    $team = workDrainTeam();
+    $task = workDrainTask($team);
+    $task->briefRevisions()->create(['sequence' => 1, 'content' => 'Lifecycle brief', 'author_actor' => 'creator']);
+    $item = workDrainItem($task);
+    $issued = workDrainCredential(capstanUser());
+    $claim = $this->withHeaders($issued['headers'])->postJson(route('api.work.claim', $team), workDrainClaimPayload())->assertOk();
+    $this->withHeaders($issued['headers'])->postJson(route('api.work.transition', $team), [
+        'item_id' => $item->id,
+        'fence' => 1,
+        'state' => 'delivered',
+        'launch_nonce' => $claim->json('items.0.launch_nonce'),
+        'session_ref' => 'solo:receipt-then-stall',
+    ])->assertOk();
+    $held = ['item_id' => $item->id, 'fence' => 1];
+    $poll = fn (array $reported) => $this->withHeaders($issued['headers'])->postJson(route('api.work.claim', $team), [
+        ...workDrainClaimPayload(0),
+        'orchestrator_capacity' => 0,
+        'held_items' => [$reported],
+    ])->assertOk();
+
+    Date::setTestNow(now()->addSeconds(61));
+    $receipt = $poll($held)->assertJsonPath('directives.0.reason', 'receipt')->assertJsonPath('directives.0.sequence', 1);
+    $this->getJson($claim->json('items.0.links.brief'))->assertOk();
+    expect(WorkDirective::query()->findOrFail($receipt->json('directives.0.id'))->status)->toBe('succeeded');
+    $this->withHeaders($issued['headers'])->postJson(route('api.work.transition', $team), [
+        'item_id' => $item->id,
+        'fence' => 1,
+        'state' => 'routed',
+    ])->assertOk();
+    $item->update(['stalled_at' => now()->subSeconds(61)]);
+
+    $kinds = [];
+    foreach (['send_enter', 'resend_pointer', 'respawn', 'respawn'] as $expectedKind) {
+        $directive = $poll($held)
+            ->assertJsonPath('directives.0.reason', 'stall')
+            ->assertJsonPath('directives.0.kind', $expectedKind);
+        $id = $directive->json('directives.0.id');
+        $sequence = $directive->json('directives.0.sequence');
+        $poll($held)->assertJsonPath('directives.0.id', $id);
+        $kinds[] = $expectedKind;
+        expect($sequence)->toBe(count($kinds));
+        $poll([...$held, 'directive_id' => $id, 'directive_outcome' => 'failed'])->assertJsonCount(0, 'directives');
+        Date::setTestNow(now()->addSeconds(61));
+    }
+
+    $poll($held)->assertJsonCount(0, 'directives');
+    $poll($held)->assertJsonCount(0, 'directives');
+    expect(WorkDirective::query()->where('work_item_id', $item->id)->where('fence', 1)->where('reason', 'stall')->pluck('kind')->all())->toBe($kinds)
+        ->and(WorkEscalation::query()->where('request_key', 'directive-exhausted:'.$item->id.':1:stall')->count())->toBe(1);
 });
 
 test('stalled held items use directives and orchestrator receipts use the shorter deadline', function (): void {
