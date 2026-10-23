@@ -387,7 +387,9 @@ test('owner exports the current self-contained html while every other principal 
     // A signed-out browser is offered sign-in instead of the dead 404 it used
     // to get, and a JSON caller keeps the opaque not-found.
     $this->get(route('pages.export', ['page' => $page]))
-        ->assertRedirect(route('bfc.login'));
+        ->assertRedirect(route('bfc.login', [
+            'intended' => route('pages.export', ['page' => $page], absolute: false),
+        ]));
     $guestResponse = $this->get(
         route('pages.export', ['page' => $page]),
         ['Accept' => 'application/json'],

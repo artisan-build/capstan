@@ -257,8 +257,8 @@ test('a machine credential is isolated from MCP credential management and browse
         ])->assertStatus(401);
     }
     $this->withHeaders($headers)->getJson('/bfc/credentials')->assertStatus(401);
-    $this->withHeaders($headers)->get('/bfc/device')->assertRedirect(route('bfc.login'));
-    $this->withHeaders($headers)->get('/bfc/me/credentials')->assertRedirect(route('bfc.login'));
+    $this->withHeaders($headers)->get('/bfc/device')->assertRedirect(route('bfc.login', ['intended' => '/bfc/device']));
+    $this->withHeaders($headers)->get('/bfc/me/credentials')->assertRedirect(route('bfc.login', ['intended' => '/bfc/me/credentials']));
     $this->withHeaders($headers)->postJson('/api/v1/artifacts', [])->assertStatus(401)->assertJsonPath('error.code', 'unauthenticated');
 
     expect($issued['credential']->refresh()->last_used_at)->toBeNull();
