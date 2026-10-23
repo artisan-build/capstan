@@ -71,6 +71,7 @@ final class WorkDrainController extends Controller
         }
 
         return new JsonResponse([
+            'spoke_id' => $tick['spoke_id'],
             'items' => array_map($this->claimItem(...), $tick['items']),
             'directives' => $tick['directives'],
         ]);

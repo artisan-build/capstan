@@ -18,7 +18,7 @@ use Symfony\Component\HttpKernel\Exception\HttpException;
 
 final readonly class WorkWorkerService
 {
-    public function __construct(private WorkEvidenceService $evidence) {}
+    public function __construct(private WorkEvidenceService $evidence, private WorkSeatService $seats) {}
 
     /** @return Builder<WorkItem> */
     public function recoveryQuery(): Builder
@@ -89,6 +89,7 @@ final readonly class WorkWorkerService
             }
             $updated = $this->activeQuery()->whereKey($item->id)->where('fence', $item->fence)->update($receipt);
             abort_unless($updated === 1, 409, 'claim lost');
+            $this->seats->adoptVerifiedSession($item->refresh(), $now);
             WorkDirective::query()->where('work_item_id', $item->id)->where('fence', $item->fence)
                 ->where('reason', 'receipt')->where('status', 'pending')->update([
                     'status' => 'succeeded',
