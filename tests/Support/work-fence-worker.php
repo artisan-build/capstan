@@ -49,7 +49,7 @@ try {
                 (int) $fence,
                 'delivered',
                 $now,
-                $pause,
+                afterIdentified: $pause,
             );
             $result = ['status' => 'transitioned', 'state' => $item->state->value];
         } else {
