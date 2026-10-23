@@ -297,6 +297,16 @@ Running items marked stalled use the same directive records and outcome rules. D
 separate from item transitions. Their item, fence, machine, sequence, reason, payload, status, timestamps, and
 bounded outcome make poll replay idempotent and keep policy on the server.
 
+A matching brief fetch settles each pending directive according to its reason. A receipt repair records a
+successful receipt. A stall repair records `resolved_by_fetch` without a receipt marker. Fetching the brief
+does not clear `stalled_at`; without a later milestone, the next stall repair may be issued after its deadline.
+
+A newly accepted milestone from the current claim holder clears `stalled_at` and settles a pending stall
+directive as `resolved_by_progress`. The milestone, item update, and directive settlement commit together. An
+idempotent replay that returns an existing milestone does not clear a later stall. If the same claim holder
+stalls again after making progress, the repair order starts again at `send_enter`. Directive sequence numbers
+remain unique and continue across episodes so the earlier history is not replaced.
+
 The extended claim request accepts `held_items`. Each entry has an item id and fence and may report a directive
 id with a `succeeded` or `failed` outcome. A successful respawn also reports its new nonce and session reference.
 The response always has `items` and `directives`; an old drain can ignore the added key.

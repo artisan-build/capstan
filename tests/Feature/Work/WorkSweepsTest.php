@@ -227,8 +227,8 @@ test('stalls and heartbeat outages mark and notify exactly once with negative co
         ->and(Spoke::query()->find($expired->claimant_spoke_id)->work_heartbeat_notified_at)->toBeNull();
 });
 
-test('a late milestone does not suppress the missed deadline and an old fence does not suppress a new stall', function (): void {
-    $item = sweepItem();
+test('a current-fence milestone starts a fresh stall deadline while an old-fence milestone does not', function (): void {
+    $item = sweepItem(['lease_until' => now()->addMinutes(30)]);
     $item->milestones()->create(['kind' => 'note', 'fence' => 1, 'payload' => []]);
     $second = sweepItem(['fence' => 2]);
     $milestone = $second->milestones()->make(['kind' => 'note', 'fence' => 1, 'payload' => []]);
@@ -237,8 +237,14 @@ test('a late milestone does not suppress the missed deadline and an old fence do
     $notifier->shouldReceive('stalled')->twice();
     $notifier->shouldReceive('missedHeartbeat')->twice();
     app()->instance(WorkNotifier::class, $notifier);
-    resolve(WorkSweepService::class)->liveness(CarbonImmutable::now());
-    expect($item->fresh()->stalled_at)->not->toBeNull()->and($second->fresh()->stalled_at)->not->toBeNull();
+    $sweep = resolve(WorkSweepService::class);
+    $sweep->liveness(CarbonImmutable::now());
+    expect($item->fresh()->stalled_at)->toBeNull()
+        ->and($second->fresh()->stalled_at)->not->toBeNull();
+
+    Date::setTestNow(now()->addMinutes(11));
+    $sweep->liveness(CarbonImmutable::now());
+    expect($item->fresh()->stalled_at)->not->toBeNull();
 });
 
 test('a stale stall candidate cannot stamp the replacement fence', function (): void {
