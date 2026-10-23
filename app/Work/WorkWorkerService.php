@@ -153,12 +153,16 @@ final readonly class WorkWorkerService
 
     public function evidence(string $id, int $fence, string $filename, string $bytes): WorkEvidence
     {
-        return $this->guarded($id, $fence, function (WorkItem $item) use ($filename, $bytes): WorkEvidence {
-            $metadata = $this->evidence->inspect($filename, $bytes);
-            $this->evidence->throttle('actor:'.$item->claimant_actor);
+        $metadata = $this->evidence->inspect($filename, $bytes);
+        $actor = $this->guarded($id, $fence, fn (WorkItem $item): string => (string) $item->claimant_actor);
+        $this->evidence->throttle('actor:'.$actor);
+        $attempts = new WorkEvidenceAttemptLog;
 
-            return $this->evidence->store($item, $bytes, $metadata);
-        });
+        return $attempts->settle(fn (): WorkEvidence => $this->guarded(
+            $id,
+            $fence,
+            fn (WorkItem $item): WorkEvidence => $this->evidence->store($item, $bytes, $metadata, $attempts),
+        ));
     }
 
     /** @return list<array<string, mixed>> */

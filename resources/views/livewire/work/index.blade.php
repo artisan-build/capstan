@@ -77,12 +77,11 @@
                     @endforeach
                 </details>
             @endif
-            @php($taskEvidence = $task->items->flatMap->evidence)
-            @if ($taskEvidence->isNotEmpty())
+            @if ($task->evidence->isNotEmpty())
                 <section data-testid="work-task-evidence" class="space-y-2">
                     <flux:heading size="sm">{{ __('Evidence') }}</flux:heading>
                     <ul class="list-disc space-y-1 ps-5">
-                        @foreach ($taskEvidence as $evidence)
+                        @foreach ($task->evidence as $evidence)
                             <li>
                                 <a href="{{ route('work.evidence.show', ['token' => $evidence->public_token]) }}">{{ $evidence->id }}</a>
                                 <span>{{ $evidence->content_type }} · {{ $evidence->size_bytes }}</span>

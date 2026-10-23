@@ -3,6 +3,7 @@
 use App\Livewire\Postmaster\SpokeMap;
 use App\Livewire\Work\Index;
 use App\Models\Team;
+use App\Models\WorkEvidence;
 use App\Models\WorkTask;
 use App\Work\WorkOrchestrationService;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
@@ -118,6 +119,16 @@ test('Work board bounds tasks items and eager loaded milestones without per-item
     foreach (range(1, 27) as $i) {
         $item = $task->items()->create(['role' => 'review-'.$i]);
         $item->milestones()->create(['fence' => 0, 'kind' => 'note', 'payload' => ['summary' => 'Progress '.$i]]);
+        if ($i === 26) {
+            $item->evidence()->create([
+                'work_task_id' => $task->id,
+                'public_token' => str_repeat('a', 64),
+                'storage_key' => 'work-evidence/private/item-26',
+                'content_type' => 'text/plain',
+                'extension' => 'txt',
+                'size_bytes' => 26,
+            ]);
+        }
     }
     $queries = [];
     DB::listen(function (QueryExecuted $query) use (&$queries): void {
@@ -129,7 +140,12 @@ test('Work board bounds tasks items and eager loaded milestones without per-item
     expect(substr_count($response->content(), 'data-testid="work-task"'))->toBe(25)
         ->and(substr_count($response->content(), 'data-testid="work-item"'))->toBe(25)
         ->and(count($queries))->toBe(7);
-    $response->assertSee('data-testid="work-task-truncated"', false)->assertSee('Progress 1')->assertDontSee('Progress 27');
+    $evidence = WorkEvidence::query()->sole();
+    $response->assertSee('data-testid="work-task-truncated"', false)
+        ->assertSee('data-testid="work-task-evidence"', false)
+        ->assertSee($evidence->id)
+        ->assertSee(route('work.evidence.show', ['token' => $evidence->public_token]), false)
+        ->assertSee('Progress 1')->assertDontSee('Progress 27');
 });
 
 test('addressed users see escaped escalations and page answers recheck feature and admission before waking once', function (): void {

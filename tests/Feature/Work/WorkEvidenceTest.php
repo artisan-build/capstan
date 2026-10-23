@@ -1,20 +1,30 @@
 <?php
 
 use App\Http\ApiErrorException;
+use App\Mcp\DurableWriteCoordinator;
+use App\Mcp\OwnerSubject;
+use App\Mcp\RetryableWriteException;
+use App\Mcp\WriteFaultInjector;
 use App\Models\Artifact;
 use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkEvidence;
 use App\Models\WorkItem;
 use App\Models\WorkTask;
+use App\Work\WorkEvidenceAttemptLog;
 use App\Work\WorkEvidenceService;
 use App\Work\WorkWorkerLinks;
+use App\Work\WorkWorkerService;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\User;
+use Illuminate\Cache\DatabaseStore;
+use Illuminate\Cache\RateLimiter as ConcreteRateLimiter;
+use Illuminate\Cache\Repository;
+use Illuminate\Database\ConnectionInterface;
 use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
@@ -22,6 +32,30 @@ use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
+
+final class InterleavedEvidenceDatabaseStore extends DatabaseStore
+{
+    private bool $paused = false;
+
+    public function __construct(
+        ConnectionInterface $connection,
+        private readonly string $barrierKey,
+    ) {
+        parent::__construct($connection, 'cache', 'evidence-rate:');
+    }
+
+    public function get($key)
+    {
+        $value = parent::get($key);
+
+        if (! $this->paused && $key === $this->barrierKey) {
+            $this->paused = true;
+            Fiber::suspend('counter-read');
+        }
+
+        return $value;
+    }
+}
 
 beforeEach(function (): void {
     config([
@@ -205,6 +239,7 @@ test('evidence rate limits signed workers before storage', function (): void {
     $before = Storage::disk()->allFiles();
     $this->post($url, ['file' => UploadedFile::fake()->createWithContent('second.txt', "second\n")])->assertStatus(429);
     expect($item->evidence()->count())->toBe(1)
+        ->and(RateLimiter::attempts('work-evidence:'.hash('sha256', 'actor:'.$item->claimant_actor)))->toBe(1)
         ->and(Storage::disk()->allFiles())->toBe($before);
 });
 
@@ -236,8 +271,90 @@ test('evidence rate limits interactive MCP callers without a second blob', funct
 
     expect($upload($items[0], 'first')['outcome'])->toBe('accepted')
         ->and($upload($items[1], 'second'))->toBe(['outcome' => 'refused', 'reason' => 'evidence_rate_limited'])
+        ->and(RateLimiter::attempts('work-evidence:'.hash('sha256', 'actor:'.$user->id)))->toBe(1)
         ->and(WorkEvidence::query()->count())->toBe(1)
         ->and(Storage::disk()->allFiles())->toHaveCount(1);
+});
+
+test('database-cache reservations admit only one interleaved caller and undo the rejected reservation', function (): void {
+    $connectionName = 'evidence_rate_'.strtolower(Str::random(8));
+    $database = storage_path('framework/testing/'.$connectionName.'.sqlite');
+    touch($database);
+    config([
+        'capstan.work.evidence.uploads_per_minute' => 1,
+        'database.connections.'.$connectionName => [
+            'driver' => 'sqlite',
+            'database' => $database,
+            'prefix' => '',
+            'foreign_key_constraints' => true,
+            'busy_timeout' => 5000,
+        ],
+    ]);
+    $connection = DB::connection($connectionName);
+    $connection->statement('PRAGMA busy_timeout = 5000');
+    $connection->getSchemaBuilder()->create('cache', function ($table): void {
+        $table->string('key')->primary();
+        $table->mediumText('value');
+        $table->integer('expiration')->index();
+    });
+    DB::disconnect($connectionName);
+
+    $actor = 'actor:interleaved-rate-proof';
+    $key = 'work-evidence:'.hash('sha256', $actor);
+
+    try {
+        $callers = array_map(function () use ($connection, $key, $actor): Fiber {
+            return new Fiber(function () use ($connection, $key, $actor): string {
+                $store = new InterleavedEvidenceDatabaseStore($connection, $key);
+                RateLimiter::swap(new ConcreteRateLimiter(new Repository($store)));
+
+                try {
+                    resolve(WorkEvidenceService::class)->throttle($actor);
+
+                    return 'accepted';
+                } catch (ApiErrorException $exception) {
+                    return $exception->errorCode;
+                }
+            });
+        }, [0, 1]);
+
+        foreach ($callers as $caller) {
+            expect($caller->start())->toBe('counter-read');
+        }
+        foreach ($callers as $caller) {
+            $caller->resume();
+        }
+        $outcomes = array_map(fn (Fiber $caller): string => $caller->getReturn(), $callers);
+
+        sort($outcomes);
+        $finalStore = new DatabaseStore($connection, 'cache', 'evidence-rate:');
+        $finalLimiter = new ConcreteRateLimiter(new Repository($finalStore));
+        expect($outcomes)->toBe(['accepted', 'evidence_rate_limited'])
+            ->and($finalLimiter->attempts($key))->toBe(1);
+    } finally {
+        DB::purge($connectionName);
+        @unlink($database);
+    }
+});
+
+test('a successful rate reservation remains consumed when later evidence storage fails', function (): void {
+    config([
+        'cache.limiter' => 'database',
+        'capstan.work.evidence.uploads_per_minute' => 1,
+    ]);
+    app()->forgetInstance(ConcreteRateLimiter::class);
+    RateLimiter::clearResolvedInstance(ConcreteRateLimiter::class);
+    [$item, $url] = evidenceWorkerItem();
+    WorkEvidence::creating(static fn () => throw new RuntimeException('forced post-reservation failure'));
+
+    $this->post($url, ['file' => UploadedFile::fake()->createWithContent('failed.txt', "failed\n")])
+        ->assertServerError();
+    $this->post($url, ['file' => UploadedFile::fake()->createWithContent('blocked.txt', "blocked\n")])
+        ->assertStatus(429);
+
+    expect(RateLimiter::attempts('work-evidence:'.hash('sha256', 'actor:'.$item->claimant_actor)))->toBe(1)
+        ->and(WorkEvidence::query()->count())->toBe(0)
+        ->and(Storage::disk()->allFiles())->toBe([]);
 });
 
 test('stale worker and unauthorized MCP evidence uploads have no durable effects', function (): void {
@@ -284,7 +401,8 @@ test('storage and database failures leave no row or orphaned blob', function (st
         WorkEvidence::creating(static fn () => throw new RuntimeException('forced database failure'));
     }
 
-    expect(fn () => $service->store($item, $bytes, $metadata))->toThrow($exception);
+    $attempts = new WorkEvidenceAttemptLog;
+    expect(fn () => $service->store($item, $bytes, $metadata, $attempts))->toThrow($exception);
     expect(WorkEvidence::query()->count())->toBe(0);
     if ($failure === 'database') {
         expect(Storage::disk()->allFiles())->toBe([]);
@@ -294,12 +412,116 @@ test('storage and database failures leave no row or orphaned blob', function (st
     'database' => ['database', RuntimeException::class],
 ]);
 
+test('signed worker outer rollback removes the blob written by its nested evidence transaction', function (): void {
+    [$item] = evidenceWorkerItem();
+    $service = resolve(WorkEvidenceService::class);
+    $attempts = new WorkEvidenceAttemptLog;
+    $bytes = "signed outer rollback\n";
+    $metadata = $service->inspect('signed-rollback.txt', $bytes);
+
+    expect(fn () => $attempts->settle(fn () => resolve(WorkWorkerService::class)->guarded(
+        $item->id,
+        $item->fence,
+        function (WorkItem $guarded) use ($service, $attempts, $bytes, $metadata): never {
+            $service->store($guarded, $bytes, $metadata, $attempts);
+            throw new RuntimeException('force signed outer rollback');
+        },
+    )))->toThrow(RuntimeException::class, 'force signed outer rollback');
+
+    expect(WorkEvidence::query()->count())->toBe(0)
+        ->and(Storage::disk()->allFiles())->toBe([]);
+});
+
+test('MCP durable-write retry removes every rolled-back blob and keeps only the linked attempt', function (): void {
+    [$item] = evidenceWorkerItem();
+    $service = resolve(WorkEvidenceService::class);
+    $attempts = new WorkEvidenceAttemptLog;
+    $bytes = "MCP retry evidence\n";
+    $metadata = $service->inspect('mcp-retry.txt', $bytes);
+    $operationAttempts = 0;
+    $owner = new OwnerSubject('user', 'capstan-user:mcp-retry', 'mcp-retry', credentialBacked: false);
+    $run = function () use ($service, $item, $bytes, $metadata, $attempts, $owner, &$operationAttempts): array {
+        return resolve(DurableWriteCoordinator::class)->run(
+            owner: $owner,
+            tool: 'upload_work_evidence',
+            idempotencyKey: 'mcp-evidence-outer-retry',
+            intent: ['content_hash' => $metadata['content_hash']],
+            targetType: 'work_evidence',
+            operation: function () use ($service, $item, $bytes, $metadata, $attempts, &$operationAttempts): array {
+                $operationAttempts++;
+                $stored = $service->store($item, $bytes, $metadata, $attempts);
+                if ($operationAttempts === 1) {
+                    throw new RetryableWriteException('retry after outer rollback');
+                }
+
+                return ['evidence' => $service->representation($stored)];
+            },
+        );
+    };
+
+    $result = $attempts->settle(function () use ($run): array {
+        try {
+            $run();
+        } catch (Throwable) {
+            // The released durable-write claim permits the same request to retry.
+        }
+
+        return $run();
+    });
+
+    $stored = WorkEvidence::query()->sole();
+    expect($result['outcome'])->toBe('accepted')
+        ->and($operationAttempts)->toBe(2)
+        ->and(DB::table('mcp_write_effects')->count())->toBe(1)
+        ->and(Storage::disk()->allFiles())->toBe([$stored->storage_key]);
+});
+
+test('MCP settlement failure keeps the one blob linked by its durable accepted effect', function (): void {
+    $user = capstanUser(['role' => 'member']);
+    $team = Team::default();
+    $task = WorkTask::query()->create([
+        'team_id' => $team->id,
+        'title' => 'Settlement evidence',
+        'required_capabilities' => [],
+        'timebox_minutes' => 30,
+        'creator_actor' => (string) $user->id,
+    ]);
+    $item = $task->items()->create(['role' => 'reviewer']);
+    app()->instance(WriteFaultInjector::class, new class extends WriteFaultInjector
+    {
+        public function beforeSettlement(string $tool): void
+        {
+            throw new RuntimeException('primary evidence settlement failure');
+        }
+
+        public function beforeAcceptedRecoverySettlement(string $tool): void
+        {
+            throw new RuntimeException('fallback evidence settlement failure');
+        }
+    });
+
+    $accepted = evidenceMcpCall('upload_work_evidence', [
+        'team_id' => $team->id,
+        'task_id' => $task->id,
+        'item_id' => $item->id,
+        'filename' => 'settlement.txt',
+        'bytes_base64' => base64_encode("settlement\n"),
+        'idempotency_key' => 'evidence-settlement-failure',
+    ], evidenceMcpToken($user))->assertOk()->json('result.structuredContent');
+
+    $stored = WorkEvidence::query()->sole();
+    expect($accepted['outcome'])->toBe('accepted')
+        ->and(DB::table('mcp_write_claims')->value('state'))->toBe('in_progress')
+        ->and(DB::table('mcp_write_effects')->count())->toBe(1)
+        ->and(Storage::disk()->allFiles())->toBe([$stored->storage_key]);
+});
+
 test('task detail lists evidence while Pages Artifacts and list_pages do not expose it', function (): void {
     $user = capstanUser(['role' => 'owner']);
     [$item] = evidenceWorkerItem();
     $service = resolve(WorkEvidenceService::class);
     $bytes = "visible only on Work\n";
-    $stored = $service->store($item, $bytes, $service->inspect('work-only.txt', $bytes));
+    $stored = $service->store($item, $bytes, $service->inspect('work-only.txt', $bytes), new WorkEvidenceAttemptLog);
     $url = $service->representation($stored)['url'];
 
     $work = $this->actingAsVersioned($user)->get(route('work.index'))->assertOk();

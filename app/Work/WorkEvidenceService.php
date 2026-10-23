@@ -71,10 +71,11 @@ final readonly class WorkEvidenceService
     {
         $key = 'work-evidence:'.hash('sha256', $actor);
         $maximum = max(1, (int) config('capstan.work.evidence.uploads_per_minute', 30));
-        if (RateLimiter::tooManyAttempts($key, $maximum)) {
+        $reservations = RateLimiter::hit($key, 60);
+        if ($reservations > $maximum) {
+            RateLimiter::decrement($key, 60);
             throw new ApiErrorException(429, 'evidence_rate_limited', 'Too many evidence uploads.');
         }
-        RateLimiter::hit($key, 60);
     }
 
     public function authorizeInteractive(User $actor, int $teamId, string $taskId, string $itemId): WorkItem
@@ -96,14 +97,14 @@ final readonly class WorkEvidenceService
     /**
      * @param  array{extension: string, content_type: string, size_bytes: int, content_hash: string}  $metadata
      */
-    public function store(WorkItem $item, string $bytes, array $metadata): WorkEvidence
+    public function store(WorkItem $item, string $bytes, array $metadata, WorkEvidenceAttemptLog $attempts): WorkEvidence
     {
         $id = (string) Str::uuid7();
         $storageKey = 'work-evidence/private/'.$id;
         $storageAttempted = false;
 
         try {
-            return DB::transaction(function () use ($item, $bytes, $metadata, $id, $storageKey, &$storageAttempted): WorkEvidence {
+            return DB::transaction(function () use ($item, $bytes, $metadata, $attempts, $id, $storageKey, &$storageAttempted): WorkEvidence {
                 $this->locks->tasks($item->work_task_id);
                 $locked = WorkItem::query()->whereKey($item->id)->where('work_task_id', $item->work_task_id)->lockForUpdate()->first();
                 if (! $locked instanceof WorkItem || $locked->workTask()->whereNotNull('cancelled_at')->exists()) {
@@ -115,6 +116,7 @@ final readonly class WorkEvidenceService
                 }
 
                 $disk = Storage::disk();
+                $attempts->record($storageKey);
                 $storageAttempted = true;
                 if (! $disk->put($storageKey, $bytes, ['visibility' => 'private'])) {
                     throw new ApiErrorException(503, 'evidence_storage_failed', 'Evidence could not be stored.');

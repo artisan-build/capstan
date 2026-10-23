@@ -5,7 +5,7 @@ namespace App\Mcp\Tools;
 use App\Mcp\DurableWriteCoordinator;
 use App\Mcp\OwnerSubjectResolver;
 use App\Mcp\ToolResponse;
-use App\Models\WorkEvidence;
+use App\Work\WorkEvidenceAttemptLog;
 use App\Work\WorkEvidenceService;
 use ArtisanBuild\BuiltForCloud\Mcp\AdvertisesToolClassification;
 use ArtisanBuild\BuiltForCloud\Mcp\AdvertisesToolEffect;
@@ -18,7 +18,6 @@ use ArtisanBuild\BuiltForCloud\RolePolicy;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\ResponseFactory;
@@ -102,11 +101,10 @@ final class UploadWorkEvidenceTool extends CapstanTool
             throw ValidationException::withMessages(['bytes_base64' => ['Evidence must use canonical bounded base64 encoding.']]);
         }
         $metadata = $evidence->inspect($validated['filename'], $bytes);
-        $createdId = null;
-        $createdStorageKey = null;
+        $attempts = new WorkEvidenceAttemptLog;
 
-        try {
-            $result = $writes->run(
+        $result = $attempts->settle(
+            fn (): array => $writes->run(
                 owner: $owner,
                 tool: 'upload_work_evidence',
                 idempotencyKey: $validated['idempotency_key'],
@@ -119,21 +117,14 @@ final class UploadWorkEvidenceTool extends CapstanTool
                     'size_bytes' => $metadata['size_bytes'],
                 ],
                 targetType: 'work_evidence',
-                operation: function () use ($evidence, $item, $bytes, $metadata, $owner, &$createdId, &$createdStorageKey): array {
-                    $evidence->throttle('actor:'.$owner->actorId);
-                    $stored = $evidence->store($item, $bytes, $metadata);
-                    $createdId = $stored->id;
-                    $createdStorageKey = $stored->storage_key;
+                operation: function () use ($evidence, $item, $bytes, $metadata, $attempts): array {
+                    $stored = $evidence->store($item, $bytes, $metadata, $attempts);
 
                     return ['evidence' => $evidence->representation($stored)];
                 },
-            );
-        } finally {
-            if (is_string($createdId) && is_string($createdStorageKey)
-                && ! WorkEvidence::query()->whereKey($createdId)->exists()) {
-                Storage::disk()->delete($createdStorageKey);
-            }
-        }
+                admission: fn () => $evidence->throttle('actor:'.$owner->actorId),
+            ),
+        );
 
         return ToolResponse::structured($result);
     }
