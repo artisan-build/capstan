@@ -162,10 +162,6 @@ final readonly class WorkDrainService
                         'handed_off_at' => $now,
                         'handed_off_session_ref' => $sessionRef,
                         'launch_nonce' => $launchNonce,
-                        'first_fetched_at' => null,
-                        'agent_model' => null,
-                        'fetched_brief_revision_id' => null,
-                        'fetched_page_version_id' => null,
                     ])->save();
                 }
 

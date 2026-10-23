@@ -1,9 +1,12 @@
 <?php
 
 use App\Auth\CapstanCredentialDeclaration;
+use App\Enums\PageLayout;
 use App\Enums\WorkItemState;
 use App\Models\Inbox;
 use App\Models\MachineTeamWorkSetting;
+use App\Models\Page;
+use App\Models\PageVersion;
 use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkDirective;
@@ -188,6 +191,81 @@ test('nonce receipt records the exact served brief and model while rejecting ano
         ->and($receipt->agent_model)->toBe('gpt-5.6-sol')
         ->and($receipt->fetched_brief_revision_id)->toBe($revision->id)
         ->and($receipt->handed_off_session_ref)->toBe('solo:receipt-session');
+});
+
+test('a pre-handoff Page brief receipt survives delivery and prevents receipt repair', function (): void {
+    Date::setTestNow('2026-10-23 10:30:00');
+    config(['capstan.work.receipt_deadline_seconds' => 60]);
+    $team = workDrainTeam();
+    $user = capstanUser();
+    $page = Page::query()->create([
+        'owner_user_id' => (string) $user->id,
+        'title' => 'Pre-handoff receipt Page',
+        'refresh_recipe' => 'Test-created receipt recipe',
+        'layout' => PageLayout::Brief,
+    ]);
+    $pageVersion = PageVersion::query()->create([
+        'page_id' => $page->id,
+        'version_number' => 1,
+        'content_type' => 'text/html',
+        'size_bytes' => 25,
+        'content_hash' => hash('sha256', '<p>Receipt Page brief</p>'),
+        'storage_key' => 'pages/'.$page->id.'/v1.html',
+        'publisher_user_id' => (string) $user->id,
+        'publisher_source' => 'test',
+        'publisher_tool' => 'test',
+        'refresh_recipe' => 'Test-created receipt recipe',
+        'layout' => PageLayout::Brief,
+    ]);
+    $page->update(['latest_version_id' => $pageVersion->id, 'version_count' => 1]);
+    $task = workDrainTask($team, [
+        'brief_page_id' => $page->id,
+        'brief_page_version_id' => $pageVersion->id,
+    ]);
+    $revision = $task->briefRevisions()->create([
+        'sequence' => 1,
+        'content' => 'Pre-handoff receipt brief',
+        'author_actor' => 'creator',
+    ]);
+    $item = workDrainItem($task);
+    $issued = workDrainCredential($user);
+    $claim = $this->withHeaders($issued['headers'])
+        ->postJson(route('api.work.claim', $team), workDrainClaimPayload())
+        ->assertOk();
+    $nonce = $claim->json('items.0.launch_nonce');
+
+    expect($item->fresh()->state)->toBe(WorkItemState::Claimed);
+    $fetchedAt = now();
+    $this->getJson($claim->json('items.0.links.brief').'&model=gpt-5.6-sol')
+        ->assertOk()
+        ->assertJsonPath('revision.id', $revision->id)
+        ->assertJsonPath('task.brief_page_version_id', $pageVersion->id);
+
+    Date::setTestNow(now()->addSeconds(30));
+    $handedOffAt = now();
+    $this->withHeaders($issued['headers'])->postJson(route('api.work.transition', $team), [
+        'item_id' => $item->id,
+        'fence' => 1,
+        'state' => 'delivered',
+        'launch_nonce' => $nonce,
+        'session_ref' => 'solo:pre-handoff-receipt',
+    ])->assertOk();
+
+    $receipt = $item->fresh();
+    expect($receipt->first_fetched_at?->toJSON())->toBe($fetchedAt->toJSON())
+        ->and($receipt->agent_model)->toBe('gpt-5.6-sol')
+        ->and($receipt->fetched_brief_revision_id)->toBe($revision->id)
+        ->and($receipt->fetched_page_version_id)->toBe($pageVersion->id)
+        ->and($receipt->handed_off_at?->toJSON())->toBe($handedOffAt->toJSON())
+        ->and($receipt->handed_off_session_ref)->toBe('solo:pre-handoff-receipt')
+        ->and($receipt->launch_nonce)->toBe($nonce);
+
+    Date::setTestNow(now()->addSeconds(61));
+    $this->withHeaders($issued['headers'])->postJson(route('api.work.claim', $team), [
+        ...workDrainClaimPayload(0),
+        'orchestrator_capacity' => 0,
+        'held_items' => [['item_id' => $item->id, 'fence' => 1]],
+    ])->assertOk()->assertExactJson(['items' => [], 'directives' => []]);
 });
 
 test('missed receipts replay one pending directive advance in order and escalate exactly once', function (): void {
