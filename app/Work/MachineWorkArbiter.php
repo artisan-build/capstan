@@ -19,10 +19,23 @@ final readonly class MachineWorkArbiter
         private MachineUsageFreshness $freshness,
     ) {}
 
-    /** @param list<string> $requiredCapabilities */
-    public function isWinner(int $teamId, string $role, array $requiredCapabilities, int $spokeId, CarbonImmutable $now): bool
-    {
-        /** @var list<array{id: int, health: int, known: int, remaining: float|null, reset: int|null, count: int, ceiling: int}> $ranked */
+    /** @param list<string> $requiredCapabilities
+     * @param  list<string>  $excludedTaskIds
+     */
+    public function isWinner(
+        int $teamId,
+        string $role,
+        array $requiredCapabilities,
+        int $spokeId,
+        CarbonImmutable $now,
+        bool $allowPreemption = false,
+        ?string $userActorAddress = null,
+        ?string $ownerActor = null,
+        bool $routingPoolWork = true,
+        ?int $deviceSpokeId = null,
+        array $excludedTaskIds = [],
+    ): bool {
+        /** @var list<array{id: int, full: int, health: int, known: int, remaining: float|null, reset: int|null, count: int, ceiling: int}> $ranked */
         $ranked = [];
         $presences = MachineWorkPresence::query()
             ->where('team_id', $teamId)
@@ -31,13 +44,16 @@ final readonly class MachineWorkArbiter
             ->get();
 
         foreach ($presences as $presence) {
+            $machine = $presence->spoke;
             if (! in_array($role, $presence->roles, true)
                 || array_diff($requiredCapabilities, $presence->capabilities) !== []
-                || $presence->available_capacity < 1) {
+                || (! $allowPreemption && $presence->available_capacity < 1)
+                || ($userActorAddress !== null && $machine->actor_id !== $userActorAddress)
+                || ($userActorAddress === null && ! $routingPoolWork && $machine->actor_id !== $ownerActor)
+                || ($deviceSpokeId !== null && $machine->id !== $deviceSpokeId)) {
                 continue;
             }
 
-            $machine = $presence->spoke;
             $setting = $this->runtime->eligibleSetting(
                 $teamId,
                 $machine->actor_id,
@@ -52,13 +68,18 @@ final readonly class MachineWorkArbiter
             }
 
             $count = $this->runtime->authoritativeClaimedCount($machine->id);
-            if ($count >= $setting->concurrency_ceiling) {
+            $full = $count >= $setting->concurrency_ceiling;
+            if ($full && (! $allowPreemption || resolve(WorkPreemptionService::class)->victim($machine->id, $now, $excludedTaskIds) === null)) {
+                continue;
+            }
+            if (! $full && $presence->available_capacity < 1) {
                 continue;
             }
 
             $usage = $this->usage($machine, $presence, $role, $now);
             $ranked[] = [
                 'id' => $machine->id,
+                'full' => $full ? 1 : 0,
                 'health' => $machine->probe_status === SpokeLiveness::Green ? 0 : 1,
                 'known' => $usage['known'],
                 'remaining' => $usage['remaining'],
@@ -102,12 +123,12 @@ final readonly class MachineWorkArbiter
         ];
     }
 
-    /** @param array{id: int, health: int, known: int, remaining: float|null, reset: int|null, count: int, ceiling: int} $left
-     * @param  array{id: int, health: int, known: int, remaining: float|null, reset: int|null, count: int, ceiling: int}  $right
+    /** @param array{id: int, full: int, health: int, known: int, remaining: float|null, reset: int|null, count: int, ceiling: int} $left
+     * @param  array{id: int, full: int, health: int, known: int, remaining: float|null, reset: int|null, count: int, ceiling: int}  $right
      */
     private function compare(array $left, array $right): int
     {
-        foreach (['health', 'known'] as $key) {
+        foreach (['full', 'health', 'known'] as $key) {
             if ($left[$key] !== $right[$key]) {
                 return $left[$key] <=> $right[$key];
             }

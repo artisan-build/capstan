@@ -9,6 +9,7 @@ use App\Models\WorkOrchestratorSeat;
 use App\Models\WorkTask;
 use App\Notifications\WorkNotification;
 use ArtisanBuild\BuiltForCloud\User;
+use Illuminate\Support\Facades\DB;
 
 final readonly class DatabaseWorkNotifier implements WorkNotifier
 {
@@ -54,6 +55,22 @@ final readonly class DatabaseWorkNotifier implements WorkNotifier
         }
     }
 
+    public function preempted(WorkItem $item): void
+    {
+        $actor = $this->taskEscalationActor($item->work_task_id);
+        if ($actor !== null) {
+            $this->notify($actor, [
+                'kind' => 'item_preempted',
+                'task_id' => $item->work_task_id,
+                'item_id' => $item->id,
+                'fence' => $item->fence,
+                'escalation_actor' => $actor,
+                'state' => 'release_requested',
+            ]);
+        }
+        DB::afterCommit(fn () => $this->logger->preempted($item, $actor));
+    }
+
     public function missedHeartbeat(Spoke $spoke): void
     {
         $this->logger->missedHeartbeat($spoke);
@@ -94,7 +111,18 @@ final readonly class DatabaseWorkNotifier implements WorkNotifier
 
     private function taskEscalationActor(string $taskId): ?string
     {
-        return WorkTask::query()->find($taskId)?->effectiveEscalationActor();
+        $task = WorkTask::query()->find($taskId);
+        if (! $task instanceof WorkTask) {
+            return null;
+        }
+
+        foreach ([$task->escalation_actor, $task->owner_actor] as $actor) {
+            if (is_string($actor) && preg_match('/\A[1-9][0-9]{0,18}\z/D', $actor) === 1 && User::query()->whereKey($actor)->exists()) {
+                return $actor;
+            }
+        }
+
+        return null;
     }
 
     /** @param array<string, int|string> $data */

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Enums\WorkMilestoneKind;
 use App\Http\Controllers\Controller;
 use App\Models\WorkItem;
+use App\Work\WorkPreemptionService;
 use App\Work\WorkWorkerService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
@@ -23,13 +24,18 @@ final class WorkWorkerController extends Controller
             if ($request->routeIs('api.work.worker.brief')) {
                 $brief = $workers->brief($item, $fence);
                 if ($request->prefers(['application/json', 'text/markdown']) === 'text/markdown') {
-                    return response('# '.$brief['task']['title']."\n\nRole: ".$brief['item']['role']."\n\n".($brief['revision']['content'] ?? ''), 200, ['Content-Type' => 'text/markdown; charset=UTF-8']);
+                    $release = isset($brief['release_requested']) ? "\n\nRelease requested for P0 work. Save your branch/progress and post released before ".$brief['release_requested']['deadline'].'.' : '';
+
+                    return response('# '.$brief['task']['title']."\n\nRole: ".$brief['item']['role']."\n\n".($brief['revision']['content'] ?? '').$release, 200, ['Content-Type' => 'text/markdown; charset=UTF-8']);
                 }
 
                 return response()->json($brief);
             }
             if ($request->routeIs('api.work.worker.steers')) {
-                return response()->json(['steers' => $workers->steers($item, $fence)]);
+                return response()->json($workers->guarded($item, $fence, fn (WorkItem $claimed): array => [
+                    'steers' => $workers->steers($item, $fence),
+                    ...WorkPreemptionService::representation($claimed),
+                ]));
             }
 
             $object = json_decode($request->getContent());

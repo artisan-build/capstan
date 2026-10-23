@@ -5,6 +5,7 @@ namespace App\Work;
 use App\Enums\WorkItemState;
 use App\Machine\MachineWorkRuntime;
 use App\Models\MachineTeamWorkSetting;
+use App\Models\MachineWorkPresence;
 use App\Models\Spoke;
 use App\Models\WorkItem;
 use App\Models\WorkItemTransition;
@@ -32,6 +33,57 @@ final readonly class WorkClaimService
 
     private const int SQLITE_LOCK_ATTEMPTS = 50;
 
+    /** @param list<string> $taskIds
+     * @return list<array<string, mixed>>
+     */
+    public function preemptionPlan(WorkTask $root, array $taskIds, CarbonImmutable $now): array
+    {
+        $plan = [];
+        $opportunities = [];
+        $presences = MachineWorkPresence::query()->where('team_id', $root->team_id)->orderBy('spoke_id')->get();
+        foreach ($presences as $presence) {
+            $roles = array_values(array_diff($presence->roles, [WorkItem::ROLE_ORCHESTRATOR, WorkItem::ROLE_HUMAN]));
+            if ($roles === [] || ! $this->runtime->isFresh($presence, $now)) {
+                continue;
+            }
+            $machine = Spoke::query()->workEligible()->find($presence->spoke_id);
+            if ($machine === null) {
+                continue;
+            }
+            $setting = $this->runtime->eligibleSetting($root->team_id, $machine->actor_id, $machine->id, $roles, $presence->capabilities, $presence->role_providers, $now);
+            if ($setting === null || $this->runtime->authoritativeClaimedCount($machine->id) < $setting->concurrency_ceiling) {
+                continue;
+            }
+            $eligible = $this->candidates($root->team_id, $machine->actor_id, $machine->id, $roles, $presence->capabilities, 25, $now, $presence->role_providers, true, true, $taskIds, false, true);
+            foreach ($eligible as $candidate) {
+                if (isset($opportunities[$candidate->id]) || WorkItem::query()->where('release_for_item_id', $candidate->id)->exists()) {
+                    continue;
+                }
+                $victim = resolve(WorkPreemptionService::class)->victim($machine->id, $now, $taskIds);
+                if ($victim === null) {
+                    break;
+                }
+                $milestone = $victim->milestones()->latest('created_at')->orderByDesc('id')->first();
+                $plan[] = array_filter([
+                    'item_id' => $victim->id, 'role' => $victim->role,
+                    'machine_id' => $machine->id,
+                    'machine_name' => is_string($machine->name) && preg_match('/\A[\pL\pN ._-]{1,80}\z/uD', $machine->name) === 1 ? $machine->name : 'Machine #'.$machine->id,
+                    'owner_actor' => $victim->workTask->owner_actor,
+                    'milestone_kind' => $milestone?->kind->value,
+                    'milestone_at' => $milestone?->created_at->toISOString(),
+                    'fence' => $victim->fence,
+                    'state' => $victim->state->value,
+                    'priority' => $victim->workTask->priority->value,
+                    'opportunity_id' => $candidate->id,
+                ], fn ($value): bool => $value !== null);
+                $opportunities[$candidate->id] = true;
+                break;
+            }
+        }
+
+        return $plan;
+    }
+
     /**
      * @param  non-empty-list<string>  $roles
      * @param  list<string>  $capabilities
@@ -52,11 +104,19 @@ final readonly class WorkClaimService
         ?Closure $afterCandidates = null,
         ?Closure $afterDependencyGate = null,
     ): array {
-        if ($capacity === 0 || ! $this->activeSpokeExists($actorId, $spokeId, $teamId, $roles, $capabilities, $roleProviders, $now, $requireMachineProfile)) {
+        if (! $this->activeSpokeExists($actorId, $spokeId, $teamId, $roles, $capabilities, $roleProviders, $now, $requireMachineProfile)) {
             return [];
         }
 
         $claimed = [];
+
+        if ($requireMachineProfile) {
+            foreach ($this->candidates($teamId, $actorId, $spokeId, $roles, $capabilities, 1, $now, $roleProviders, true, true, ordinaryOnly: true, arbitrateMachine: true) as $candidate) {
+                if ($candidate->priority === 'P0' && ! in_array($candidate->role, [WorkItem::ROLE_HUMAN, WorkItem::ROLE_ORCHESTRATOR], true)) {
+                    $this->claimCandidate($candidate, $teamId, $actorId, $spokeId, $now, $leaseSeconds, $roles, $capabilities, $roleProviders, true, preemptOnly: true);
+                }
+            }
+        }
 
         while (count($claimed) < $capacity) {
             $candidates = $this->candidates(
@@ -123,6 +183,7 @@ final readonly class WorkClaimService
      * @param  non-empty-list<string>  $roles
      * @param  list<string>  $capabilities
      * @param  array<string, string>  $roleProviders
+     * @param  list<string>|null  $taskIds
      * @return list<stdClass>
      */
     private function candidates(
@@ -135,14 +196,20 @@ final readonly class WorkClaimService
         CarbonImmutable $now,
         array $roleProviders = [],
         bool $requireMachineProfile = false,
+        bool $ignoreCeiling = false,
+        ?array $taskIds = null,
+        bool $ordinaryOnly = false,
+        bool $arbitrateMachine = false,
     ): array {
         if ($requireMachineProfile) {
             $setting = $this->runtime->eligibleSetting($teamId, $actorId, $spokeId, $roles, $capabilities, $roleProviders, $now);
             if (! $setting instanceof MachineTeamWorkSetting
-                || $this->runtime->authoritativeClaimedCount($spokeId) >= $setting->concurrency_ceiling) {
+                || (! $ignoreCeiling && $this->runtime->authoritativeClaimedCount($spokeId) >= $setting->concurrency_ceiling)) {
                 return [];
             }
-            $wanted = min($wanted, $setting->concurrency_ceiling - $this->runtime->authoritativeClaimedCount($spokeId));
+            if (! $ignoreCeiling) {
+                $wanted = min($wanted, $setting->concurrency_ceiling - $this->runtime->authoritativeClaimedCount($spokeId));
+            }
         }
         $eligible = [];
         $afterPriority = null;
@@ -152,11 +219,13 @@ final readonly class WorkClaimService
             $query = DB::table('work_items')
                 ->join('work_tasks', 'work_tasks.id', '=', 'work_items.work_task_id')
                 ->where('work_tasks.team_id', $teamId)
+                ->when($taskIds !== null, fn ($query) => $query->whereIn('work_tasks.id', $taskIds))
                 ->whereNull('work_tasks.cancelled_at')
                 ->where(fn ($query) => $query->whereNull('work_tasks.expires_at')->orWhere('work_tasks.expires_at', '>', $now))
                 ->where('work_items.state', WorkItemState::Queued->value)
                 ->whereIn('work_items.role', $roles)
                 ->where('work_items.role', '!=', WorkItem::ROLE_HUMAN)
+                ->when($ordinaryOnly, fn ($query) => $query->where('work_items.role', '!=', WorkItem::ROLE_ORCHESTRATOR))
                 ->where(function ($query) use ($actorId): void {
                     $query->where('work_tasks.user_actor_address', $actorId)
                         ->orWhere(function ($query) use ($actorId): void {
@@ -226,13 +295,19 @@ final readonly class WorkClaimService
                     }
                 }
                 if ($this->hasEveryCapability($candidate->required_capabilities, $capabilities)
-                    && (! $requireMachineProfile || ! $this->isPooledUnpinned($candidate)
+                    && (! $requireMachineProfile || (! $arbitrateMachine && ! $this->isPooledUnpinned($candidate))
                         || $this->arbiter->isWinner(
                             $teamId,
                             $candidate->role,
                             $this->capabilities($candidate->required_capabilities),
                             $spokeId,
                             $now,
+                            $ignoreCeiling,
+                            $candidate->user_actor_address,
+                            $candidate->owner_actor,
+                            (bool) $candidate->routing_pool_work,
+                            $candidate->device_spoke_id === null ? null : (int) $candidate->device_spoke_id,
+                            $taskIds ?? [],
                         ))) {
                     $eligible[] = $candidate;
                 }
@@ -283,12 +358,13 @@ final readonly class WorkClaimService
         array $roleProviders = [],
         bool $requireMachineProfile = false,
         ?Closure $afterDependencyGate = null,
+        bool $preemptOnly = false,
     ): ?WorkItem {
         $attempt = 0;
 
         beginning:
         try {
-            return DB::transaction(function () use ($candidate, $teamId, $actorId, $spokeId, $now, $leaseSeconds, $roles, $capabilities, $roleProviders, $requireMachineProfile, $afterDependencyGate): ?WorkItem {
+            return DB::transaction(function () use ($candidate, $teamId, $actorId, $spokeId, $now, $leaseSeconds, $roles, $capabilities, $roleProviders, $requireMachineProfile, $afterDependencyGate, $preemptOnly): ?WorkItem {
                 if (! Spoke::query()->workEligible()->whereKey($spokeId)->where('actor_id', $actorId)->lockForUpdate()->exists()) {
                     return null;
                 }
@@ -310,16 +386,38 @@ final readonly class WorkClaimService
                     if (! $setting instanceof MachineTeamWorkSetting
                         || ! in_array($candidate->role, $roles, true)
                         || ! $this->hasEveryCapability($candidate->required_capabilities, $capabilities)
-                        || $this->runtime->authoritativeClaimedCount($spokeId) >= $setting->concurrency_ceiling
-                        || ($this->isPooledUnpinned($task) && ! $this->arbiter->isWinner(
+                        || (($preemptOnly || $this->isPooledUnpinned($task)) && ! $this->arbiter->isWinner(
                             $teamId,
                             $candidate->role,
                             $this->capabilities($candidate->required_capabilities),
                             $spokeId,
                             $now,
+                            $preemptOnly,
+                            $task->user_actor_address,
+                            $task->owner_actor,
+                            $task->routing_pool_work,
+                            $task->device_spoke_id,
                         ))) {
                         return null;
                     }
+                    if ($this->runtime->authoritativeClaimedCount($spokeId) >= $setting->concurrency_ceiling) {
+                        if (($task->user_actor_address !== null && $task->user_actor_address !== $actorId)
+                            || ($task->user_actor_address === null && ! $task->routing_pool_work && $task->owner_actor !== $actorId)
+                            || ($task->device_spoke_id !== null && $task->device_spoke_id !== $spokeId)
+                            || ! $this->hasEveryCapability($task->required_capabilities, $capabilities)) {
+                            return null;
+                        }
+                        $opportunity = WorkItem::query()->whereKey($candidate->id)->where('state', 'queued')
+                            ->where('fence', $candidate->fence)->first();
+                        if ($opportunity !== null) {
+                            resolve(WorkPreemptionService::class)->request($opportunity, $spokeId, $now);
+                        }
+
+                        return null;
+                    }
+                }
+                if ($preemptOnly) {
+                    return null;
                 }
                 $seat = null;
                 if ($candidate->role === WorkItem::ROLE_ORCHESTRATOR) {

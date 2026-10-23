@@ -29,6 +29,9 @@ final readonly class WorkToolService
     {
         return DB::transaction(function () use ($tool, $input, $actor): array {
             if ($tool === 'create_task') {
+                if (($input['priority'] ?? null) === WorkPriority::P0->value) {
+                    throw new ApiErrorException(409, 'p0_confirmation_required', 'Create the task below P0, then use set_task_priority to preview and confirm P0.');
+                }
                 if (isset($input['device_spoke_id']) && ! Spoke::query()->workEligible()
                     ->whereKey($input['device_spoke_id'])->lockForUpdate()->exists()) {
                     throw new ApiErrorException(409, 'spoke_unavailable', 'Work host is unavailable.');

@@ -22,6 +22,9 @@ use InvalidArgumentException;
  * @property CarbonImmutable|null $claimed_at
  * @property int $fence
  * @property int $attempts
+ * @property CarbonImmutable|null $release_requested_at
+ * @property CarbonImmutable|null $release_deadline
+ * @property string|null $release_for_item_id
  * @property int|null $turn_cursor
  * @property int|null $turn_upper_bound
  * @property int|null $seat_fence
@@ -72,6 +75,9 @@ class WorkItem extends Model
         'claimed_at',
         'fence',
         'attempts',
+        'release_requested_at',
+        'release_deadline',
+        'release_for_item_id',
         'turn_cursor',
         'turn_upper_bound',
         'seat_fence',
@@ -93,6 +99,8 @@ class WorkItem extends Model
             'claimed_at' => 'datetime',
             'fence' => 'integer',
             'attempts' => 'integer',
+            'release_requested_at' => 'datetime',
+            'release_deadline' => 'datetime',
             'turn_cursor' => 'integer',
             'turn_upper_bound' => 'integer',
             'seat_fence' => 'integer',

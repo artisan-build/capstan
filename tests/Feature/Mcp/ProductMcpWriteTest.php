@@ -152,6 +152,7 @@ test('mounts the complete write family behind the write ceiling', function (): v
             'release_seat',
             'revise_brief',
             'send_postmaster_message',
+            'set_task_priority',
             'set_team_work_policy',
             'steer',
             'take_seat',

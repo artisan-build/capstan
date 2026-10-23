@@ -4,6 +4,7 @@ use App\Models\WorkItem;
 use App\Models\WorkTask;
 use App\Work\WorkClaimService;
 use App\Work\WorkOrchestrationService;
+use App\Work\WorkPreemptionService;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Support\Facades\DB;
@@ -67,7 +68,10 @@ try {
         resolve(WorkOrchestrationService::class)->event($parent, 'process-'.$worker, 'race_fact');
     }
 
-    if ($mode === 'unsafe') {
+    if ($mode === 'preemption-timeout') {
+        resolve(WorkPreemptionService::class)->sweep($now->addSeconds(60));
+        $ids = [];
+    } elseif ($mode === 'unsafe') {
         $unsafe->writeWithoutGuard($selected, (int) $spokeId, $actorId, $now);
         $ids = $selected;
     } else {

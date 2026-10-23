@@ -28,6 +28,7 @@ use App\Mcp\Tools\ReassignTaskTool;
 use App\Mcp\Tools\ReleaseSeatTool;
 use App\Mcp\Tools\ReviseBriefTool;
 use App\Mcp\Tools\SendPostmasterMessageTool;
+use App\Mcp\Tools\SetTaskPriorityTool;
 use App\Mcp\Tools\SetTeamWorkPolicyTool;
 use App\Mcp\Tools\SteerTool;
 use App\Mcp\Tools\TakeSeatTool;
@@ -436,6 +437,7 @@ test('the delegated enforcement harness reaches every tool through the canonical
         PublishPageTool::class => ['idempotency_key' => 'all-tools-publish-page', 'title' => 'Delegated page', 'recipe' => 'Rebuild from the delegated test.', 'layout' => 'report', 'content' => '<p>Delegated page</p>', 'content_type' => 'text/html'],
         QueueItemTool::class => ['team_id' => $team->id, 'task_id' => $uuid, 'role' => 'builder', 'idempotency_key' => 'all-tools-queue'],
         ReassignTaskTool::class => ['team_id' => $team->id, 'task_id' => $reassignmentTask['task']['id'], 'to_actor' => (string) $secondary->getKey(), 'mode' => 'escalations', 'idempotency_key' => 'all-tools-reassign'],
+        SetTaskPriorityTool::class => ['team_id' => $team->id, 'task_id' => $reassignmentTask['task']['id'], 'priority' => 'P1', 'idempotency_key' => 'all-tools-priority'],
         ReleaseSeatTool::class => ['team_id' => $team->id, 'task_id' => $uuid, 'seat_fence' => 1, 'idempotency_key' => 'all-tools-release'],
         ReviseBriefTool::class => ['team_id' => $team->id, 'task_id' => $uuid, 'brief' => 'Revised.', 'idempotency_key' => 'all-tools-revise'],
         SendPostmasterMessageTool::class => ['idempotency_key' => 'all-tools-send', 'from' => 'relay@'.$server, 'to' => 'receiver@'.$server, 'type' => 'generic', 'version' => Envelope::CURRENT_VERSION, 'message_id' => 'all-tools-message', 'body' => ['subject' => 'Delegated']],
@@ -457,6 +459,7 @@ test('the delegated enforcement harness reaches every tool through the canonical
         SteerTool::class,
         CancelTaskTool::class,
         ReassignTaskTool::class,
+        SetTaskPriorityTool::class,
         GetTeamWorkPolicyTool::class,
         SetTeamWorkPolicyTool::class,
         TakeSeatTool::class,
@@ -618,7 +621,7 @@ test('the delegated enforcement harness reaches every tool through the canonical
     $delegated = $report->families['mcp_delegated'];
 
     expect($delegated->applicability)->toBe('applicable')
-        ->and($delegated->visited)->toBe(32)
+        ->and($delegated->visited)->toBe(count($expected))
         ->and($delegated->expected)->toBe($sortedExpected)
         ->and($delegated->discovered)->toBe($sortedExpected)
         ->and($delegated->violations)->toBe([]);

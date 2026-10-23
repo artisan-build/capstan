@@ -84,6 +84,41 @@ Claims take the highest eligible priority first, then use the UUIDv7 item id as 
 An owner can have only one uncancelled `P0` root. An orchestrator can lower its root's priority but cannot
 raise it; the lower priority is applied to the existing descendants as well.
 
+Use `set_task_priority` to change a root's priority. It takes `team_id`, `task_id`, `priority`, and an
+`idempotency_key`. The root owner may call it as a Member; a same-team Owner or Admin may also call it.
+Children inherit the change. Creating a root directly at `P0` is refused.
+
+For `P0`, first call without `confirmation_token` or `reason`. The response has `confirmation_status:
+required`, a deterministic token, and an ordered `preemptions` inventory. Each entry identifies the item,
+role, machine, work owner, and latest milestone kind and time when present. Preview does not change tasks
+or request releases. It uses fresh machine runtime profiles; machines without a fresh presence are absent.
+
+Confirm with a fresh idempotency key, that token, and a reason of 1–2,000 characters without credentials or
+URLs. If the plan changed, the response refuses the change and supplies the current inventory and token.
+An accepted change records the reason as an orchestration decision linked to a priority-change event and
+wakes the root orchestrator. Retrying the same confirmation key replays its result without another decision.
+
+When an eligible ordinary `P0` item encounters a full machine, Capstan requests one ordinary worker's
+release. It selects `P3` before `P2` before `P1`, then `claimed` before `delivered` before `routed`, then
+the lowest UUIDv7 item id. Human, orchestrator, P0, lease-dead, and already-requested claims are excluded.
+If the item fits more than one machine, the normal deterministic machine rank chooses one before Capstan
+plans or requests a release. A machine with free capacity wins over one that would require preemption.
+Repeated full-machine polls wait for the outstanding release instead of requesting more victims.
+The capacity-zero poll sent by a full reference drain still performs this release check; it never claims
+another item while the machine is full.
+
+Brief and steer JSON responses include `release_requested` only while a request is live, with its request
+time, deadline, and reason. Markdown briefs also show the request. Save branch/progress through the existing
+`released` milestone. The worker returns to its own task's queue at its own priority, with its milestone
+handoff intact. The existing drain transition `released` also clears the request. The P0 item cannot claim
+the slot until it is free.
+
+The default grace is 60 seconds, configurable through `capstan.work.preemption_grace_seconds` (bounded to
+1–3,600 seconds). The liveness sweep requeues silent victims, increments their fence immediately, and clears
+their claim and release state. Old writes and renewals then fail. Preemption stores one bounded database
+notification for the victim root's effective escalation actor and writes the existing Work log channel.
+The notification and release request commit together.
+
 `depends_on` is a list of task ids. Each dependency must exist in the same team and cannot be the task
 itself, one of its descendants, or an edge that closes a cycle. A dependent item stays queued until every
 dependency is successful. Success means the dependency is not cancelled, has at least one item, and every
