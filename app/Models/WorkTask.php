@@ -127,8 +127,13 @@ class WorkTask extends Model
             $task->owner_actor = $root->owner_actor;
             $task->escalation_actor = $root->escalation_actor;
             $task->priority = $root->priority;
-            $task->workflow_ref = $root->workflow_ref;
-            $task->workflow_sha = $root->workflow_sha;
+            if ($root->workflow_ref !== null && $root->workflow_sha !== null) {
+                $task->workflow_ref = $root->workflow_ref;
+                $task->workflow_sha = $root->workflow_sha;
+            }
+            if ($task->workflow_ref === null && $task->workflow_sha !== null) {
+                throw new \LogicException('A child workflow SHA requires a workflow reference.');
+            }
         });
     }
 

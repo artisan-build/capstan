@@ -262,6 +262,55 @@ test('create_task accepts numeric PR strings and returns integers on accepted an
         ->and(WorkTask::query()->findOrFail($first['task']['id'])->pr['number'])->toBeInt()->toBe(124);
 });
 
+test('create_task preserves explicit child pins only when the root is unpinned', function (): void {
+    $user = capstanUser(['role' => 'owner']);
+    $token = workMcpToken($user);
+    $team = workMcpTeam();
+    $explicitSha = str_repeat('b', 40);
+    $rootSha = str_repeat('c', 40);
+
+    $unpinnedRoot = workMcpCreate($team, $token, ['idempotency_key' => 'unpinned-workflow-root'])['task'];
+    $explicitChild = workMcpCreate($team, $token, [
+        'idempotency_key' => 'explicit-workflow-child',
+        'parent_task_id' => $unpinnedRoot['id'],
+        'workflow_ref' => 'child/workflows:review.yml',
+        'workflow_sha' => $explicitSha,
+    ])['task'];
+
+    $pinnedRoot = workMcpCreate($team, $token, [
+        'idempotency_key' => 'pinned-workflow-root',
+        'workflow_ref' => 'root/workflows:workflow.yml',
+        'workflow_sha' => $rootSha,
+    ])['task'];
+    $conflictingChild = workMcpCreate($team, $token, [
+        'idempotency_key' => 'conflicting-workflow-child',
+        'parent_task_id' => $pinnedRoot['id'],
+        'workflow_ref' => 'child/workflows:conflict.yml',
+        'workflow_sha' => str_repeat('d', 40),
+    ])['task'];
+
+    expect($explicitChild['workflow_ref'])->toBe('child/workflows:review.yml')
+        ->and($explicitChild['workflow_sha'])->toBe($explicitSha)
+        ->and($conflictingChild['workflow_ref'])->toBe($pinnedRoot['workflow_ref'])
+        ->and($conflictingChild['workflow_sha'])->toBe($rootSha);
+
+    $beforePartialPins = WorkTask::query()->count();
+    foreach ([
+        ['workflow_ref' => 'child/workflows:partial.yml'],
+        ['workflow_sha' => $explicitSha],
+    ] as $index => $partialPin) {
+        workMcpCall('create_task', [
+            'team_id' => $team->id,
+            'idempotency_key' => 'partial-workflow-child-'.$index,
+            'parent_task_id' => $unpinnedRoot['id'],
+            'title' => 'Partial workflow child',
+            'brief' => 'Partial workflow child brief',
+            ...$partialPin,
+        ], $token)->assertOk()->assertJsonPath('result.isError', true);
+    }
+    expect(WorkTask::query()->count())->toBe($beforePartialPins);
+});
+
 test('kickoff pins the latest Page version and atomically queues one orchestrator item', function (): void {
     Storage::fake();
     $user = capstanUser(['role' => 'owner']);
