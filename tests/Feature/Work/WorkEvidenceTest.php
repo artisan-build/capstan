@@ -303,20 +303,18 @@ test('database-cache reservations admit only one interleaved caller and undo the
     $key = 'work-evidence:'.hash('sha256', $actor);
 
     try {
-        $callers = array_map(function () use ($connection, $key, $actor): Fiber {
-            return new Fiber(function () use ($connection, $key, $actor): string {
-                $store = new InterleavedEvidenceDatabaseStore($connection, $key);
-                RateLimiter::swap(new ConcreteRateLimiter(new Repository($store)));
+        $callers = array_map(fn (): Fiber => new Fiber(function () use ($connection, $key, $actor): string {
+            $store = new InterleavedEvidenceDatabaseStore($connection, $key);
+            RateLimiter::swap(new ConcreteRateLimiter(new Repository($store)));
 
-                try {
-                    resolve(WorkEvidenceService::class)->throttle($actor);
+            try {
+                resolve(WorkEvidenceService::class)->throttle($actor);
 
-                    return 'accepted';
-                } catch (ApiErrorException $exception) {
-                    return $exception->errorCode;
-                }
-            });
-        }, [0, 1]);
+                return 'accepted';
+            } catch (ApiErrorException $exception) {
+                return $exception->errorCode;
+            }
+        }), [0, 1]);
 
         foreach ($callers as $caller) {
             expect($caller->start())->toBe('counter-read');

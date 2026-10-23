@@ -18,6 +18,7 @@ final class WorkEvidenceAttemptLog
 
     /**
      * @template T
+     *
      * @param  Closure(): T  $operation
      * @return T
      */
