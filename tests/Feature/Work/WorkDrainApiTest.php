@@ -202,13 +202,11 @@ test('missed receipts replay one pending directive advance in order and escalate
         'launch_nonce' => $nonce, 'session_ref' => 'solo:missed-receipt',
     ])->assertOk();
 
-    $poll = function (array $held) use ($issued, $team) {
-        return $this->withHeaders($issued['headers'])->postJson(route('api.work.claim', $team), [
-            ...workDrainClaimPayload(0),
-            'orchestrator_capacity' => 0,
-            'held_items' => [$held],
-        ])->assertOk();
-    };
+    $poll = (fn (array $held) => $this->withHeaders($issued['headers'])->postJson(route('api.work.claim', $team), [
+        ...workDrainClaimPayload(0),
+        'orchestrator_capacity' => 0,
+        'held_items' => [$held],
+    ])->assertOk());
     $held = ['item_id' => $item->id, 'fence' => 1];
 
     Date::setTestNow(now()->addSeconds(181));
