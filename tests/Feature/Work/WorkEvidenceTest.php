@@ -374,7 +374,7 @@ test('a successful rate reservation remains consumed when later evidence storage
 test('nonce rotation after evidence rate reservation prevents storage', function (): void {
     [$item, $url] = evidenceWorkerItem();
     $limiter = new RotatingEvidenceRateLimiter(
-        app('cache')->store(),
+        resolve('cache')->store(),
         fn () => $item->update(['launch_nonce' => (string) Str::uuid7()]),
     );
     RateLimiter::clearResolvedInstance(ConcreteRateLimiter::class);
