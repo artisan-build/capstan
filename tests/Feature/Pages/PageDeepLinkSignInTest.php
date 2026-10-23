@@ -204,3 +204,142 @@ test('a page deep link handoff completed by a different browser is refused', fun
 
     $this->get($url)->assertRedirect(route('bfc.managed.login', ['intended' => $url]));
 });
+
+test('a signed out page library link comes back to the library once managed sign in completes', function (): void {
+    $owner = deepLinkMember();
+    $page = deepLinkPage($owner, 'Library deep link page '.Str::random(8));
+    $url = route('pages.index', absolute: false);
+    fakeScalpelsHandoff($owner);
+    $lookups = [];
+    DB::listen(function ($query) use (&$lookups): void {
+        if (preg_match('/from ["`]?page(?:s|_versions|_shares)["`]?/', $query->sql) === 1) {
+            $lookups[] = $query->sql;
+        }
+    });
+
+    $this->get($url)
+        ->assertRedirect(route('bfc.managed.login', ['intended' => $url]))
+        ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
+
+    expect($lookups)->toBe([]);
+
+    $handoff = $this->get(route('bfc.managed.login', ['intended' => $url]));
+    $handoff->assertRedirectContains(deepLinkIssuer().ManagedAuthClient::AUTHORIZE_PATH)
+        ->assertSessionHas(ManagedHandoff::SESSION_INTENDED_KEY, $url);
+
+    $this->get(route('bfc.managed.callback', [
+        'state' => deepLinkAuthorizationState((string) $handoff->headers->get('Location')),
+        'code' => 'deep-link-code',
+    ]))->assertRedirect($url);
+
+    $this->get($url)
+        ->assertOk()
+        ->assertSee($page->title);
+});
+
+test('a signed out page export link comes back to that same export once managed sign in completes', function (): void {
+    $owner = deepLinkMember();
+    $page = deepLinkPage($owner, 'Export deep link page '.Str::random(8));
+    $url = route('pages.export', ['page' => $page], absolute: false);
+    fakeScalpelsHandoff($owner);
+    $lookups = [];
+    DB::listen(function ($query) use (&$lookups): void {
+        if (preg_match('/from ["`]?page(?:s|_versions|_shares)["`]?/', $query->sql) === 1) {
+            $lookups[] = $query->sql;
+        }
+    });
+
+    // The export's sign-in offer is the same whatever page id was asked for,
+    // and it is made before the id is even validated.
+    foreach ([
+        (string) $page->id,
+        (string) Str::uuid(),
+        'not-a-uuid',
+    ] as $candidate) {
+        $path = '/pages/'.$candidate.'/export';
+
+        $this->get($path)
+            ->assertRedirect(route('bfc.managed.login', ['intended' => $path]))
+            ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
+    }
+
+    expect($lookups)->toBe([]);
+
+    $handoff = $this->get(route('bfc.managed.login', ['intended' => $url]));
+    $handoff->assertRedirectContains(deepLinkIssuer().ManagedAuthClient::AUTHORIZE_PATH)
+        ->assertSessionHas(ManagedHandoff::SESSION_INTENDED_KEY, $url);
+
+    $this->get(route('bfc.managed.callback', [
+        'state' => deepLinkAuthorizationState((string) $handoff->headers->get('Location')),
+        'code' => 'deep-link-code',
+    ]))->assertRedirect($url);
+
+    $this->get($url)
+        ->assertOk()
+        ->assertHeader('Content-Disposition', 'attachment; filename="page-'.$page->id.'.html"');
+});
+
+test('a signed out export link still refuses a signed in reader who does not own the page', function (): void {
+    $owner = deepLinkMember();
+    $stranger = deepLinkMember(['role' => UserRole::Member->value, 'managed_membership_role' => UserRole::Member->value]);
+    $page = deepLinkPage($owner, 'Unowned export page '.Str::random(8));
+    $url = route('pages.export', ['page' => $page], absolute: false);
+    fakeScalpelsHandoff($stranger);
+
+    $handoff = $this->get($url)->assertRedirect(route('bfc.managed.login', ['intended' => $url]));
+    $handoff = $this->get((string) $handoff->headers->get('Location'));
+
+    $this->get(route('bfc.managed.callback', [
+        'state' => deepLinkAuthorizationState((string) $handoff->headers->get('Location')),
+        'code' => 'deep-link-code',
+    ]))->assertRedirect($url);
+
+    // Still the identical empty 404 for every id, now that somebody is signed in.
+    foreach ([
+        $url,
+        '/pages/'.Str::uuid().'/export',
+        '/pages/not-a-uuid/export',
+    ] as $path) {
+        $refused = $this->get($path)->assertNotFound();
+
+        expect($refused->getContent())->toBe('')
+            ->and($refused->getContent())->not->toContain($page->title);
+    }
+});
+
+test('a managed session the authority no longer admits is sent to sign in rather than refused', function (): void {
+    $owner = deepLinkMember();
+    $page = deepLinkPage($owner, 'Unadmitted session page '.Str::random(8));
+
+    // The authority binds a session to one Scalpels connection. A member whose
+    // binding no longer matches is not an authenticated human here, so the gate
+    // ends the session and asks for sign-in — and that answer now reaches the
+    // browser instead of collapsing into a not-found.
+    $unbound = deepLinkMember([
+        'role' => UserRole::Member->value,
+        'managed_membership_role' => UserRole::Member->value,
+        'scalpels_connection_id' => 'some-other-connection',
+    ]);
+    $version = $page->latestVersion()->firstOrFail();
+    $lookups = [];
+    DB::listen(function ($query) use (&$lookups): void {
+        if (preg_match('/from ["`]?page(?:s|_versions|_shares)["`]?/', $query->sql) === 1) {
+            $lookups[] = $query->sql;
+        }
+    });
+
+    foreach ([
+        route('pages.show', ['page' => $page], absolute: false),
+        route('pages.versions.show', ['page' => $page, 'version' => $version], absolute: false),
+        route('pages.index', absolute: false),
+        route('pages.export', ['page' => $page], absolute: false),
+    ] as $path) {
+        $response = $this->actingAsVersioned($unbound)->get($path)
+            ->assertRedirect(route('bfc.managed.login', ['intended' => $path]))
+            ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
+
+        expect($response->getContent())->not->toContain($page->title);
+    }
+
+    expect($lookups)->toBe([]);
+});

@@ -22,7 +22,7 @@ class PageController extends Controller
 {
     public function __construct(private readonly HumanPageAccess $access) {}
 
-    public function index(Request $request, ArtifactRenderOrigin $origin): Response
+    public function index(Request $request, ArtifactRenderOrigin $origin): RedirectResponse|Response
     {
         if (! Feature::active(Artifacts::class)
             || ! $origin->isConfigured()
@@ -30,7 +30,16 @@ class PageController extends Controller
             return $this->pageNotFound();
         }
 
-        $user = $this->access->admittedUser($request);
+        $admission = $this->access->admit($request);
+
+        // The library is in the app nav, so a visitor with no session goes to
+        // sign-in carrying this URL and the completed handoff returns them
+        // here. The redirect is issued before any page is looked up.
+        if ($admission instanceof RedirectResponse) {
+            return $admission;
+        }
+
+        $user = $admission;
 
         if ($user === null) {
             return $this->pageNotFound();

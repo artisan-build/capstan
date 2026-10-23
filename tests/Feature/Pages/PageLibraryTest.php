@@ -220,29 +220,37 @@ test('library admission failures are opaque and happen before page share or vers
         }
     });
 
-    $responses = [];
-    $responses[] = $this->get(route('pages.index'));
+    // A browser with no authenticated human behind it is sent into sign-in so
+    // the completed handoff can bring it back to the library; a JSON caller
+    // keeps the opaque not-found. Both answers precede every private query.
+    $signInResponses = [];
+    $signInResponses[] = $this->get(route('pages.index'));
+    $signInResponses[] = $this->actingAs($stale)
+        ->withSession([StandaloneAccess::SESSION_VERSION_KEY => $stale->auth_session_version + 1])
+        ->get(route('pages.index'));
+
+    foreach ($signInResponses as $response) {
+        $response->assertRedirect(route('bfc.login'))
+            ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
+        expect($response->getContent())->not->toContain($privatePage->title);
+    }
+
+    $refusedResponses = [];
+    $refusedResponses[] = $this->get(route('pages.index'), ['Accept' => 'application/json']);
 
     config(['capstan.artifacts.render_origin' => null]);
     Feature::flushCache();
-    $responses[] = $this->actingAsVersioned($healthy)->get(route('pages.index'));
-
-    config([
-        'capstan.artifacts.render_origin' => null,
-    ]);
-    Feature::flushCache();
-    $responses[] = $this->actingAsVersioned($healthy)->get(route('pages.index'));
+    $refusedResponses[] = $this->actingAsVersioned($healthy)->get(route('pages.index'));
+    $refusedResponses[] = $this->get(route('pages.index'));
 
     config(['capstan.artifacts.render_origin' => 'https://render.library.test']);
     Feature::flushCache();
-    $responses[] = $this->actingAs($stale)
-        ->withSession([StandaloneAccess::SESSION_VERSION_KEY => $stale->auth_session_version + 1])
-        ->get(route('pages.index'));
-    $responses[] = $this->actingAsVersioned($inactive)->get(route('pages.index'));
-    $responses[] = $this->actingAsVersioned($offboarded)->get(route('pages.index'));
-    $responses[] = $this->actingAsVersioned($healthy)->get('https://render.library.test/pages');
+    $refusedResponses[] = $this->actingAsVersioned($inactive)->get(route('pages.index'));
+    $refusedResponses[] = $this->actingAsVersioned($offboarded)->get(route('pages.index'));
+    $refusedResponses[] = $this->actingAsVersioned($healthy)->get('https://render.library.test/pages');
+    $refusedResponses[] = $this->get('https://render.library.test/pages');
 
-    foreach ($responses as $response) {
+    foreach ($refusedResponses as $response) {
         $response->assertNotFound()
             ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
         expect($response->getContent())->toBe('')->not->toContain($privatePage->title);
