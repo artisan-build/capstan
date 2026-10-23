@@ -20,6 +20,11 @@ use InvalidArgumentException;
  * @property string|null $claimant_actor
  * @property CarbonImmutable|null $lease_until
  * @property CarbonImmutable|null $claimed_at
+ * @property CarbonImmutable|null $handed_off_at
+ * @property string|null $handed_off_session_ref
+ * @property string|null $launch_nonce
+ * @property CarbonImmutable|null $first_fetched_at
+ * @property string|null $agent_model
  * @property int $fence
  * @property int $attempts
  * @property CarbonImmutable|null $release_requested_at
@@ -30,6 +35,7 @@ use InvalidArgumentException;
  * @property int|null $seat_fence
  * @property string|null $addressed_actor
  * @property string|null $fetched_brief_revision_id
+ * @property string|null $fetched_page_version_id
  * @property string|null $last_progress
  * @property CarbonImmutable|null $stalled_at
  * @property CarbonImmutable|null $waiting_on_host_at
@@ -42,6 +48,7 @@ use InvalidArgumentException;
  * @property-read Collection<int, WorkItemTransition> $transitions
  * @property-read Collection<int, WorkMilestone> $milestones
  * @property-read Collection<int, WorkEvidence> $evidence
+ * @property-read Collection<int, WorkDirective> $directives
  *
  * @mixin IdeHelperWorkItem
  */
@@ -74,6 +81,11 @@ class WorkItem extends Model
         'claimant_actor',
         'lease_until',
         'claimed_at',
+        'handed_off_at',
+        'handed_off_session_ref',
+        'launch_nonce',
+        'first_fetched_at',
+        'agent_model',
         'fence',
         'attempts',
         'release_requested_at',
@@ -84,6 +96,7 @@ class WorkItem extends Model
         'seat_fence',
         'addressed_actor',
         'fetched_brief_revision_id',
+        'fetched_page_version_id',
         'last_progress',
         'stalled_at',
         'waiting_on_host_at',
@@ -98,6 +111,8 @@ class WorkItem extends Model
             'claimant_spoke_id' => 'integer',
             'lease_until' => 'datetime',
             'claimed_at' => 'datetime',
+            'handed_off_at' => 'immutable_datetime',
+            'first_fetched_at' => 'immutable_datetime',
             'fence' => 'integer',
             'attempts' => 'integer',
             'release_requested_at' => 'datetime',
@@ -154,5 +169,11 @@ class WorkItem extends Model
     public function evidence(): HasMany
     {
         return $this->hasMany(WorkEvidence::class);
+    }
+
+    /** @return HasMany<WorkDirective, $this> */
+    public function directives(): HasMany
+    {
+        return $this->hasMany(WorkDirective::class)->orderBy('sequence');
     }
 }

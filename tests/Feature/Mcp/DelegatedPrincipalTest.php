@@ -13,6 +13,7 @@ use App\Mcp\Tools\GetBrandKitTool;
 use App\Mcp\Tools\GetPageTool;
 use App\Mcp\Tools\GetTaskTool;
 use App\Mcp\Tools\GetTeamWorkPolicyTool;
+use App\Mcp\Tools\KickoffTool;
 use App\Mcp\Tools\ListEscalationsTool;
 use App\Mcp\Tools\ListLayoutsTool;
 use App\Mcp\Tools\ListPagesTool;
@@ -428,6 +429,7 @@ test('the delegated enforcement harness reaches every tool through the canonical
         GetPageTool::class => ['page_id' => $uuid],
         GetTaskTool::class => ['team_id' => $team->id, 'task_id' => $uuid],
         GetTeamWorkPolicyTool::class => ['team_id' => $team->id],
+        KickoffTool::class => ['team_id' => $team->id, 'page_id' => $uuid, 'title' => 'Delegated kickoff', 'idempotency_key' => 'all-tools-kickoff'],
         ListEscalationsTool::class => ['team_id' => $team->id],
         ListLayoutsTool::class => [],
         ListPagesTool::class => [],
@@ -465,6 +467,7 @@ test('the delegated enforcement harness reaches every tool through the canonical
         ReassignTaskTool::class,
         SetTaskPriorityTool::class,
         GetTeamWorkPolicyTool::class,
+        KickoffTool::class,
         SetTeamWorkPolicyTool::class,
         TakeSeatTool::class,
         ReleaseSeatTool::class,

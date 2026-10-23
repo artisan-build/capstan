@@ -2,6 +2,7 @@
 
 namespace App\Work;
 
+use App\Casts\WorkPullRequest;
 use App\Enums\WorkItemState;
 use App\Enums\WorkPriority;
 use App\Http\ApiErrorException;
@@ -68,6 +69,7 @@ final readonly class WorkOrchestrationSurface
             )),
             'set_priority' => $this->created($action, $this->capability->setPriority($context, $input['priority'], $now)),
             'set_pr' => $this->created($action, $this->capability->setPullRequest($context, $input['task_id'], $input['pr'], $now)),
+            'repin_workflow' => $this->created($action, $this->capability->repinWorkflow($context, $input['workflow_ref'], $input['workflow_sha'], $now)),
             'revise_brief' => $this->created($action, $this->capability->reviseBrief($context, $input['task_id'], $input['brief'], $now)),
             'queue_item' => $this->queued($action, $this->capability->queue($context, $input['task_id'], $input['role'], $now)),
             'cancel_item' => $this->created($action, $this->capability->cancelItem($context, $input['item_id'], $now)),
@@ -89,6 +91,7 @@ final readonly class WorkOrchestrationSurface
             'create_child' => ['under_task_id', 'title', 'brief', 'user_actor_address', 'device_spoke_id', 'failover', 'required_capabilities', 'timebox_minutes', 'workflow_ref', 'owner_actor', 'priority', 'depends_on', 'expires_at', 'pr'],
             'set_priority' => ['priority'],
             'set_pr' => ['task_id', 'pr'],
+            'repin_workflow' => ['workflow_ref', 'workflow_sha'],
             'revise_brief' => ['task_id', 'brief'],
             'queue_item' => ['task_id', 'role'],
             'cancel_item' => ['item_id'],
@@ -125,6 +128,10 @@ final readonly class WorkOrchestrationSurface
                 'pr.number' => ['required', 'integer', 'min:1'],
                 'pr.url' => ['required', 'string', 'max:2048', 'url:https'],
             ],
+            'repin_workflow' => [
+                'workflow_ref' => ['required', 'string', 'min:1', 'max:2048'],
+                'workflow_sha' => ['required', 'string', 'regex:/\A[a-f0-9]{40}\z/D'],
+            ],
             'revise_brief' => ['task_id' => ['required', 'uuid'], 'brief' => ['required', 'string', 'min:1', 'max:32000']],
             'queue_item' => ['task_id' => ['required', 'uuid'], 'role' => ['required', 'string', 'min:1', 'max:64', Rule::notIn([WorkItem::ROLE_HUMAN, WorkItem::ROLE_ORCHESTRATOR])]],
             'cancel_item' => ['item_id' => ['required', 'uuid']],
@@ -146,6 +153,9 @@ final readonly class WorkOrchestrationSurface
             }
         }
         $validated = $validator->validated();
+        if (isset($validated['pr'])) {
+            $validated['pr'] = WorkPullRequest::normalize($validated['pr']);
+        }
         if ($action === 'create_child') {
             if (isset($validated['device_spoke_id']) && ! array_key_exists('failover', $input)) {
                 throw $this->invalid();

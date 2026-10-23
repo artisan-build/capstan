@@ -200,17 +200,17 @@ test('claim requires the exact configured active machine and atomically records 
     test()->withHeaders([
         'Authorization' => 'Bearer '.$foreign['token'],
         CapstanCredentialDeclaration::ACTOR_HEADER => (string) $machine['user']->id,
-    ])->postJson(route('api.work.claim', $machine['team']), routingPayload())->assertOk()->assertExactJson(['items' => []]);
+    ])->postJson(route('api.work.claim', $machine['team']), routingPayload())->assertOk()->assertExactJson(['items' => [], 'directives' => []]);
 
     $machine['setting']->update(['enabled' => false]);
-    routingClaim($machine)->assertOk()->assertExactJson(['items' => []]);
+    routingClaim($machine)->assertOk()->assertExactJson(['items' => [], 'directives' => []]);
 });
 
 test('a pending machine that has never polled cannot claim or create presence', function (): void {
     $machine = routingMachine(spoke: ['last_polled_at' => null]);
     $item = routingItem($machine['team']);
 
-    routingClaim($machine)->assertOk()->assertExactJson(['items' => []]);
+    routingClaim($machine)->assertOk()->assertExactJson(['items' => [], 'directives' => []]);
     expect($item->fresh()->state->value)->toBe('queued')
         ->and(MachineWorkPresence::query()->count())->toBe(0);
 });
@@ -223,7 +223,7 @@ test('authoritative claims enforce concurrency even when the machine reports zer
     routingClaim($machine, ['capacity' => 25, 'current_claimed_item_count' => 0])
         ->assertOk()->assertJsonPath('items.0.id', $first->id)->assertJsonCount(1, 'items');
     routingClaim($machine, ['capacity' => 25, 'current_claimed_item_count' => 0])
-        ->assertOk()->assertExactJson(['items' => []]);
+        ->assertOk()->assertExactJson(['items' => [], 'directives' => []]);
     expect($second->fresh()->state->value)->toBe('queued')
         ->and(MachineWorkPresence::query()->sole()->current_claimed_item_count)->toBe(1);
 });
@@ -236,7 +236,7 @@ test('a preferred capacity zero machine cannot starve a capacity positive machin
     $item = routingItem($team);
 
     routingClaim($preferred, ['capacity' => 0, 'current_claimed_item_count' => 0])
-        ->assertOk()->assertExactJson(['items' => []]);
+        ->assertOk()->assertExactJson(['items' => [], 'directives' => []]);
     routingClaim($available, ['capacity' => 1, 'current_claimed_item_count' => 25])
         ->assertOk()->assertJsonPath('items.0.id', $item->id)->assertJsonCount(1, 'items');
 

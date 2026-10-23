@@ -146,6 +146,24 @@ Each change adds a row to `team_work_policy_changes` with the team, the actor id
 it, where it came from (`web` for the page, `mcp` for the tool), the old and new values, and the time.
 Setting the value a team already has adds no row, and the MCP response reports `changed` as `false`.
 
+## Starting work from a Page
+
+`create_task` accepts either an inline `brief` or a `page_id`, never both. A Page brief is resolved to the
+latest Page version inside the task-creation transaction. Capstan records the Page and version ids and copies
+that version's content into the first Work brief revision. Publishing another Page version does not change an
+existing task. The caller must own the Page or hold an active internal share.
+
+`create_task` also accepts `parent_task_id`, `depends_on`, `priority`, `owner_actor`, `workflow_ref`, and
+`workflow_sha`. A child inherits the root owner, priority, workflow reference, and workflow SHA. The workflow
+reference and SHA must be supplied together; the SHA is a lowercase 40-character Git commit id. Capstan
+stores the pin and never fetches or interprets the workflow repository.
+
+`kickoff` takes a team, Page, title, optional priority, and optional workflow pin. In one idempotent database
+write it creates the root task from the pinned Page version and queues one orchestrator item. A failed Page
+lookup leaves neither record behind. An orchestrator can explicitly use `repin_workflow` to replace the root
+pin. The new pin is copied to existing descendants, and one `workflow_repinned` event records the old and new
+reference and SHA. Repeating the same pin does not add another event.
+
 ## Configuration
 
 The drain reads one local JSON file. It does not require environment variables. Start from one of the
@@ -250,7 +268,42 @@ workers for the same item collide instead of quietly creating parallel pull requ
 The `pr_opened` payload includes a `pr` object with exactly `repo`, `number`, and an HTTPS `url`. The first
 accepted value becomes the task's PR metadata. A worker can replay that value but cannot replace it. An
 orchestrator can use `set_pr` when the task needs a corrected or replacement PR; Capstan records that change
-and wakes the next turn.
+and wakes the next turn. Numeric strings are accepted for compatibility at each PR metadata ingress, but
+Capstan stores and returns `number` as an integer.
+
+### Launch receipts and repair directives
+
+Each claim has one `launch_nonce`. Every signed worker link for that claim carries the same nonce. A Solo-aware
+launcher sends the nonce and its opaque `session_ref` with the `delivered` transition. Capstan records those
+values and `handed_off_at` without adding another item state, so the existing
+`claimed → delivered → routed` transition contract remains valid. The legacy Python drain may continue to send
+`delivered` without launch metadata.
+
+The first brief request with the claim's nonce records `first_fetched_at`, the exact brief revision and Page
+version served, and the optional agent-reported `model` query value. A signed request carrying another nonce
+fails without creating a receipt. Page-backed tasks serve the immutable Work brief copied from the Page
+version selected at creation.
+
+The ordinary receipt deadline is 180 seconds. Orchestrator turns use a 60-second deadline. A machine may
+override these values through application configuration. After a missed deadline, the next machine tick
+returns one pending directive in this order: `send_enter`, `resend_pointer`, then `respawn`. The respawn
+directive carries a new nonce and fresh signed links. A pending directive is replayed unchanged until its
+outcome is recorded or a matching brief fetch proves it succeeded. The next repair cannot be issued until
+another deadline has elapsed. Exhausting the sequence creates one owner-addressed escalation for that item,
+fence, and failure reason.
+
+Running items marked stalled use the same directive records and outcome rules. Directives are durable rows,
+separate from item transitions. Their item, fence, machine, sequence, reason, payload, status, timestamps, and
+bounded outcome make poll replay idempotent and keep policy on the server.
+
+The extended claim request accepts `held_items`. Each entry has an item id and fence and may report a directive
+id with a `succeeded` or `failed` outcome. A successful respawn also reports its new nonce and session reference.
+The response always has `items` and `directives`; an old drain can ignore the added key.
+
+Leaf and orchestrator concurrency are separate when `orchestrator_capacity` is present. `capacity` admits only
+ordinary leaf roles, while `orchestrator_capacity` admits only the reserved orchestrator role. A full leaf pool
+therefore cannot block an orchestrator wake, and an unused orchestrator slot cannot admit a leaf. Requests that
+omit `orchestrator_capacity` keep the legacy combined-capacity behavior.
 
 ### Evidence uploads
 

@@ -33,18 +33,27 @@ final class WorkDrainController extends Controller
             'role_providers' => ['sometimes', 'array', 'max:'.self::MAX_BATCH],
             'role_providers.*' => ['required', 'string', 'max:64', 'regex:/\A[a-z0-9][a-z0-9._-]*\z/D'],
             'current_claimed_item_count' => ['sometimes', 'integer', 'min:0', 'max:'.self::MAX_BATCH],
+            'orchestrator_capacity' => ['sometimes', 'integer', 'min:0', 'max:'.self::MAX_BATCH],
+            'held_items' => ['sometimes', 'array', 'list', 'max:'.self::MAX_BATCH],
+            'held_items.*' => ['required', 'array'],
+            'held_items.*.item_id' => ['required', 'uuid', 'distinct'],
+            'held_items.*.fence' => ['required', 'integer', 'min:1'],
+            'held_items.*.directive_id' => ['sometimes', 'required', 'uuid'],
+            'held_items.*.directive_outcome' => ['required_with:held_items.*.directive_id', Rule::in(['succeeded', 'failed'])],
+            'held_items.*.launch_nonce' => ['sometimes', 'required', 'uuid'],
+            'held_items.*.session_ref' => ['sometimes', 'required', 'string', 'max:2048'],
         ]);
 
         if ($validator->fails()) {
             return $this->validationError($validator->errors()->toArray());
         }
 
-        /** @var array{capacity: int, roles: non-empty-list<string>, capabilities: list<string>, role_providers: array<string, string>, current_claimed_item_count: int} $validated */
+        /** @var array{capacity: int, roles: non-empty-list<string>, capabilities: list<string>, role_providers: array<string, string>, current_claimed_item_count: int, orchestrator_capacity?: int, held_items: list<array<string, mixed>>} $validated */
         $validated = $validator->validated();
-        $validated += ['role_providers' => [], 'current_claimed_item_count' => 0];
+        $validated += ['role_providers' => [], 'current_claimed_item_count' => 0, 'held_items' => []];
         $credential = AuthenticateBoundCredential::credential($request);
         try {
-            $items = $drain->claim(
+            $tick = $drain->tick(
                 $team->id,
                 AuthenticateBoundCredential::actorId($request),
                 $credential->id,
@@ -54,13 +63,16 @@ final class WorkDrainController extends Controller
                 $validated['role_providers'],
                 $validated['current_claimed_item_count'],
                 CarbonImmutable::now(),
+                $validated['orchestrator_capacity'] ?? null,
+                $validated['held_items'],
             );
         } catch (InvalidArgumentException $exception) {
             return $this->validationError(['runtime' => [$exception->getMessage()]]);
         }
 
         return new JsonResponse([
-            'items' => array_map($this->claimItem(...), $items),
+            'items' => array_map($this->claimItem(...), $tick['items']),
+            'directives' => $tick['directives'],
         ]);
     }
 
@@ -75,14 +87,21 @@ final class WorkDrainController extends Controller
                 'released',
                 WorkItemState::Failed->value,
             ])],
+            'launch_nonce' => ['sometimes', 'required', 'uuid'],
+            'session_ref' => ['sometimes', 'required', 'string', 'max:2048'],
         ]);
 
         if ($validator->fails()) {
             return $this->validationError($validator->errors()->toArray());
         }
 
-        /** @var array{item_id: string, fence: int, state: string} $validated */
+        /** @var array{item_id: string, fence: int, state: string, launch_nonce?: string, session_ref?: string} $validated */
         $validated = $validator->validated();
+        $hasLaunch = isset($validated['launch_nonce']) || isset($validated['session_ref']);
+        if ($hasLaunch && ($validated['state'] !== WorkItemState::Delivered->value
+            || ! isset($validated['launch_nonce'], $validated['session_ref']))) {
+            return $this->validationError(['launch_nonce' => ['Launch metadata requires a delivered transition and both fields.']]);
+        }
         $credential = AuthenticateBoundCredential::credential($request);
 
         try {
@@ -94,6 +113,8 @@ final class WorkDrainController extends Controller
                 $validated['fence'],
                 $validated['state'],
                 CarbonImmutable::now(),
+                $validated['launch_nonce'] ?? null,
+                $validated['session_ref'] ?? null,
             );
         } catch (ApiErrorException $exception) {
             return $exception->toResponse($request);
@@ -154,6 +175,7 @@ final class WorkDrainController extends Controller
             'links' => resolve(WorkWorkerLinks::class)->forItem($item),
             'session_ref' => $item->session_ref,
             'seat_fence' => $item->seat_fence,
+            'launch_nonce' => $item->launch_nonce,
         ], fn ($value): bool => $value !== null);
     }
 

@@ -5,6 +5,7 @@ namespace App\Work;
 use App\Enums\WorkItemState;
 use App\Enums\WorkMilestoneKind;
 use App\Models\Spoke;
+use App\Models\WorkDirective;
 use App\Models\WorkEvidence;
 use App\Models\WorkItem;
 use App\Models\WorkMilestone;
@@ -67,16 +68,37 @@ final readonly class WorkWorkerService
     }
 
     /** @return array<string, mixed> */
-    public function brief(string $id, int $fence, ?Closure $afterIdentified = null): array
+    public function brief(string $id, int $fence, string $nonce, ?string $model = null, ?Closure $afterIdentified = null): array
     {
-        return $this->guarded($id, $fence, function (WorkItem $item): array {
+        return $this->guarded($id, $fence, function (WorkItem $item) use ($nonce, $model): array {
+            abort_unless($item->launch_nonce !== null && hash_equals($item->launch_nonce, $nonce), 409, 'launch nonce mismatch');
             $revision = $item->workTask->briefRevisions()->reorder()->orderByDesc('sequence')->first();
-            $updated = $this->activeQuery()->whereKey($item->id)->where('fence', $item->fence)
-                ->update(['fetched_brief_revision_id' => $revision?->id]);
+            $receipt = [
+                'fetched_brief_revision_id' => $revision?->id,
+                'fetched_page_version_id' => $item->workTask->brief_page_version_id,
+                'agent_model' => $model,
+            ];
+            if ($item->first_fetched_at === null) {
+                $receipt['first_fetched_at'] = CarbonImmutable::now();
+            }
+            $updated = $this->activeQuery()->whereKey($item->id)->where('fence', $item->fence)->update($receipt);
             abort_unless($updated === 1, 409, 'claim lost');
+            WorkDirective::query()->where('work_item_id', $item->id)->where('fence', $item->fence)
+                ->where('status', 'pending')->update([
+                    'status' => 'succeeded',
+                    'outcome' => ['result' => 'succeeded', 'receipt' => true],
+                    'completed_at' => CarbonImmutable::now(),
+                ]);
 
             return array_filter([
-                'task' => ['id' => $item->work_task_id, 'title' => $item->workTask->title],
+                'task' => array_filter([
+                    'id' => $item->work_task_id,
+                    'title' => $item->workTask->title,
+                    'workflow_ref' => $item->workTask->workflow_ref,
+                    'workflow_sha' => $item->workTask->workflow_sha,
+                    'brief_page_id' => $item->workTask->brief_page_id,
+                    'brief_page_version_id' => $item->workTask->brief_page_version_id,
+                ], fn ($value): bool => $value !== null),
                 'item' => ['id' => $item->id, 'role' => $item->role, 'fence' => $item->fence],
                 'revision' => $revision === null ? null : ['id' => $revision->id, 'sequence' => $revision->sequence, 'content' => $revision->content],
                 ...WorkPreemptionService::representation($item),

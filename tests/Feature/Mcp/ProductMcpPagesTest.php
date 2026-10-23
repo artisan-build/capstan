@@ -125,6 +125,7 @@ test('advertises the four exact page tools through their effect doors', function
         'get_page',
         'get_task',
         'get_team_work_policy',
+        'kickoff',
         'list_escalations',
         'list_layouts',
         'list_pages',

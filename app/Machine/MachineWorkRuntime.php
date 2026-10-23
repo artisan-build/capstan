@@ -162,6 +162,16 @@ final class MachineWorkRuntime
         return WorkItem::query()
             ->where('claimant_spoke_id', $spokeId)
             ->whereIn('state', ['claimed', 'delivered', 'routed'])
+            ->where('role', '!=', WorkItem::ROLE_ORCHESTRATOR)
+            ->count();
+    }
+
+    public function authoritativeOrchestratorCount(int $spokeId): int
+    {
+        return WorkItem::query()
+            ->where('claimant_spoke_id', $spokeId)
+            ->whereIn('state', ['claimed', 'delivered', 'routed'])
+            ->where('role', WorkItem::ROLE_ORCHESTRATOR)
             ->count();
     }
 

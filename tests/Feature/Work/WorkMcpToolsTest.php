@@ -1,12 +1,15 @@
 <?php
 
 use App\Auth\CapstanCredentialDeclaration;
+use App\Enums\PageLayout;
 use App\Enums\WorkItemState;
 use App\Machine\MachineWorkRuntime;
 use App\Mcp\CapstanServer;
 use App\Mcp\Tools\OrchestrateTool;
 use App\Mcp\WriteFaultInjector;
 use App\Models\MachineTeamWorkSetting;
+use App\Models\Page;
+use App\Models\PageVersion;
 use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkBriefRevision;
@@ -30,6 +33,7 @@ use ArtisanBuild\BuiltForCloud\Testing\McpDelegatedTools;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
 
@@ -238,6 +242,98 @@ test('root creation exposes ownership priority dependencies expiry and PR metada
     ], $token);
     expect($refused)->toBe(['outcome' => 'refused', 'reason' => 'invalid_dependencies'])
         ->and(WorkTask::query()->count())->toBe($before);
+});
+
+test('create_task accepts numeric PR strings and returns integers on accepted and replayed results', function (): void {
+    $user = capstanUser(['role' => 'owner']);
+    $token = workMcpToken($user);
+    $team = workMcpTeam();
+    $arguments = [
+        'idempotency_key' => 'numeric-pr-create',
+        'pr' => ['repo' => 'artisan-build/capstan', 'number' => '124', 'url' => 'https://example.test/pulls/124'],
+    ];
+
+    $first = workMcpCreate($team, $token, $arguments);
+    $replay = workMcpCreate($team, $token, $arguments);
+
+    expect($first['task']['pr']['number'])->toBeInt()->toBe(124)
+        ->and($replay['task']['pr']['number'])->toBeInt()->toBe(124)
+        ->and($replay['outcome'])->toBe('already_accepted')
+        ->and(WorkTask::query()->findOrFail($first['task']['id'])->pr['number'])->toBeInt()->toBe(124);
+});
+
+test('kickoff pins the latest Page version and atomically queues one orchestrator item', function (): void {
+    Storage::fake();
+    $user = capstanUser(['role' => 'owner']);
+    $token = workMcpToken($user);
+    $team = workMcpTeam();
+    $page = Page::query()->create([
+        'owner_user_id' => (string) $user->id,
+        'title' => 'Orchestration PRD',
+        'refresh_recipe' => 'Test-created recipe',
+        'layout' => PageLayout::Brief,
+    ]);
+    $content = '<article>'.str_repeat('PRD content ', 6000).'</article>';
+    $key = 'pages/'.$page->id.'/v1.html';
+    Storage::disk()->put($key, $content);
+    $version = PageVersion::query()->create([
+        'page_id' => $page->id, 'version_number' => 1, 'content_type' => 'text/html',
+        'size_bytes' => strlen($content), 'content_hash' => hash('sha256', $content), 'storage_key' => $key,
+        'publisher_user_id' => (string) $user->id, 'publisher_source' => 'test', 'publisher_tool' => 'test',
+        'refresh_recipe' => 'Test-created recipe', 'layout' => PageLayout::Brief,
+    ]);
+    $page->update(['latest_version_id' => $version->id, 'version_count' => 1]);
+    $sha = str_repeat('a', 40);
+
+    $result = workMcpResult('kickoff', [
+        'team_id' => $team->id, 'idempotency_key' => 'page-kickoff',
+        'page_id' => $page->id, 'title' => 'Build the PRD', 'priority' => 'P1',
+        'workflow_ref' => 'artisan-build/workflows:.solo/workflow.md', 'workflow_sha' => $sha,
+    ], $token);
+    $task = WorkTask::query()->findOrFail($result['task']['id']);
+
+    expect($result['outcome'])->toBe('accepted')
+        ->and($result['item']['role'])->toBe(WorkItem::ROLE_ORCHESTRATOR)
+        ->and($task->brief_page_id)->toBe($page->id)
+        ->and($task->brief_page_version_id)->toBe($version->id)
+        ->and($task->workflow_sha)->toBe($sha)
+        ->and($task->briefRevisions()->sole()->content)->toBe($content)
+        ->and($task->items()->where('role', WorkItem::ROLE_ORCHESTRATOR)->count())->toBe(1);
+
+    $newContent = '<article>Later version</article>';
+    $newKey = 'pages/'.$page->id.'/v2.html';
+    Storage::disk()->put($newKey, $newContent);
+    $newVersion = PageVersion::query()->create([
+        'page_id' => $page->id, 'version_number' => 2, 'content_type' => 'text/html',
+        'size_bytes' => strlen($newContent), 'content_hash' => hash('sha256', $newContent), 'storage_key' => $newKey,
+        'publisher_user_id' => (string) $user->id, 'publisher_source' => 'test', 'publisher_tool' => 'test',
+        'refresh_recipe' => 'Test-created recipe', 'layout' => PageLayout::Brief,
+    ]);
+    $page->update(['latest_version_id' => $newVersion->id, 'version_count' => 2]);
+
+    expect($task->fresh()->brief_page_version_id)->toBe($version->id)
+        ->and($task->briefRevisions()->sole()->content)->toBe($content);
+
+    $child = workMcpCreate($team, $token, [
+        'idempotency_key' => 'pinned-child', 'parent_task_id' => $task->id,
+        'title' => 'Pinned child', 'brief' => 'Child brief',
+    ]);
+    expect($child['task']['parent_task_id'])->toBe($task->id)
+        ->and($child['task']['workflow_ref'])->toBe($task->workflow_ref)
+        ->and($child['task']['workflow_sha'])->toBe($sha)
+        ->and($child['task']['owner_actor'])->toBe($task->owner_actor)
+        ->and($child['task']['priority'])->toBe('P1');
+
+    $foreignPage = Page::query()->create([
+        'owner_user_id' => (string) capstanUser()->id,
+        'title' => 'Foreign PRD', 'refresh_recipe' => 'Foreign recipe', 'layout' => PageLayout::Brief,
+    ]);
+    $before = [WorkTask::query()->count(), WorkItem::query()->count()];
+    expect(workMcpResult('kickoff', [
+        'team_id' => $team->id, 'idempotency_key' => 'foreign-page-kickoff',
+        'page_id' => $foreignPage->id, 'title' => 'Must not start',
+    ], $token))->toBe(['outcome' => 'refused', 'reason' => 'page_unavailable'])
+        ->and([WorkTask::query()->count(), WorkItem::query()->count()])->toBe($before);
 });
 
 test('P0 creation is refused and priority confirmation enforces one active root until cancellation', function (): void {
@@ -576,10 +672,11 @@ test('every Work tool rejects non-admitted or non-manager callers without effect
         $user->forceFill($condition === 'member' ? ['role' => 'member'] : ['status' => 'inactive'])->save();
     }
     $writes = DB::table('mcp_write_claims')->count();
-    foreach (['create_task', 'revise_brief', 'queue_item', 'cancel_item', 'list_work', 'get_task', 'steer', 'cancel_task', 'take_seat', 'release_seat', 'list_escalations', 'answer_escalation', 'orchestrate', 'get_team_work_policy', 'set_team_work_policy'] as $tool) {
+    foreach (['create_task', 'kickoff', 'revise_brief', 'queue_item', 'cancel_item', 'list_work', 'get_task', 'steer', 'cancel_task', 'take_seat', 'release_seat', 'list_escalations', 'answer_escalation', 'orchestrate', 'get_team_work_policy', 'set_team_work_policy'] as $tool) {
         $args = ['team_id' => $team->id, 'task_id' => $task['id'], 'idempotency_key' => 'denied-'.$tool];
         $args = match ($tool) {
             'create_task' => ['team_id' => $team->id, 'title' => 'Denied', 'brief' => 'Denied', 'idempotency_key' => 'denied'],
+            'kickoff' => ['team_id' => $team->id, 'title' => 'Denied', 'page_id' => (string) Str::uuid7(), 'idempotency_key' => 'denied'],
             'cancel_item' => ['team_id' => $team->id, 'item_id' => (string) Str::uuid7(), 'idempotency_key' => 'denied'],
             'take_seat' => ['team_id' => $team->id, 'task_id' => $task['id'], 'session_ref' => 'denied', 'idempotency_key' => 'denied'],
             'release_seat' => ['team_id' => $team->id, 'task_id' => $task['id'], 'seat_fence' => 1, 'idempotency_key' => 'denied'],
@@ -1307,6 +1404,7 @@ test('runtime input checking refuses unknown and wrong shape values with no part
     $task = workMcpCreate($team, $token)['task'];
     $base = match ($tool) {
         'create_task' => ['title' => 'Created', 'brief' => 'Brief'],
+        'kickoff' => ['title' => 'Kickoff', 'page_id' => (string) Str::uuid7()],
         'queue_item' => ['task_id' => $task['id'], 'role' => 'builder'],
         'list_work' => [], default => ['task_id' => $task['id']],
     };
@@ -1320,6 +1418,7 @@ test('runtime input checking refuses unknown and wrong shape values with no part
         ->and(DB::table('mcp_write_claims')->count())->toBe(1);
 })->with([
     ['create_task', ['unknown' => true]], ['create_task', ['team_id' => '1']],
+    ['kickoff', ['unknown' => true]], ['kickoff', ['page_id' => 123]],
     ['create_task', ['team_id' => 999999]],
     ['create_task', ['required_capabilities' => (object) ['0' => 'php']]],
     ['create_task', ['required_capabilities' => ['php', 'php']]],

@@ -31,6 +31,7 @@ return [
     'work' => [
         'preemption_grace_seconds' => 60,
         'lease_seconds' => env('CAPSTAN_WORK_LEASE_SECONDS', 300),
+        'receipt_deadline_seconds' => 180,
         'link_grace_seconds' => 60,
         'steer_recent_seconds' => 86400,
         'missed_heartbeat_seconds' => 180,
@@ -41,6 +42,7 @@ return [
             'uploads_per_minute' => 30,
         ],
         'orchestration' => [
+            'receipt_deadline_seconds' => 60,
             'turn_budget' => 20,
             'child_budget' => 100,
             'attempt_cap' => 3,

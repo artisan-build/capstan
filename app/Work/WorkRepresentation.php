@@ -2,6 +2,7 @@
 
 namespace App\Work;
 
+use App\Casts\WorkPullRequest;
 use App\Enums\WorkItemState;
 use App\Enums\WorkMilestoneKind;
 use App\Enums\WorkPriority;
@@ -43,7 +44,12 @@ final class WorkRepresentation
     /** @return array<string, mixed> */
     public function milestone(WorkMilestone $milestone): array
     {
-        return [...$this->present($milestone, 'milestone'), 'payload' => (object) $milestone->payload];
+        $payload = $milestone->payload;
+        if (isset($payload['pr']) && is_array($payload['pr'])) {
+            $payload['pr'] = WorkPullRequest::normalize($payload['pr']);
+        }
+
+        return [...$this->present($milestone, 'milestone'), 'payload' => (object) $payload];
     }
 
     /** @return array<string, mixed> */
@@ -131,12 +137,18 @@ final class WorkRepresentation
                 'timebox_minutes' => 'integer', 'creator_actor' => 'string', 'owner_actor' => 'string',
                 'escalation_actor' => 'string',
                 'priority' => 'string', 'expires_at' => 'string?', 'pr' => 'pr?',
-                'cancelled_at' => 'string?', 'created_at' => 'string',
+                'cancelled_at' => 'string?', 'parent_task_id' => 'string?',
+                'workflow_ref' => 'string?', 'workflow_sha' => 'string?',
+                'brief_page_id' => 'string?', 'brief_page_version_id' => 'string?',
+                'created_at' => 'string',
             ],
             'item' => [
                 'id' => 'string', 'work_task_id' => 'string', 'role' => 'string', 'state' => 'string',
                 'claimant_spoke_id' => 'integer?', 'claimant_actor' => 'string?', 'lease_until' => 'string?',
                 'fence' => 'integer', 'attempts' => 'integer', 'last_progress' => 'string?',
+                'handed_off_at' => 'string?', 'handed_off_session_ref' => 'string?',
+                'launch_nonce' => 'string?', 'first_fetched_at' => 'string?', 'agent_model' => 'string?',
+                'fetched_brief_revision_id' => 'string?', 'fetched_page_version_id' => 'string?',
                 'stalled_at' => 'string?', 'waiting_on_host_at' => 'string?', 'created_at' => 'string',
             ],
             'milestone' => ['id' => 'string', 'work_item_id' => 'string', 'fence' => 'integer', 'kind' => 'string', 'created_at' => 'string'],

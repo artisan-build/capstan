@@ -19,6 +19,7 @@ final readonly class WorkToolService
         private WorkItemStateService $states,
         private WorkRepresentation $representation,
         private WorkDependencyService $dependencies,
+        private WorkPageBriefService $pageBriefs,
     ) {}
 
     /**
@@ -28,7 +29,7 @@ final readonly class WorkToolService
     public function write(string $tool, array $input, string $actor): array
     {
         return DB::transaction(function () use ($tool, $input, $actor): array {
-            if ($tool === 'create_task') {
+            if (in_array($tool, ['create_task', 'kickoff'], true)) {
                 if (($input['priority'] ?? null) === WorkPriority::P0->value) {
                     throw new ApiErrorException(409, 'p0_confirmation_required', 'Create the task below P0, then use set_task_priority to preview and confirm P0.');
                 }
@@ -36,15 +37,25 @@ final readonly class WorkToolService
                     ->whereKey($input['device_spoke_id'])->lockForUpdate()->exists()) {
                     throw new ApiErrorException(409, 'spoke_unavailable', 'Work host is unavailable.');
                 }
+                if (isset($input['parent_task_id']) && ! WorkTask::query()
+                    ->whereKey($input['parent_task_id'])->where('team_id', $input['team_id'])->lockForUpdate()->exists()) {
+                    throw new ApiErrorException(404, 'parent_unavailable', 'The parent Work task is unavailable.');
+                }
+                $pageBrief = isset($input['page_id'])
+                    ? $this->pageBriefs->resolve($input['page_id'], $actor)
+                    : null;
                 try {
                     $task = WorkTask::query()->create([
                         ...array_intersect_key($input, array_flip([
                             'team_id', 'title', 'user_actor_address', 'device_spoke_id', 'failover',
                             'required_capabilities', 'timebox_minutes', 'owner_actor', 'priority', 'expires_at', 'pr',
+                            'parent_task_id', 'workflow_ref', 'workflow_sha',
                         ])),
                         'creator_actor' => $actor,
                         'owner_actor' => $input['owner_actor'] ?? $actor,
                         'priority' => $input['priority'] ?? WorkPriority::P2->value,
+                        'brief_page_id' => $pageBrief['page']->id ?? null,
+                        'brief_page_version_id' => $pageBrief['version']->id ?? null,
                     ]);
                 } catch (QueryException $exception) {
                     $message = $exception->getMessage();
@@ -57,9 +68,21 @@ final readonly class WorkToolService
                     throw $exception;
                 }
                 $this->dependencies->replace($task, $input['depends_on'] ?? []);
-                $revision = $this->briefs->append($task, $input['brief'], $actor);
+                $revision = $this->briefs->append($task, $pageBrief['content'] ?? $input['brief'], $actor);
 
-                return ['task' => $this->representation->task($task), 'revision' => $this->representation->revision($revision)];
+                if ($tool === 'kickoff') {
+                    $item = $task->items()->create(['role' => WorkItem::ROLE_ORCHESTRATOR]);
+
+                    return [
+                        'task' => $this->representation->task($task),
+                        'item' => $this->representation->item($item->load('milestones')),
+                    ];
+                }
+
+                return array_filter([
+                    'task' => $this->representation->task($task),
+                    'revision' => $pageBrief === null ? $this->representation->revision($revision) : null,
+                ], fn (mixed $value): bool => $value !== null);
             }
 
             // Task-before-item locking also serializes cancellation against queue/revise/steer.

@@ -2,6 +2,7 @@
 
 namespace App\Mcp\Tools;
 
+use App\Casts\WorkPullRequest;
 use App\Enums\WorkItemState;
 use App\Enums\WorkPriority;
 use App\Http\ApiErrorException;
@@ -39,7 +40,9 @@ abstract class WorkTool extends CapstanTool
         return [...$properties, ...match ($this->name()) {
             'create_task' => [
                 'title' => $schema->string()->min(1)->max(255)->required(),
-                'brief' => $schema->string()->min(1)->max(32000)->required(),
+                'brief' => $schema->string()->min(1)->max(32000),
+                'page_id' => $schema->string(),
+                'parent_task_id' => $schema->string(),
                 'user_actor_address' => $schema->string()->min(1)->max(19),
                 'device_spoke_id' => $schema->integer()->min(1),
                 'failover' => $schema->boolean(),
@@ -49,11 +52,20 @@ abstract class WorkTool extends CapstanTool
                 'priority' => $schema->string()->enum(WorkPriority::class),
                 'depends_on' => $schema->array()->items($schema->string())->max(25)->unique(),
                 'expires_at' => $schema->string(),
+                'workflow_ref' => $schema->string()->min(1)->max(2048),
+                'workflow_sha' => $schema->string()->min(40)->max(40),
                 'pr' => $schema->object([
                     'repo' => $schema->string()->min(1)->max(255)->required(),
                     'number' => $schema->integer()->min(1)->required(),
                     'url' => $schema->string()->min(1)->max(2048)->required(),
                 ])->withoutAdditionalProperties(),
+            ],
+            'kickoff' => [
+                'title' => $schema->string()->min(1)->max(255)->required(),
+                'page_id' => $schema->string()->required(),
+                'priority' => $schema->string()->enum(WorkPriority::class),
+                'workflow_ref' => $schema->string()->min(1)->max(2048),
+                'workflow_sha' => $schema->string()->min(40)->max(40),
             ],
             'revise_brief' => ['task_id' => $schema->string()->required(), 'brief' => $schema->string()->min(1)->max(32000)->required()],
             'queue_item' => ['task_id' => $schema->string()->required(), 'role' => $schema->string()->min(1)->max(64)->required()],
@@ -90,6 +102,7 @@ abstract class WorkTool extends CapstanTool
             'get_team_work_policy' => ['policy' => $policy->required()],
             'set_team_work_policy' => ['policy' => $policy, 'changed' => $schema->boolean()],
             'create_task' => ['task' => $representation->schema($schema, 'task'), 'revision' => $representation->schema($schema, 'revision')],
+            'kickoff' => ['task' => $representation->schema($schema, 'task'), 'item' => $representation->schema($schema, 'item')],
             'revise_brief' => ['revision' => $representation->schema($schema, 'revision')],
             'queue_item', 'cancel_item' => ['item' => $representation->schema($schema, 'item')],
             'steer' => ['steer' => $representation->schema($schema, 'steer')],
@@ -159,10 +172,12 @@ abstract class WorkTool extends CapstanTool
             $rules[$field] = match ($field) {
                 'team_id', 'device_spoke_id' => [$field === 'team_id' ? 'required' : 'sometimes', 'required', 'integer', 'min:1'],
                 'idempotency_key', 'title' => ['required', 'string', 'min:1', 'max:255'],
-                'brief' => ['required', 'string', 'min:1', 'max:32000'],
+                'brief' => [$this->name() === 'create_task' ? 'sometimes' : 'required', 'required', 'string', 'min:1', 'max:32000'],
                 'content' => ['required', 'string', 'min:1', 'max:8000'],
                 'role' => ['required', 'string', 'min:1', 'max:64'],
                 'task_id', 'item_id' => [($field === 'item_id' && $this->name() === 'steer') || $this->name() === 'list_work' ? 'sometimes' : 'required', 'required', 'string', 'uuid'],
+                'page_id' => [$this->name() === 'kickoff' ? 'required' : 'sometimes', 'required', 'string', 'uuid'],
+                'parent_task_id' => ['sometimes', 'required', 'string', 'uuid'],
                 'failover' => ['sometimes', 'required', 'boolean'],
                 'pool_work' => ['required', 'boolean'],
                 'user_actor_address', 'owner_actor' => ['sometimes', 'required', 'string', 'regex:/\A[1-9][0-9]{0,18}\z/D'],
@@ -171,6 +186,8 @@ abstract class WorkTool extends CapstanTool
                 'depends_on' => ['sometimes', 'array', 'list', 'max:25'],
                 'priority' => [$this->name() === 'set_task_priority' ? 'required' : 'sometimes', 'required', Rule::enum(WorkPriority::class)],
                 'expires_at' => ['sometimes', 'required', 'date'],
+                'workflow_ref' => ['sometimes', 'required', 'string', 'min:1', 'max:2048'],
+                'workflow_sha' => ['sometimes', 'required', 'string', 'regex:/\A[a-f0-9]{40}\z/D'],
                 'pr' => ['sometimes', 'required', 'array'],
                 'limit' => ['sometimes', 'required', 'integer', 'min:1', 'max:25'],
                 'state' => ['sometimes', 'required', Rule::enum(WorkItemState::class)],
@@ -196,6 +213,18 @@ abstract class WorkTool extends CapstanTool
             }
         }
         $input = $request->validate($rules);
+        if ($this->name() === 'create_task' && (isset($input['brief']) === isset($input['page_id']))) {
+            throw ValidationException::withMessages(['brief' => ['Provide exactly one of brief or page_id.']]);
+        }
+        if ($this->name() === 'kickoff' && ! isset($input['page_id'])) {
+            throw ValidationException::withMessages(['page_id' => ['A kickoff requires a Page.']]);
+        }
+        if (isset($input['workflow_ref']) !== isset($input['workflow_sha'])) {
+            throw ValidationException::withMessages(['workflow_sha' => ['workflow_ref and workflow_sha must be provided together.']]);
+        }
+        if (isset($input['pr'])) {
+            $input['pr'] = WorkPullRequest::normalize($input['pr']);
+        }
         if ($this->name() === 'set_task_priority') {
             if (isset($input['confirmation_token']) && (($input['priority'] ?? null) !== 'P0' || ! isset($input['reason']))) {
                 throw ValidationException::withMessages(['reason' => ['P0 confirmation requires a reason.']]);
@@ -225,7 +254,7 @@ abstract class WorkTool extends CapstanTool
                 return Response::error('Work task is unavailable.');
             }
         }
-        if ($this->name() === 'create_task') {
+        if (in_array($this->name(), ['create_task', 'kickoff'], true)) {
             if (isset($input['device_spoke_id']) && ! array_key_exists('failover', $input)) {
                 throw ValidationException::withMessages(['failover' => ['A device pin requires explicit failover.']]);
             }
@@ -256,7 +285,7 @@ abstract class WorkTool extends CapstanTool
 
                         return ['policy' => $policy->present($team), 'changed' => $changed];
                     }
-                    if ($this->name() === 'create_task') {
+                    if (in_array($this->name(), ['create_task', 'kickoff'], true)) {
                         $input += [
                             'failover' => (bool) $team->default_failover,
                             'required_capabilities' => [],
@@ -294,8 +323,15 @@ abstract class WorkTool extends CapstanTool
         if (($result['confirmation_status'] ?? null) === 'refused') {
             $result['outcome'] = 'refused';
         }
+        if (isset($result['task']['pr']) && is_array($result['task']['pr'])) {
+            $result['task']['pr'] = WorkPullRequest::normalize($result['task']['pr']);
+        }
         if (isset($result['item']['latest_milestone']['payload'])) {
-            $result['item']['latest_milestone']['payload'] = (object) $result['item']['latest_milestone']['payload'];
+            $payload = (array) $result['item']['latest_milestone']['payload'];
+            if (isset($payload['pr']) && (is_array($payload['pr']) || is_object($payload['pr']))) {
+                $payload['pr'] = WorkPullRequest::normalize((array) $payload['pr']);
+            }
+            $result['item']['latest_milestone']['payload'] = (object) $payload;
         }
         if (! ToolResponse::fits($result)) {
             return Response::error('Work result exceeds the response budget.');
