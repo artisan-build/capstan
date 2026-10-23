@@ -66,6 +66,7 @@ final class BrandedErrorResponse
             'page-shares/*/content',
             'pages/*/content',
             'pages/*/export',
+            'work-evidence/*',
         );
     }
 }

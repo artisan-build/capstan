@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Route;
 Route::prefix('v1')->group(function (): void {
     Route::get('work/items/{item}/brief', WorkWorkerController::class)->name('api.work.worker.brief');
     Route::post('work/items/{item}/milestone', WorkWorkerController::class)->name('api.work.worker.milestone');
+    Route::post('work/items/{item}/evidence', WorkWorkerController::class)->name('api.work.worker.evidence');
     Route::get('work/items/{item}/steers', WorkWorkerController::class)->name('api.work.worker.steers');
     Route::get('work/items/{item}/orchestration', WorkOrchestrationWorkerController::class)->name('api.work.worker.orchestration');
     Route::post('work/items/{item}/orchestrate', WorkOrchestrationWorkerController::class)->name('api.work.worker.orchestrate');

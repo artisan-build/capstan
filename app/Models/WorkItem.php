@@ -41,6 +41,7 @@ use InvalidArgumentException;
  * @property-read WorkBriefRevision|null $fetchedBriefRevision
  * @property-read Collection<int, WorkItemTransition> $transitions
  * @property-read Collection<int, WorkMilestone> $milestones
+ * @property-read Collection<int, WorkEvidence> $evidence
  *
  * @mixin IdeHelperWorkItem
  */
@@ -147,5 +148,11 @@ class WorkItem extends Model
     public function milestones(): HasMany
     {
         return $this->hasMany(WorkMilestone::class);
+    }
+
+    /** @return HasMany<WorkEvidence, $this> */
+    public function evidence(): HasMany
+    {
+        return $this->hasMany(WorkEvidence::class);
     }
 }

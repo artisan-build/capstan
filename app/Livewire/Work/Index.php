@@ -41,6 +41,7 @@ class Index extends Component
                 ->with([
                     'items' => fn ($query) => $query->orderBy('id')->limit(25),
                     'items.milestones' => fn ($query) => $query->orderByDesc('id')->limit(1),
+                    'items.evidence' => fn ($query) => $query->orderBy('id'),
                     'briefRevisions' => fn ($query) => $query->reorder()->orderByDesc('sequence')->limit(1),
                     'steers' => fn ($query) => $query->orderByDesc('id')->limit(10),
                 ])->withCount('items')->get(),

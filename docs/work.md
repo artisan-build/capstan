@@ -247,6 +247,22 @@ The worker prompt tells a worker to fetch the latest brief through its signed li
 `failed`. It checks steers at each milestone. Branches use `capstan/<item-id>-<slug>`, which makes two
 workers for the same item collide instead of quietly creating parallel pull requests.
 
+The `pr_opened` payload includes a `pr` object with exactly `repo`, `number`, and an HTTPS `url`. The first
+accepted value becomes the task's PR metadata. A worker can replay that value but cannot replace it. An
+orchestrator can use `set_pr` when the task needs a corrected or replacement PR; Capstan records that change
+and wakes the next turn.
+
+### Evidence uploads
+
+Each claimed item gets an `evidence` URL alongside its other signed links. Send one file in a multipart
+`file` field. Interactive sessions use `upload_work_evidence` with the team, task and item ids, a filename,
+canonical base64 bytes, and an idempotency key. Both routes accept PNG, JPEG, WebP, GIF, MP4, text, and JSON,
+up to 10 MiB per file and 20 files per item by default.
+
+The response contains the same evidence object on either route, including a permanent public-by-link URL.
+Anyone with that unguessable URL can fetch the file without signing in. Workflow evidence must therefore
+come only from local or seeded environments. Never upload customer production data.
+
 An orchestrator gets a separate prompt. Every process begins cold: it fetches the current brief plus the
 orchestration context, reads the saved state of play, decisions, and event range, performs scoped actions,
 then explicitly sends the `finish` action with state `acted` or `failed`. A successful finish includes the

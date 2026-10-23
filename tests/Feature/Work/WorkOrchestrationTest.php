@@ -121,6 +121,52 @@ test('an orchestrator can lower root priority but cannot raise it', function ():
         ->and($child->fresh()->priority)->toBe(WorkPriority::P3);
 });
 
+test('an orchestrator changes PR metadata with one waking event and idempotent replay', function (): void {
+    $parent = orchestrationTask();
+    $old = ['repo' => 'artisan-build/capstan', 'number' => 111, 'url' => 'https://example.test/pull/111'];
+    $new = ['repo' => 'artisan-build/capstan', 'number' => 112, 'url' => 'https://example.test/pull/112'];
+    $parent->update(['pr' => $old]);
+    orchestrationEvent($parent, 'pr-change-turn');
+    $turn = orchestrationClaims($parent, orchestrationHost('pr-host'))[0];
+    $surface = resolve(WorkOrchestrationSurface::class);
+    $context = $surface->claimed($turn->id, $turn->fence);
+
+    $result = $surface->act($context, 'set_pr', ['task_id' => $parent->id, 'pr' => $new], CarbonImmutable::now());
+    expect($result['task_id'])->toBe($parent->id)
+        ->and($parent->fresh()->pr)->toBe($new)
+        ->and(WorkOrchestrationEvent::query()->count())->toBe(2);
+    $event = WorkOrchestrationEvent::query()->where('kind', 'task_pr_changed')->sole();
+    expect($event->evidence)->toBe(['task_id' => $parent->id, 'old_pr' => $old, 'new_pr' => $new])
+        ->and($event->wakes)->toBeTrue()
+        ->and($event->author_task_id)->toBeNull();
+
+    $surface->act($context, 'set_pr', ['task_id' => $parent->id, 'pr' => $new], CarbonImmutable::now());
+    expect(WorkOrchestrationEvent::query()->where('kind', 'task_pr_changed')->count())->toBe(1);
+    resolve(WorkOrchestrationService::class)->turnDone($turn, $turn->fence, $turn->seat_fence, 'PR metadata corrected', CarbonImmutable::now());
+    expect($parent->items()->where('role', WorkItem::ROLE_ORCHESTRATOR)->where('state', 'queued')->count())->toBe(1);
+});
+
+test('set_pr refuses invalid keys numbers and URLs before changing the task', function (array $pr): void {
+    $parent = orchestrationTask();
+    orchestrationEvent($parent, 'invalid-pr-turn');
+    $turn = orchestrationClaims($parent, orchestrationHost('invalid-pr-host'))[0];
+    $surface = resolve(WorkOrchestrationSurface::class);
+    $before = WorkOrchestrationEvent::query()->count();
+
+    expect(fn () => $surface->act(
+        $surface->claimed($turn->id, $turn->fence),
+        'set_pr',
+        ['task_id' => $parent->id, 'pr' => $pr],
+        CarbonImmutable::now(),
+    ))->toThrow(ApiErrorException::class);
+    expect($parent->fresh()->pr)->toBeNull()
+        ->and(WorkOrchestrationEvent::query()->count())->toBe($before);
+})->with([
+    'unknown key' => [['repo' => 'artisan-build/capstan', 'number' => 1, 'url' => 'https://example.test/pull/1', 'branch' => 'main']],
+    'nonpositive number' => [['repo' => 'artisan-build/capstan', 'number' => 0, 'url' => 'https://example.test/pull/1']],
+    'non-HTTPS URL' => [['repo' => 'artisan-build/capstan', 'number' => 1, 'url' => 'http://example.test/pull/1']],
+]);
+
 function orchestrationTask(?WorkTask $parent = null): WorkTask
 {
     return WorkTask::query()->create([
@@ -796,7 +842,7 @@ test('ordinary worker links retain only ordinary authority', function (): void {
         'claimant_spoke_id' => $host->id, 'claimed_at' => now(), 'lease_until' => now()->addMinutes(5),
     ]);
 
-    expect(array_keys(resolve(WorkWorkerLinks::class)->forItem($item)))->toBe(['brief', 'milestone', 'steers']);
+    expect(array_keys(resolve(WorkWorkerLinks::class)->forItem($item)))->toBe(['brief', 'milestone', 'steers', 'evidence']);
 });
 
 test('signed claimed authority refuses every out-of-subtree target and malformed payload without Work effects', function (): void {

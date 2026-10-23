@@ -7,6 +7,7 @@ use App\Models\Team;
 use App\Models\WorkItem;
 use App\Models\WorkTask;
 use App\Postmaster\RetireSpoke;
+use App\Work\WorkRepresentation;
 use App\Work\WorkWorkerLinks;
 use App\Work\WorkWorkerService;
 use Carbon\CarbonImmutable;
@@ -134,9 +135,13 @@ test('retired spoke refuses every signed worker route during link grace without 
     $this->getJson($links['brief'])->assertConflict()->assertSeeText('claim lost');
     $this->getJson($links['steers'])->assertConflict()->assertSeeText('claim lost');
     foreach (WorkMilestoneKind::cases() as $kind) {
+        $payload = ['summary' => 'Must not persist'];
+        if ($kind === WorkMilestoneKind::PullRequestOpened) {
+            $payload['pr'] = ['repo' => 'artisan-build/capstan', 'number' => 17, 'url' => 'https://example.test/pull/17'];
+        }
         $this->postJson($links['milestone'], [
             'kind' => $kind->value,
-            'payload' => ['summary' => 'Must not persist'],
+            'payload' => $payload,
         ])->assertConflict()->assertSeeText('claim lost');
     }
 
@@ -167,13 +172,21 @@ test('milestone rejects invalid strict objects without writes', function (array 
     [['kind' => 'bogus', 'payload' => (object) []]],
     [['kind' => 'note', 'payload' => []]],
     [['kind' => 'note', 'payload' => ['summary' => ['instruction']]]],
+    [['kind' => 'pr_opened', 'payload' => ['pr' => ['repo' => 'artisan-build/capstan', 'number' => 1, 'url' => 'https://example.test/pull/1', 'branch' => 'main']]]],
+    [['kind' => 'pr_opened', 'payload' => ['pr' => ['repo' => 'artisan-build/capstan', 'number' => 0, 'url' => 'https://example.test/pull/1']]]],
+    [['kind' => 'pr_opened', 'payload' => ['pr' => ['repo' => 'artisan-build/capstan', 'number' => 1, 'url' => 'http://example.test/pull/1']]]],
+    [['kind' => 'pr_opened', 'payload' => (object) []]],
 ]);
 
 test('each milestone appends UUIDv7 and applies legal transitions and progress', function (string $kind, string $state): void {
     $item = workerLinkItem();
     $summary = '<script>untrusted</script> '.Str::random();
+    $payload = ['summary' => $summary, 'url' => 'https://example.test/pr/1'];
+    if ($kind === 'pr_opened') {
+        $payload['pr'] = ['repo' => 'artisan-build/capstan', 'number' => 1, 'url' => 'https://example.test/pr/1'];
+    }
     $this->postJson(resolve(WorkWorkerLinks::class)->forItem($item)['milestone'], [
-        'kind' => $kind, 'payload' => ['summary' => $summary, 'url' => 'https://example.test/pr/1'],
+        'kind' => $kind, 'payload' => $payload,
     ])->assertCreated();
     $milestone = $item->milestones()->sole();
     expect($milestone->kind->value)->toBe($kind)->and($milestone->id[14])->toBe('7')
@@ -185,6 +198,26 @@ test('each milestone appends UUIDv7 and applies legal transitions and progress',
             ->and($item->fresh()->claimant_spoke_id)->toBeNull()->and($item->fresh()->lease_until)->toBeNull();
     }
 })->with([['started', 'routed'], ['blocked', 'routed'], ['pr_opened', 'routed'], ['note', 'routed'], ['done', 'acted'], ['failed', 'failed'], ['released', 'queued']]);
+
+test('signed pr_opened sets PR metadata once and safely replays only the same value', function (): void {
+    $item = workerLinkItem();
+    $url = resolve(WorkWorkerLinks::class)->forItem($item)['milestone'];
+    $pr = ['repo' => 'artisan-build/capstan', 'number' => 112, 'url' => 'https://example.test/pull/112'];
+    $payload = ['kind' => 'pr_opened', 'payload' => ['pr' => $pr, 'summary' => 'Opened test PR']];
+
+    $first = $this->postJson($url, $payload)->assertCreated()->json('id');
+    expect($item->workTask->fresh()->pr)->toBe($pr)
+        ->and(resolve(WorkRepresentation::class)->task($item->workTask->fresh())['pr'])->toBe($pr)
+        ->and($item->milestones()->count())->toBe(1);
+    $this->postJson($url, $payload)->assertCreated()->assertJsonPath('id', $first);
+    expect($item->milestones()->count())->toBe(1);
+
+    $changed = $payload;
+    $changed['payload']['pr'] = ['repo' => 'artisan-build/capstan', 'number' => 113, 'url' => 'https://example.test/pull/113'];
+    $this->postJson($url, $changed)->assertConflict();
+    expect($item->workTask->fresh()->pr)->toBe($pr)
+        ->and($item->milestones()->count())->toBe(1);
+});
 
 test('terminal milestones cannot skip the legal state machine', function (): void {
     $item = workerLinkItem(['state' => 'claimed']);

@@ -35,6 +35,7 @@ use App\Mcp\Tools\TakeSeatTool;
 use App\Mcp\Tools\UpdateBrandDraftTool;
 use App\Mcp\Tools\UpdatePageTool;
 use App\Mcp\Tools\UploadBrandAssetTool;
+use App\Mcp\Tools\UploadWorkEvidenceTool;
 use App\Models\Envelope;
 use App\Models\Inbox;
 use App\Models\Page;
@@ -411,6 +412,8 @@ test('the delegated enforcement harness reaches every tool through the canonical
         CarbonImmutable::now(),
         credentialBacked: false,
     );
+    $evidenceItem = WorkTask::query()->findOrFail($orchestrationTask['task']['id'])
+        ->items()->create(['role' => 'evidence-review']);
     $uuid = (string) Str::uuid7();
     $server = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
     $arguments = [
@@ -447,6 +450,7 @@ test('the delegated enforcement harness reaches every tool through the canonical
         UpdateBrandDraftTool::class => ['idempotency_key' => 'all-tools-update-brand', 'changes' => ['display_name' => 'Delegated brand']],
         UpdatePageTool::class => ['idempotency_key' => 'all-tools-update-page', 'page_id' => $uuid, 'content' => '<p>Updated delegated page</p>', 'content_type' => 'text/html'],
         UploadBrandAssetTool::class => ['idempotency_key' => 'all-tools-upload-brand', 'kind' => 'mark', 'bytes_base64' => base64_encode((string) base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', true))],
+        UploadWorkEvidenceTool::class => ['team_id' => $team->id, 'task_id' => $orchestrationTask['task']['id'], 'item_id' => $evidenceItem->id, 'filename' => 'delegated.txt', 'bytes_base64' => base64_encode("delegated evidence\n"), 'idempotency_key' => 'all-tools-upload-work-evidence'],
     ];
     $expected = [
         CreateTaskTool::class,
@@ -481,6 +485,7 @@ test('the delegated enforcement harness reaches every tool through the canonical
         PreviewBrandDraftTool::class,
         UpdateBrandDraftTool::class,
         UploadBrandAssetTool::class,
+        UploadWorkEvidenceTool::class,
         ApplyBrandDraftTool::class,
     ];
     $negativeAuthorization = static function (

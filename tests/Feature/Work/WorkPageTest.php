@@ -38,7 +38,8 @@ function workNavigationTags(string $html): array
 test('active members see separate items latest milestones claimant and liveness with escaped stored data', function (): void {
     $hostile = '<script>alert("work")</script><img src=x onerror=alert(1)>';
     $hostileRole = '<b data-x=1>role</b>';
-    $task = workPageTask(['title' => 'Title '.$hostile]);
+    $pr = ['repo' => 'artisan-build/capstan', 'number' => 112, 'url' => 'https://example.test/pull/112'];
+    $task = workPageTask(['title' => 'Title '.$hostile, 'pr' => $pr]);
     $task->briefRevisions()->create(['sequence' => 1, 'content' => 'Brief '.$hostile, 'author_actor' => 'creator']);
     $task->steers()->create(['text' => 'Steer '.$hostile, 'author_actor' => 'author '.$hostile]);
     foreach (['code_review', 'security_review'] as $role) {
@@ -52,6 +53,9 @@ test('active members see separate items latest milestones claimant and liveness 
     $response = $this->actingAsVersioned(capstanUser())->get(route('work.index'))->assertOk();
     $response->assertSee('data-testid="work-board"', false)
         ->assertSee('data-task-id="'.$task->id.'"', false)
+        ->assertSee('data-testid="work-task-pr"', false)
+        ->assertSee('href="'.$pr['url'].'"', false)
+        ->assertSee($pr['repo'].'#'.$pr['number'])
         ->assertSee('Title '.$hostile)
         ->assertSee('Brief '.$hostile)->assertSee('Steer '.$hostile)
         ->assertSee('code_review'.$hostileRole)->assertSee('security_review'.$hostileRole)
@@ -124,7 +128,7 @@ test('Work board bounds tasks items and eager loaded milestones without per-item
     $response = $this->actingAsVersioned(capstanUser())->get(route('work.index'))->assertOk();
     expect(substr_count($response->content(), 'data-testid="work-task"'))->toBe(25)
         ->and(substr_count($response->content(), 'data-testid="work-item"'))->toBe(25)
-        ->and(count($queries))->toBe(6);
+        ->and(count($queries))->toBe(7);
     $response->assertSee('data-testid="work-task-truncated"', false)->assertSee('Progress 1')->assertDontSee('Progress 27');
 });
 
