@@ -786,9 +786,20 @@ namespace App\Models{
  * @property CarbonImmutable $created_at
  * @property-read WorkTask $workTask
  * @property-read WorkItem $workItem
+ * @property \Carbon\CarbonImmutable|null $updated_at
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEvidence newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEvidence newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEvidence query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEvidence whereContentType($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEvidence whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEvidence whereExtension($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEvidence whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEvidence wherePublicToken($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEvidence whereSizeBytes($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEvidence whereStorageKey($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEvidence whereUpdatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEvidence whereWorkItemId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEvidence whereWorkTaskId($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
