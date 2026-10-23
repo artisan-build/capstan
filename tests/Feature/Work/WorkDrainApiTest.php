@@ -749,7 +749,7 @@ test('each exhausted stall episode creates one owner-visible escalation', functi
     expect($secondAnchor)->not->toBeNull();
     $exhaust();
 
-    $escalations = WorkEscalation::query()->orderBy('created_at')->orderBy('id')->get();
+    $escalations = WorkEscalation::query()->oldest()->orderBy('id')->get();
     expect($escalations)->toHaveCount(2)
         ->and($escalations->pluck('request_key')->unique())->toHaveCount(2)
         ->and($escalations[0]->request_key)->toBe('directive-exhausted:'.$item->id.':1:stall:'.$firstAnchor->getTimestamp())
