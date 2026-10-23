@@ -52,6 +52,11 @@
         <section data-testid="work-task" data-task-id="{{ $task->id }}" class="space-y-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-700">
             <flux:heading>{{ $task->title }}</flux:heading>
             <flux:text>{{ $task->team_id }} · {{ $task->creator_actor }}</flux:text>
+            @if (is_array($task->pr) && is_string($task->pr['url'] ?? null) && str_starts_with($task->pr['url'], 'https://'))
+                <div data-testid="work-task-pr">
+                    <a href="{{ $task->pr['url'] }}" rel="noopener noreferrer">{{ $task->pr['repo'] }}#{{ $task->pr['number'] }}</a>
+                </div>
+            @endif
             @if ($task->cancelled_at)
                 <flux:badge>{{ __('Cancelled') }}</flux:badge>
             @endif
@@ -71,6 +76,19 @@
                         </div>
                     @endforeach
                 </details>
+            @endif
+            @if ($task->evidence->isNotEmpty())
+                <section data-testid="work-task-evidence" class="space-y-2">
+                    <flux:heading size="sm">{{ __('Evidence') }}</flux:heading>
+                    <ul class="list-disc space-y-1 ps-5">
+                        @foreach ($task->evidence as $evidence)
+                            <li>
+                                <a href="{{ route('work.evidence.show', ['token' => $evidence->public_token]) }}">{{ $evidence->id }}</a>
+                                <span>{{ $evidence->content_type }} · {{ $evidence->size_bytes }}</span>
+                            </li>
+                        @endforeach
+                    </ul>
+                </section>
             @endif
             @foreach ($task->items as $item)
                 <article data-testid="work-item" data-item-id="{{ $item->id }}" class="space-y-2 border-s-2 ps-4">

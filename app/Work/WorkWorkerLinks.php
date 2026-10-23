@@ -15,7 +15,7 @@ final class WorkWorkerLinks
         $expires = $item->lease_until->min($item->claimed_at->addMinutes($item->workTask->timebox_minutes))->addSeconds($grace);
         $links = [];
 
-        foreach (['brief', 'milestone', 'steers'] as $action) {
+        foreach (['brief', 'milestone', 'steers', 'evidence'] as $action) {
             $links[$action] = URL::temporarySignedRoute('api.work.worker.'.$action, $expires, [
                 'item' => $item->id,
                 'fence' => $item->fence,

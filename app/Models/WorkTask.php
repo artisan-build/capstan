@@ -46,6 +46,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property-read WorkBriefRevision|null $latestBriefRevision
  * @property-read Collection<int, WorkItem> $items
  * @property-read Collection<int, WorkMilestone> $milestones
+ * @property-read Collection<int, WorkEvidence> $evidence
  * @property-read Collection<int, WorkSteer> $steers
  *
  * @mixin IdeHelperWorkTask
@@ -201,6 +202,12 @@ class WorkTask extends Model
     public function milestones(): HasManyThrough
     {
         return $this->hasManyThrough(WorkMilestone::class, WorkItem::class);
+    }
+
+    /** @return HasMany<WorkEvidence, $this> */
+    public function evidence(): HasMany
+    {
+        return $this->hasMany(WorkEvidence::class);
     }
 
     /** @return HasMany<WorkSteer, $this> */

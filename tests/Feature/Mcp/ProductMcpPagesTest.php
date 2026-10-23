@@ -147,6 +147,7 @@ test('advertises the four exact page tools through their effect doors', function
         'update_brand_draft',
         'update_page',
         'upload_brand_asset',
+        'upload_work_evidence',
     ])->and(data_get($write->get('publish_page'), '_meta.effect'))->toBe('write')
         ->and(data_get($write->get('update_page'), 'inputSchema.additionalProperties'))->toBeFalse()
         ->and(data_get($read->get('list_pages'), '_meta.effect'))->toBe('read')

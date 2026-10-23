@@ -107,6 +107,11 @@ final class WorkRepresentation
             $properties['payload'] = $schema->object([
                 'url' => $schema->string(),
                 'summary' => $schema->string(),
+                'pr' => $schema->object([
+                    'repo' => $schema->string()->required(),
+                    'number' => $schema->integer()->required(),
+                    'url' => $schema->string()->required(),
+                ])->withoutAdditionalProperties(),
             ])->withoutAdditionalProperties()->required();
         } elseif ($kind === 'task') {
             $properties['depends_on'] = $schema->array()->items($schema->string())->required();

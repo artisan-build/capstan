@@ -811,6 +811,9 @@ test('interactive MCP context and exact action envelope exercise the full subtre
     expect($call('set_priority', ['priority' => 'P1'], 'interactive-priority-raise'))
         ->toBe(['outcome' => 'refused', 'reason' => 'orchestration_forbidden']);
     $lowered = $call('set_priority', ['priority' => 'P3'], 'interactive-priority-lower');
+    $pr = ['repo' => 'artisan-build/capstan', 'number' => 112, 'url' => 'https://example.test/pull/112'];
+    $setPr = $call('set_pr', ['task_id' => $child->id, 'pr' => $pr], 'interactive-set-pr');
+    expect($call('set_pr', ['task_id' => $child->id, 'pr' => $pr], 'interactive-set-pr')['outcome'])->toBe('already_accepted');
     $call('revise_brief', ['task_id' => $child->id, 'brief' => 'Revised child'], 'interactive-revise');
     $queued = $call('queue_item', ['task_id' => $child->id, 'role' => 'builder'], 'interactive-queue');
     expect($call('queue_item', ['task_id' => $child->id, 'role' => 'builder'], 'interactive-queue')['outcome'])->toBe('already_accepted');
@@ -826,6 +829,9 @@ test('interactive MCP context and exact action envelope exercise the full subtre
     expect($created['task_id'])->not->toBe($parent->id)
         ->and($lowered['status'])->toBe('completed')
         ->and($parent->fresh()->priority->value)->toBe('P3')
+        ->and($setPr['status'])->toBe('completed')
+        ->and($child->fresh()->pr)->toBe($pr)
+        ->and(WorkOrchestrationEvent::query()->where('kind', 'task_pr_changed')->count())->toBe(1)
         ->and(WorkTask::query()->findOrFail($created['task_id'])->priority->value)->toBe('P3')
         ->and($finished['status'])->toBe('completed')
         ->and($failed['status'])->toBe('completed')

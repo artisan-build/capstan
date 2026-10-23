@@ -5,6 +5,7 @@ namespace App\Work;
 use App\Enums\WorkItemState;
 use App\Enums\WorkMilestoneKind;
 use App\Models\Spoke;
+use App\Models\WorkEvidence;
 use App\Models\WorkItem;
 use App\Models\WorkMilestone;
 use App\Models\WorkSteer;
@@ -14,8 +15,10 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
-final class WorkWorkerService
+final readonly class WorkWorkerService
 {
+    public function __construct(private WorkEvidenceService $evidence) {}
+
     /** @return Builder<WorkItem> */
     public function recoveryQuery(): Builder
     {
@@ -81,10 +84,26 @@ final class WorkWorkerService
         }, $afterIdentified);
     }
 
-    /** @param array{url?: string, summary?: string} $payload */
+    /** @param array{url?: string, summary?: string, pr?: array{repo: string, number: int, url: string}} $payload */
     public function milestone(string $id, int $fence, WorkMilestoneKind $kind, array $payload, ?Closure $afterIdentified = null): WorkMilestone
     {
         return $this->guarded($id, $fence, function (WorkItem $item) use ($kind, $payload): WorkMilestone {
+            if ($kind === WorkMilestoneKind::PullRequestOpened) {
+                $pr = $payload['pr'] ?? null;
+                abort_unless(is_array($pr), 422, 'PR metadata is required.');
+                $task = $item->workTask;
+                if ($task->pr !== null && $task->pr !== $pr) {
+                    throw new HttpException(409, 'PR metadata is already set.');
+                }
+                $existing = $item->milestones()->where('kind', $kind->value)->get()
+                    ->first(fn (WorkMilestone $milestone): bool => ($milestone->payload['pr'] ?? null) === $pr);
+                if ($existing instanceof WorkMilestone) {
+                    return $existing;
+                }
+                if ($task->pr === null) {
+                    $task->forceFill(['pr' => $pr])->save();
+                }
+            }
             $now = CarbonImmutable::now();
             if ($item->milestones()->where('created_at', '>', $now->subMinutes(10))->count() >= 30) {
                 throw new HttpException(429, 'Too many milestones.');
@@ -130,6 +149,20 @@ final class WorkWorkerService
 
             return $milestone;
         }, $afterIdentified);
+    }
+
+    public function evidence(string $id, int $fence, string $filename, string $bytes): WorkEvidence
+    {
+        $metadata = $this->evidence->inspect($filename, $bytes);
+        $actor = $this->guarded($id, $fence, fn (WorkItem $item): string => (string) $item->claimant_actor);
+        $this->evidence->throttle('actor:'.$actor);
+        $attempts = new WorkEvidenceAttemptLog;
+
+        return $attempts->settle(fn (): WorkEvidence => $this->guarded(
+            $id,
+            $fence,
+            fn (WorkItem $item): WorkEvidence => $this->evidence->store($item, $bytes, $metadata, $attempts),
+        ));
     }
 
     /** @return list<array<string, mixed>> */

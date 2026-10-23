@@ -45,6 +45,15 @@ final readonly class WorkOrchestrationMcpService
                 }
                 $seat = $this->seats->take($parent, $actor, $spoke->id, $seat->fence, $sessionRef, true, $now);
             }
+            $turn = WorkItem::query()->whereKey($seat->active_item_id)->lockForUpdate()->first();
+            if ($turn instanceof WorkItem && $turn->role === WorkItem::ROLE_ORCHESTRATOR
+                && $turn->state->value === 'queued' && $turn->turn_upper_bound === null) {
+                $turn->forceFill([
+                    'turn_cursor' => $seat->completed_cursor,
+                    'turn_upper_bound' => $seat->event_sequence,
+                    'seat_fence' => $seat->fence,
+                ])->save();
+            }
 
             return $this->context($parent, $seat, $spoke, $after, $now, $decisionsAfter);
         }, 5);

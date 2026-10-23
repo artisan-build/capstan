@@ -159,6 +159,7 @@ test('mounts the complete write family behind the write ceiling', function (): v
             'update_brand_draft',
             'update_page',
             'upload_brand_asset',
+            'upload_work_evidence',
         ]);
 
     foreach ([

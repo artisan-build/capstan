@@ -24,6 +24,7 @@ final readonly class DurableWriteCoordinator
     /**
      * @param  array<string, mixed>  $intent
      * @param  Closure(string, string): array<string, mixed>  $operation
+     * @param  (Closure(): void)|null  $admission
      * @return array<string, mixed>
      */
     public function run(
@@ -33,6 +34,7 @@ final readonly class DurableWriteCoordinator
         array $intent,
         string $targetType,
         Closure $operation,
+        ?Closure $admission = null,
     ): array {
         $intentHash = hash('sha256', JsonCanonicalizer::encode($intent));
         $candidateId = (string) Str::uuid();
@@ -159,6 +161,7 @@ final readonly class DurableWriteCoordinator
 
         try {
             $this->faults->beforeOperation($tool);
+            $admission?->__invoke();
             $result = DB::transaction(function () use ($operation, $claimId, $targetId, $fenceToken): array {
                 $claim = DB::table('mcp_write_claims')->where('id', $claimId)->lockForUpdate()->first();
                 $effectStartedAt = CarbonImmutable::now();

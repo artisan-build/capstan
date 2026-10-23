@@ -88,6 +88,28 @@ final readonly class WorkOrchestrationCapability
         });
     }
 
+    /** @param array{repo: string, number: int, url: string} $pr */
+    public function setPullRequest(WorkOrchestrationContext $context, string $taskId, array $pr, CarbonImmutable $now): WorkTask
+    {
+        return $this->authorised($context, $now, function (WorkTask $parent) use ($taskId, $pr): WorkTask {
+            $target = $this->target($parent, $taskId, allowParent: true);
+            $old = $target->pr;
+            if ($old === $pr) {
+                return $target;
+            }
+            $target->forceFill(['pr' => $pr])->save();
+            $this->orchestration->event(
+                $parent,
+                'pr-change:'.Str::uuid7(),
+                'task_pr_changed',
+                ['task_id' => $target->id, 'old_pr' => $old, 'new_pr' => $pr],
+                inheritAuthor: false,
+            );
+
+            return $target->refresh();
+        });
+    }
+
     public function reviseBrief(WorkOrchestrationContext $context, string $taskId, string $brief, CarbonImmutable $now): WorkBriefRevision
     {
         return $this->authorised($context, $now, fn (WorkTask $parent): WorkBriefRevision => $this->briefs->append(
@@ -264,14 +286,15 @@ final readonly class WorkOrchestrationCapability
             ]);
             $seat->turns_started++;
             if ($state === WorkItemState::Acted) {
+                $through = $item->turn_upper_bound ?? $seat->event_sequence;
                 WorkStateRevision::query()->create([
                     'work_task_id' => $parent->id,
                     'work_item_id' => $item->id,
                     'sequence' => $seat->turns_completed + 1,
-                    'through_cursor' => $seat->event_sequence,
+                    'through_cursor' => $through,
                     'content' => (string) $content,
                 ]);
-                $seat->completed_cursor = $seat->event_sequence;
+                $seat->completed_cursor = $through;
                 $seat->turns_completed++;
             }
             $seat->active_item_id = null;
