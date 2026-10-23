@@ -595,7 +595,7 @@ test('current-holder progress ends one stall episode and a later stall starts a 
     $poll($held)->assertJsonCount(0, 'directives');
 
     expect($newIds)->not->toContain($oldId)
-        ->and(WorkDirective::query()->where('work_item_id', $item->id)->where('reason', 'stall')->pluck('sequence')->all())->toBe([1, 2, 3, 4, 5])
+        ->and(WorkDirective::query()->where('work_item_id', $item->id)->where('reason', 'stall')->orderBy('sequence')->pluck('sequence')->all())->toBe([1, 2, 3, 4, 5])
         ->and(WorkDirective::query()->findOrFail($oldId)->outcome)->toBe(['result' => 'resolved_by_progress'])
         ->and(WorkEscalation::query()->where('request_key', 'directive-exhausted:'.$item->id.':1:stall')->count())->toBe(1);
 });
