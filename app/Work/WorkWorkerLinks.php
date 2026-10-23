@@ -15,7 +15,7 @@ final class WorkWorkerLinks
             $item->forceFill(['launch_nonce' => (string) Str::uuid7()])->save();
         }
         $grace = max(0, (int) config('capstan.work.link_grace_seconds', 60));
-        $expires = $item->lease_until->min($item->claimed_at->addMinutes($item->workTask->timebox_minutes))->addSeconds($grace);
+        $expires = $item->lease_until->addSeconds($grace);
         $links = [];
 
         foreach (['brief', 'milestone', 'steers', 'evidence'] as $action) {

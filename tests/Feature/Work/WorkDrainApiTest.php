@@ -17,9 +17,11 @@ use App\Models\WorkOrchestratorSeat;
 use App\Models\WorkTask;
 use App\Work\WorkDirectiveService;
 use App\Work\WorkItemStateService;
+use App\Work\WorkNotifier;
 use App\Work\WorkOrchestrationService;
 use App\Work\WorkSeatService;
 use App\Work\WorkSweepService;
+use App\Work\WorkWorkerLinks;
 use App\Work\WorkWorkerService;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\User;
@@ -145,7 +147,7 @@ test('claim is deterministic capped thin and supports zero capacity', function (
     expect(WorkItem::query()->where('state', WorkItemState::Queued)->count())->toBe(2);
 });
 
-test('claim and renewed records carry fresh signed links with capped expiry', function (): void {
+test('claim and renewed records carry fresh signed links through the current lease grace', function (): void {
     Date::setTestNow('2026-10-17 10:00:00');
     config(['capstan.work.link_grace_seconds' => 60]);
     $team = workDrainTeam();
@@ -161,7 +163,7 @@ test('claim and renewed records carry fresh signed links with capped expiry', fu
     foreach ($renew->json('results.0.item.links') as $action => $url) {
         expect($url)->not->toBe($links[$action]);
         parse_str(parse_url($url, PHP_URL_QUERY), $query);
-        expect((int) $query['expires'])->toBe(CarbonImmutable::parse('2026-10-17 10:07:00')->timestamp);
+        expect((int) $query['expires'])->toBe(CarbonImmutable::parse('2026-10-17 10:08:00')->timestamp);
     }
     $this->getJson($renew->json('results.0.item.links.brief'))->assertOk();
 });
@@ -522,7 +524,7 @@ test('receipt and stall repairs coexist on one item fence and stall escalation i
     $poll($held)->assertJsonCount(0, 'directives');
     $poll($held)->assertJsonCount(0, 'directives');
     expect(WorkDirective::query()->where('work_item_id', $item->id)->where('fence', 1)->where('reason', 'stall')->pluck('kind')->all())->toBe($kinds)
-        ->and(WorkEscalation::query()->where('request_key', 'directive-exhausted:'.$item->id.':1:stall')->count())->toBe(1);
+        ->and(WorkEscalation::query()->where('request_key', 'like', 'directive-exhausted:'.$item->id.':1:stall:%')->count())->toBe(1);
 });
 
 test('current-holder progress ends one stall episode and a later stall starts a complete new ladder', function (): void {
@@ -573,7 +575,7 @@ test('current-holder progress ends one stall episode and a later stall starts a 
     Date::setTestNow(now()->addSeconds(61));
     $poll($held)->assertJsonCount(0, 'directives');
     $poll($held)->assertJsonCount(0, 'directives');
-    expect(WorkEscalation::query()->where('request_key', 'directive-exhausted:'.$item->id.':1:stall')->count())->toBe(0);
+    expect(WorkEscalation::query()->where('request_key', 'like', 'directive-exhausted:'.$item->id.':1:stall:%')->count())->toBe(0);
 
     resolve(WorkSweepService::class)->liveness(CarbonImmutable::now());
     expect($item->fresh()->stalled_at?->toJSON())->toBe(now()->toJSON());
@@ -597,7 +599,163 @@ test('current-holder progress ends one stall episode and a later stall starts a 
     expect($newIds)->not->toContain($oldId)
         ->and(WorkDirective::query()->where('work_item_id', $item->id)->where('reason', 'stall')->orderBy('sequence')->pluck('sequence')->all())->toBe([1, 2, 3, 4, 5])
         ->and(WorkDirective::query()->findOrFail($oldId)->outcome)->toBe(['result' => 'resolved_by_progress'])
-        ->and(WorkEscalation::query()->where('request_key', 'directive-exhausted:'.$item->id.':1:stall')->count())->toBe(1);
+        ->and(WorkEscalation::query()->where('request_key', 'like', 'directive-exhausted:'.$item->id.':1:stall:%')->count())->toBe(1);
+});
+
+test('renewed HTTP capabilities survive a swept stall and later repair links remain usable', function (): void {
+    Date::setTestNow('2026-10-23 14:30:00');
+    expect(config('capstan.work.receipt_deadline_seconds'))->toBe(180)
+        ->and(config('capstan.work.link_grace_seconds'))->toBe(60);
+    $team = workDrainTeam();
+    $task = workDrainTask($team, ['timebox_minutes' => 1]);
+    $task->briefRevisions()->create(['sequence' => 1, 'content' => 'Leased recovery brief', 'author_actor' => 'creator']);
+    $item = workDrainItem($task);
+    $issued = workDrainCredential(capstanUser());
+    $claim = $this->withHeaders($issued['headers'])
+        ->postJson(route('api.work.claim', $team), workDrainClaimPayload())
+        ->assertOk();
+    foreach (['delivered', 'routed'] as $state) {
+        $this->withHeaders($issued['headers'])->postJson(route('api.work.transition', $team), [
+            'item_id' => $item->id,
+            'fence' => 1,
+            'state' => $state,
+        ])->assertOk();
+    }
+    $renew = fn () => $this->withHeaders($issued['headers'])->postJson(route('api.work.renew', $team), [
+        'items' => [['item_id' => $item->id, 'fence' => 1]],
+    ])->assertOk();
+    $poll = fn (array $reported) => $this->withHeaders($issued['headers'])->postJson(route('api.work.claim', $team), [
+        ...workDrainClaimPayload(0),
+        'orchestrator_capacity' => 0,
+        'held_items' => [$reported],
+    ])->assertOk();
+    $held = ['item_id' => $item->id, 'fence' => 1];
+
+    Date::setTestNow(now()->addSeconds(61));
+    resolve(WorkSweepService::class)->liveness(CarbonImmutable::now());
+    $firstEpisode = $item->fresh()->stalled_at;
+    expect($firstEpisode)->not->toBeNull();
+
+    Date::setTestNow(now()->addSeconds(59));
+    $renew();
+    Date::setTestNow(now()->addMinutes(2));
+    $fresh = $renew();
+    Date::setTestNow($firstEpisode->addSeconds(181));
+    $first = $poll($held)
+        ->assertJsonPath('directives.0.reason', 'stall')
+        ->assertJsonPath('directives.0.kind', 'send_enter');
+    $this->postJson($fresh->json('results.0.item.links.milestone'), [
+        'kind' => 'note',
+        'payload' => ['summary' => 'Recovered through a renewed capability'],
+    ])->assertCreated();
+    expect(WorkDirective::query()->findOrFail($first->json('directives.0.id'))->outcome)
+        ->toBe(['result' => 'resolved_by_progress'])
+        ->and($item->fresh()->stalled_at)->toBeNull();
+
+    Date::setTestNow(now()->addSeconds(61));
+    resolve(WorkSweepService::class)->liveness(CarbonImmutable::now());
+    $secondEpisode = $item->fresh()->stalled_at;
+    expect($secondEpisode)->not->toBeNull();
+    Date::setTestNow(now()->addMinutes(2));
+    $renew();
+    Date::setTestNow($secondEpisode->addSeconds(181));
+    $secondFirst = $poll($held)->assertJsonPath('directives.0.kind', 'send_enter');
+    $poll([
+        ...$held,
+        'directive_id' => $secondFirst->json('directives.0.id'),
+        'directive_outcome' => 'failed',
+    ])->assertJsonCount(0, 'directives');
+    Date::setTestNow(now()->addMinutes(2));
+    $renew();
+    Date::setTestNow(now()->addSeconds(61));
+    $later = $poll($held)
+        ->assertJsonPath('directives.0.kind', 'resend_pointer')
+        ->assertJsonPath('directives.0.reason', 'stall');
+    $this->getJson($later->json('directives.0.links.brief'))->assertOk();
+    expect(WorkDirective::query()->findOrFail($later->json('directives.0.id'))->outcome)
+        ->toBe(['result' => 'resolved_by_fetch']);
+});
+
+test('each exhausted stall episode creates one owner-visible escalation', function (): void {
+    Date::setTestNow('2026-10-23 15:00:00');
+    config(['capstan.work.receipt_deadline_seconds' => 60]);
+    $team = workDrainTeam();
+    $task = workDrainTask($team, ['timebox_minutes' => 1]);
+    $issued = workDrainCredential(capstanUser());
+    $item = workDrainItem($task, [
+        'state' => 'routed',
+        'fence' => 1,
+        'claimant_actor' => $issued['spoke']->actor_id,
+        'claimant_spoke_id' => $issued['spoke']->id,
+        'claimed_at' => now()->subMinutes(2),
+        'lease_until' => now()->addHour(),
+        'first_fetched_at' => now(),
+        'launch_nonce' => (string) Str::uuid7(),
+    ]);
+    $notifier = Mockery::mock(WorkNotifier::class);
+    $notifier->shouldReceive('stalled')->twice();
+    $notifier->shouldReceive('escalated')->twice()->withArgs(
+        fn (WorkEscalation $escalation): bool => $escalation->notified_at !== null,
+    );
+    app()->instance(WorkNotifier::class, $notifier);
+    $held = ['item_id' => $item->id, 'fence' => 1];
+    $poll = fn (array $reported) => $this->withHeaders($issued['headers'])->postJson(route('api.work.claim', $team), [
+        ...workDrainClaimPayload(0),
+        'orchestrator_capacity' => 0,
+        'held_items' => [$reported],
+    ])->assertOk();
+    $exhaust = function () use ($held, $poll): void {
+        foreach (['send_enter', 'resend_pointer', 'respawn', 'respawn'] as $index => $kind) {
+            Date::setTestNow(now()->addSeconds(61));
+            $directive = $poll($held)
+                ->assertJsonPath('directives.0.kind', $kind)
+                ->assertJsonPath('directives.0.reason', 'stall');
+            $reported = [
+                ...$held,
+                'directive_id' => $directive->json('directives.0.id'),
+                'directive_outcome' => $index < 2 ? 'failed' : 'succeeded',
+            ];
+            if ($kind === 'respawn') {
+                $reported['launch_nonce'] = $directive->json('directives.0.payload.launch_nonce');
+                $reported['session_ref'] = 'solo:episode-repair-'.$index;
+            }
+            $poll($reported)->assertJsonCount(0, 'directives');
+        }
+        Date::setTestNow(now()->addSeconds(61));
+        $poll($held)->assertJsonCount(0, 'directives');
+        $poll($held)->assertJsonCount(0, 'directives');
+    };
+
+    resolve(WorkSweepService::class)->liveness(CarbonImmutable::now());
+    $firstAnchor = $item->fresh()->stalled_at;
+    expect($firstAnchor)->not->toBeNull();
+    $exhaust();
+    $first = WorkEscalation::query()->sole();
+    resolve(WorkOrchestrationService::class)->answer(
+        $first,
+        $first->addressed_actor,
+        'Keep the claim running.',
+        CarbonImmutable::now(),
+    );
+    $this->postJson(resolve(WorkWorkerLinks::class)->forItem($item->fresh())['milestone'], [
+        'kind' => 'note',
+        'payload' => ['summary' => 'The repaired worker made progress'],
+    ])->assertCreated();
+    expect($item->fresh()->stalled_at)->toBeNull();
+
+    Date::setTestNow(now()->addSeconds(61));
+    resolve(WorkSweepService::class)->liveness(CarbonImmutable::now());
+    $secondAnchor = $item->fresh()->stalled_at;
+    expect($secondAnchor)->not->toBeNull();
+    $exhaust();
+
+    $escalations = WorkEscalation::query()->orderBy('created_at')->orderBy('id')->get();
+    expect($escalations)->toHaveCount(2)
+        ->and($escalations->pluck('request_key')->unique())->toHaveCount(2)
+        ->and($escalations[0]->request_key)->toBe('directive-exhausted:'.$item->id.':1:stall:'.$firstAnchor->getTimestamp())
+        ->and($escalations[0]->answered_at)->not->toBeNull()
+        ->and($escalations[1]->answered_at)->toBeNull()
+        ->and($escalations[1]->request_key)->toBe('directive-exhausted:'.$item->id.':1:stall:'.$secondAnchor->getTimestamp());
 });
 
 test('progress and directive polling are safe in both serialization orders', function (): void {

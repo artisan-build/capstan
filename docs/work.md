@@ -277,7 +277,8 @@ Each claim has one `launch_nonce`. Every signed worker link for that claim carri
 launcher sends the nonce and its opaque `session_ref` with the `delivered` transition. Capstan records those
 values and `handed_off_at` without adding another item state, so the existing
 `claimed → delivered → routed` transition contract remains valid. The legacy Python drain may continue to send
-`delivered` without launch metadata.
+`delivered` without launch metadata. Newly minted links expire at the claim's current `lease_until` plus the
+bounded link grace. Renewals and repair directives return fresh links; they do not extend links minted earlier.
 
 The first brief request with the claim's nonce records `first_fetched_at`, the exact brief revision and Page
 version served, and the optional agent-reported `model` query value. Every signed worker and orchestrator
@@ -292,6 +293,8 @@ returns one pending directive in this order: `send_enter`, `resend_pointer`, fir
 unchanged until its outcome is recorded or a matching brief fetch proves it succeeded. The next repair cannot
 be issued until another deadline has elapsed. After the second respawn completes and its deadline elapses,
 exhausting the sequence creates one owner-addressed escalation for that item, fence, and failure reason.
+Each later stall episode has its own escalation identity, so exhausting it notifies the owner again without
+replacing the earlier directive or escalation history.
 
 Running items marked stalled use the same directive records and outcome rules. Directives are durable rows,
 separate from item transitions. Their item, fence, machine, sequence, reason, payload, status, timestamps, and

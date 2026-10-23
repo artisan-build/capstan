@@ -135,7 +135,13 @@ final readonly class WorkDirectiveService
 
             $repair = $completed->count() + 1;
             if ($repair > count(self::REPAIRS)) {
-                $exhausted = ['task_id' => $locked->work_task_id, 'item_id' => $locked->id, 'fence' => $locked->fence, 'reason' => $reason];
+                $exhausted = [
+                    'task_id' => $locked->work_task_id,
+                    'item_id' => $locked->id,
+                    'fence' => $locked->fence,
+                    'reason' => $reason,
+                    'episode' => $reason === 'stall' ? $anchor->getTimestamp() : null,
+                ];
 
                 return null;
             }
@@ -173,7 +179,8 @@ final readonly class WorkDirectiveService
             $root = $this->root(WorkTask::query()->findOrFail($exhausted['task_id']));
             resolve(WorkOrchestrationService::class)->escalate(
                 $root,
-                'directive-exhausted:'.$exhausted['item_id'].':'.$exhausted['fence'].':'.$exhausted['reason'],
+                'directive-exhausted:'.$exhausted['item_id'].':'.$exhausted['fence'].':'.$exhausted['reason']
+                    .($exhausted['episode'] === null ? '' : ':'.$exhausted['episode']),
                 null,
                 $exhausted['reason'] === 'receipt' ? 'A worker did not fetch its brief after every launch repair.' : 'A running worker stayed stalled after every repair.',
                 ['Inspect the worker output', 'Release and re-queue the item'],

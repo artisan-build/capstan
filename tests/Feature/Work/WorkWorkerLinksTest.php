@@ -39,7 +39,7 @@ function workerLinkItem(array $attributes = []): WorkItem
     ], $attributes));
 }
 
-test('worker links cap expiry by lease and timebox with grace', function (): void {
+test('worker links expire at the observed lease plus grace', function (): void {
     $item = workerLinkItem();
     foreach (resolve(WorkWorkerLinks::class)->forItem($item) as $url) {
         parse_str(parse_url($url, PHP_URL_QUERY), $query);
@@ -51,7 +51,7 @@ test('worker links cap expiry by lease and timebox with grace', function (): voi
     expect(resolve(WorkWorkerLinks::class)->forItem($item))->toBe($firstLinks);
     foreach (resolve(WorkWorkerLinks::class)->forItem($item->refresh()) as $url) {
         parse_str(parse_url($url, PHP_URL_QUERY), $query);
-        expect((int) $query['expires'])->toBe(now()->addMinutes(11)->timestamp);
+        expect((int) $query['expires'])->toBe(now()->addHour()->addMinute()->timestamp);
     }
 });
 
@@ -82,7 +82,7 @@ test('signature binds id fence expiry and endpoint', function (string $change): 
     $this->getJson('/api/v1/work/items')->assertNotFound();
 })->with(['id', 'fence', 'expiry', 'endpoint']);
 
-test('expired signatures are refused before claim checks', function (): void {
+test('signatures are refused after the observed lease plus grace', function (): void {
     $url = resolve(WorkWorkerLinks::class)->forItem(workerLinkItem())['brief'];
     Date::setTestNow(now()->addMinutes(7));
     $this->getJson($url)->assertForbidden();
