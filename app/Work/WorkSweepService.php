@@ -39,13 +39,17 @@ final readonly class WorkSweepService
                     if ($this->sameClaim($item)->update(['updated_at' => DB::raw('work_items.updated_at')]) !== 1) {
                         return;
                     }
-                    $deadline = $item->claimed_at->addMinutes($item->workTask->timebox_minutes);
-                    $updated = $this->sameClaim($item)->whereNull('stalled_at')
-                        ->whereDoesntHave('milestones', fn ($query) => $query->where('fence', $item->fence)->where('created_at', '<=', $deadline))
-                        ->update(['stalled_at' => $now]);
-                    if ($updated === 1) {
-                        resolve(WorkEventProjector::class)->stalled($item->fresh());
-                        $this->notifier->stalled($item->fresh());
+                    $latest = $item->milestones()->where('fence', $item->fence)
+                        ->reorder()->latest()->orderByDesc('id')->first();
+                    $anchor = $latest === null ? $item->claimed_at : $latest->created_at;
+                    $deadline = $anchor->addMinutes($item->workTask->timebox_minutes);
+                    if ($deadline->lte($now)) {
+                        $updated = $this->sameClaim($item)->whereNull('stalled_at')
+                            ->update(['stalled_at' => $now]);
+                        if ($updated === 1) {
+                            resolve(WorkEventProjector::class)->stalled($item->fresh());
+                            $this->notifier->stalled($item->fresh());
+                        }
                     }
                 }
 

@@ -104,7 +104,8 @@ final readonly class WorkDirectiveService
                 return null;
             }
 
-            $latest = $locked->directives()->where('fence', $locked->fence)->where('reason', $reason)
+            $history = $locked->directives()->where('fence', $locked->fence)->where('reason', $reason);
+            $latest = (clone $history)
                 ->reorder()->orderByDesc('sequence')->first();
             if ($anchor === null && $latest instanceof WorkDirective) {
                 $anchor = $latest->completed_at ?? $latest->issued_at;
@@ -113,14 +114,18 @@ final readonly class WorkDirectiveService
                 return null;
             }
 
-            $pending = $locked->directives()->where('fence', $locked->fence)->where('reason', $reason)
-                ->where('status', 'pending')->first();
+            $episode = clone $history;
+            if ($reason === 'stall') {
+                $episode->where('issued_at', '>', $anchor);
+            }
+
+            $pending = (clone $episode)->where('status', 'pending')->first();
             if ($pending instanceof WorkDirective) {
                 return $pending;
             }
 
-            $completed = $locked->directives()->where('fence', $locked->fence)->where('reason', $reason)
-                ->whereIn('status', ['succeeded', 'failed'])->reorder()->orderByDesc('sequence')->get();
+            $completed = (clone $episode)->whereIn('status', ['succeeded', 'failed'])
+                ->reorder()->orderByDesc('sequence')->get();
             $deadline = $this->deadline($locked);
             $lastCompleted = $completed->first()?->completed_at;
             $readyAt = $lastCompleted?->addSeconds($deadline) ?? $anchor->addSeconds($deadline);
@@ -128,14 +133,21 @@ final readonly class WorkDirectiveService
                 return null;
             }
 
-            $sequence = $completed->count() + 1;
-            if ($sequence > count(self::REPAIRS)) {
-                $exhausted = ['task_id' => $locked->work_task_id, 'item_id' => $locked->id, 'fence' => $locked->fence, 'reason' => $reason];
+            $repair = $completed->count() + 1;
+            if ($repair > count(self::REPAIRS)) {
+                $exhausted = [
+                    'task_id' => $locked->work_task_id,
+                    'item_id' => $locked->id,
+                    'fence' => $locked->fence,
+                    'reason' => $reason,
+                    'episode' => $reason === 'stall' ? $anchor->getTimestamp() : null,
+                ];
 
                 return null;
             }
 
-            $kind = self::REPAIRS[$sequence - 1];
+            $sequence = ((int) (clone $history)->max('sequence')) + 1;
+            $kind = self::REPAIRS[$repair - 1];
             $payload = [];
             if ($kind === 'respawn') {
                 $nonce = (string) Str::uuid7();
@@ -167,7 +179,8 @@ final readonly class WorkDirectiveService
             $root = $this->root(WorkTask::query()->findOrFail($exhausted['task_id']));
             resolve(WorkOrchestrationService::class)->escalate(
                 $root,
-                'directive-exhausted:'.$exhausted['item_id'].':'.$exhausted['fence'].':'.$exhausted['reason'],
+                'directive-exhausted:'.$exhausted['item_id'].':'.$exhausted['fence'].':'.$exhausted['reason']
+                    .($exhausted['episode'] === null ? '' : ':'.$exhausted['episode']),
                 null,
                 $exhausted['reason'] === 'receipt' ? 'A worker did not fetch its brief after every launch repair.' : 'A running worker stayed stalled after every repair.',
                 ['Inspect the worker output', 'Release and re-queue the item'],

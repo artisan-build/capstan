@@ -277,7 +277,8 @@ Each claim has one `launch_nonce`. Every signed worker link for that claim carri
 launcher sends the nonce and its opaque `session_ref` with the `delivered` transition. Capstan records those
 values and `handed_off_at` without adding another item state, so the existing
 `claimed → delivered → routed` transition contract remains valid. The legacy Python drain may continue to send
-`delivered` without launch metadata.
+`delivered` without launch metadata. Newly minted links expire at the claim's current `lease_until` plus the
+bounded link grace. Renewals and repair directives return fresh links; they do not extend links minted earlier.
 
 The first brief request with the claim's nonce records `first_fetched_at`, the exact brief revision and Page
 version served, and the optional agent-reported `model` query value. Every signed worker and orchestrator
@@ -292,10 +293,22 @@ returns one pending directive in this order: `send_enter`, `resend_pointer`, fir
 unchanged until its outcome is recorded or a matching brief fetch proves it succeeded. The next repair cannot
 be issued until another deadline has elapsed. After the second respawn completes and its deadline elapses,
 exhausting the sequence creates one owner-addressed escalation for that item, fence, and failure reason.
+Each later stall episode has its own escalation identity, so exhausting it notifies the owner again without
+replacing the earlier directive or escalation history.
 
 Running items marked stalled use the same directive records and outcome rules. Directives are durable rows,
 separate from item transitions. Their item, fence, machine, sequence, reason, payload, status, timestamps, and
 bounded outcome make poll replay idempotent and keep policy on the server.
+
+A matching brief fetch settles each pending directive according to its reason. A receipt repair records a
+successful receipt. A stall repair records `resolved_by_fetch` without a receipt marker. Fetching the brief
+does not clear `stalled_at`; without a later milestone, the next stall repair may be issued after its deadline.
+
+A newly accepted milestone from the current claim holder clears `stalled_at` and settles a pending stall
+directive as `resolved_by_progress`. The milestone, item update, and directive settlement commit together. An
+idempotent replay that returns an existing milestone does not clear a later stall. If the same claim holder
+stalls again after making progress, the repair order starts again at `send_enter`. Directive sequence numbers
+remain unique and continue across episodes so the earlier history is not replaced.
 
 The extended claim request accepts `held_items`. Each entry has an item id and fence and may report a directive
 id with a `succeeded` or `failed` outcome. A successful respawn also reports its new nonce and session reference.

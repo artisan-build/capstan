@@ -77,6 +77,7 @@ final readonly class WorkWorkerService
     public function brief(string $id, int $fence, string $nonce, ?string $model = null, ?Closure $afterIdentified = null): array
     {
         return $this->guarded($id, $fence, function (WorkItem $item) use ($model): array {
+            $now = CarbonImmutable::now();
             $revision = $item->workTask->briefRevisions()->reorder()->orderByDesc('sequence')->first();
             $receipt = [
                 'fetched_brief_revision_id' => $revision?->id,
@@ -84,15 +85,21 @@ final readonly class WorkWorkerService
                 'agent_model' => $model,
             ];
             if ($item->first_fetched_at === null) {
-                $receipt['first_fetched_at'] = CarbonImmutable::now();
+                $receipt['first_fetched_at'] = $now;
             }
             $updated = $this->activeQuery()->whereKey($item->id)->where('fence', $item->fence)->update($receipt);
             abort_unless($updated === 1, 409, 'claim lost');
             WorkDirective::query()->where('work_item_id', $item->id)->where('fence', $item->fence)
-                ->where('status', 'pending')->update([
+                ->where('reason', 'receipt')->where('status', 'pending')->update([
                     'status' => 'succeeded',
                     'outcome' => ['result' => 'succeeded', 'receipt' => true],
-                    'completed_at' => CarbonImmutable::now(),
+                    'completed_at' => $now,
+                ]);
+            WorkDirective::query()->where('work_item_id', $item->id)->where('fence', $item->fence)
+                ->where('reason', 'stall')->where('status', 'pending')->update([
+                    'status' => 'succeeded',
+                    'outcome' => ['result' => 'resolved_by_fetch'],
+                    'completed_at' => $now,
                 ]);
 
             return array_filter([
@@ -168,9 +175,16 @@ final readonly class WorkWorkerService
                     'fence' => $item->fence, 'occurred_at' => $now,
                 ]);
             }
+            $item->stalled_at = null;
             $item->save();
 
             $milestone = $item->milestones()->create(['fence' => $item->fence, 'kind' => $kind, 'payload' => $payload]);
+            WorkDirective::query()->where('work_item_id', $item->id)->where('fence', $item->fence)
+                ->where('reason', 'stall')->where('status', 'pending')->update([
+                    'status' => 'succeeded',
+                    'outcome' => ['result' => 'resolved_by_progress'],
+                    'completed_at' => $now,
+                ]);
             resolve(WorkEventProjector::class)->terminal($item);
             resolve(WorkEventProjector::class)->blocked($item, $milestone);
 
