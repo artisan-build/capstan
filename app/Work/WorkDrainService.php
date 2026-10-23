@@ -24,6 +24,7 @@ final readonly class WorkDrainService
         private WorkClaimService $claims,
         private WorkItemStateService $states,
         private MachineWorkRuntime $runtime,
+        private WorkDirectiveService $directives,
     ) {}
 
     /**
@@ -43,7 +44,33 @@ final readonly class WorkDrainService
         int $reportedClaimedCount,
         CarbonImmutable $now,
     ): array {
-        return DB::transaction(function () use ($teamId, $actorId, $credentialId, $capacity, $roles, $capabilities, $roleProviders, $reportedClaimedCount, $now): array {
+        return $this->tick(
+            $teamId, $actorId, $credentialId, $capacity, $roles, $capabilities,
+            $roleProviders, $reportedClaimedCount, $now,
+        )['items'];
+    }
+
+    /**
+     * @param  non-empty-list<string>  $roles
+     * @param  list<string>  $capabilities
+     * @param  array<string, string>  $roleProviders
+     * @param  list<array<string, mixed>>  $heldItems
+     * @return array{items: list<WorkItem>, directives: list<array<string, mixed>>}
+     */
+    public function tick(
+        int $teamId,
+        string $actorId,
+        string $credentialId,
+        int $capacity,
+        array $roles,
+        array $capabilities,
+        array $roleProviders,
+        int $reportedClaimedCount,
+        CarbonImmutable $now,
+        ?int $orchestratorCapacity = null,
+        array $heldItems = [],
+    ): array {
+        $tick = DB::transaction(function () use ($teamId, $actorId, $credentialId, $capacity, $roles, $capabilities, $roleProviders, $reportedClaimedCount, $now, $orchestratorCapacity): array {
             $presence = $this->runtime->record(
                 $teamId,
                 $actorId,
@@ -54,28 +81,47 @@ final readonly class WorkDrainService
                 $capacity,
                 $reportedClaimedCount,
                 $now,
+                $orchestratorCapacity === null,
             );
             if ($presence === null) {
-                return [];
+                return ['items' => [], 'spoke_id' => null];
             }
             $spoke = Spoke::query()->findOrFail($presence->spoke_id);
-            $items = $this->claims->claim(
-                $teamId,
-                $actorId,
-                $spoke->id,
-                $roles,
-                $capabilities,
-                $capacity,
-                $now,
-                $this->leaseSeconds(),
-                $roleProviders,
-                true,
-            );
-            $this->runtime->refreshCount($presence);
+            if ($orchestratorCapacity === null) {
+                $items = $this->claims->claim(
+                    $teamId, $actorId, $spoke->id, $roles, $capabilities, $capacity, $now,
+                    $this->leaseSeconds(), $roleProviders, true,
+                    combinedCapacity: true,
+                );
+            } else {
+                $leafRoles = array_values(array_diff($roles, [WorkItem::ROLE_ORCHESTRATOR, WorkItem::ROLE_HUMAN]));
+                $items = $leafRoles === [] ? [] : $this->claims->claim(
+                    $teamId, $actorId, $spoke->id, $leafRoles, $capabilities, $capacity, $now,
+                    $this->leaseSeconds(), array_intersect_key($roleProviders, array_flip($leafRoles)), true,
+                );
+                if (in_array(WorkItem::ROLE_ORCHESTRATOR, $roles, true)) {
+                    $available = max(0, $orchestratorCapacity - $this->runtime->authoritativeOrchestratorCount($spoke->id));
+                    if ($available > 0) {
+                        $items = [...$items, ...$this->claims->claim(
+                            $teamId, $actorId, $spoke->id, [WorkItem::ROLE_ORCHESTRATOR], $capabilities, $available, $now,
+                            $this->leaseSeconds(), array_intersect_key($roleProviders, [WorkItem::ROLE_ORCHESTRATOR => true]), true,
+                            ignoreCapacityCeiling: true,
+                        )];
+                    }
+                }
+            }
+            $this->runtime->refreshCount($presence, $orchestratorCapacity === null);
             $this->spokes->heartbeat($spoke, $now);
 
-            return $items;
+            return ['items' => $items, 'spoke_id' => $spoke->id];
         });
+
+        return [
+            'items' => $tick['items'],
+            'directives' => $tick['spoke_id'] === null
+                ? []
+                : $this->directives->poll($teamId, $actorId, $tick['spoke_id'], $heldItems, $now),
+        ];
     }
 
     public function transition(
@@ -86,10 +132,12 @@ final readonly class WorkDrainService
         int $fence,
         string $target,
         CarbonImmutable $now,
+        ?string $launchNonce = null,
+        ?string $sessionRef = null,
         ?Closure $afterIdentified = null,
     ): WorkItem {
         return $this->retrySqliteBusy(
-            fn (): WorkItem => DB::transaction(function () use ($teamId, $actorId, $credentialId, $itemId, $fence, $target, $now, $afterIdentified): WorkItem {
+            fn (): WorkItem => DB::transaction(function () use ($teamId, $actorId, $credentialId, $itemId, $fence, $target, $now, $launchNonce, $sessionRef, $afterIdentified): WorkItem {
                 $spoke = $this->spokes->resolve($actorId, $credentialId, $now);
                 $item = $this->scopedItem($teamId, $itemId);
                 $this->assertOwnedLiveClaim($item, $actorId, $spoke->id, $fence, $now);
@@ -105,6 +153,16 @@ final readonly class WorkDrainService
 
                 if ($transitioned === null) {
                     throw $this->claimLost();
+                }
+                if ($target === WorkItemState::Delivered->value && $launchNonce !== null && $sessionRef !== null) {
+                    if ($item->launch_nonce === null || ! hash_equals($item->launch_nonce, $launchNonce)) {
+                        throw new ApiErrorException(409, 'launch_nonce_mismatch', 'The launch nonce does not match this claim.');
+                    }
+                    $transitioned->forceFill([
+                        'handed_off_at' => $now,
+                        'handed_off_session_ref' => $sessionRef,
+                        'launch_nonce' => $launchNonce,
+                    ])->save();
                 }
 
                 $this->spokes->heartbeat($spoke, $now);

@@ -12,6 +12,7 @@ final readonly class WorkOrchestrationContext
         public ?string $sessionRef,
         public ?string $turnItemId = null,
         public ?int $itemFence = null,
+        public ?string $launchNonce = null,
     ) {}
 
     public function isInteractive(): bool

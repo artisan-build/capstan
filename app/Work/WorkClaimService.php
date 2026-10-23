@@ -16,6 +16,7 @@ use Closure;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Sleep;
+use Illuminate\Support\Str;
 use stdClass;
 use Throwable;
 
@@ -103,6 +104,8 @@ final readonly class WorkClaimService
         bool $requireMachineProfile = false,
         ?Closure $afterCandidates = null,
         ?Closure $afterDependencyGate = null,
+        bool $ignoreCapacityCeiling = false,
+        bool $combinedCapacity = false,
     ): array {
         if (! $this->activeSpokeExists($actorId, $spokeId, $teamId, $roles, $capabilities, $roleProviders, $now, $requireMachineProfile)) {
             return [];
@@ -110,7 +113,7 @@ final readonly class WorkClaimService
 
         $claimed = [];
 
-        if ($requireMachineProfile) {
+        if ($requireMachineProfile && ! $ignoreCapacityCeiling) {
             foreach ($this->candidates($teamId, $actorId, $spokeId, $roles, $capabilities, 1, $now, $roleProviders, true, true, ordinaryOnly: true, arbitrateMachine: true) as $candidate) {
                 if ($candidate->priority === 'P0' && ! in_array($candidate->role, [WorkItem::ROLE_HUMAN, WorkItem::ROLE_ORCHESTRATOR], true)) {
                     $this->claimCandidate($candidate, $teamId, $actorId, $spokeId, $now, $leaseSeconds, $roles, $capabilities, $roleProviders, true, preemptOnly: true);
@@ -129,6 +132,8 @@ final readonly class WorkClaimService
                 $now,
                 $roleProviders,
                 $requireMachineProfile,
+                $ignoreCapacityCeiling,
+                combinedCapacity: $combinedCapacity,
             );
 
             if ($candidates === []) {
@@ -153,6 +158,8 @@ final readonly class WorkClaimService
                     $roleProviders,
                     $requireMachineProfile,
                     $afterDependencyGate,
+                    ignoreCapacityCeiling: $ignoreCapacityCeiling,
+                    combinedCapacity: $combinedCapacity,
                 );
                 $afterDependencyGate = null;
 
@@ -167,7 +174,7 @@ final readonly class WorkClaimService
             }
 
             if ($won === 0 && (! $this->activeSpokeExists($actorId, $spokeId, $teamId, $roles, $capabilities, $roleProviders, $now, $requireMachineProfile)
-                || $this->candidates($teamId, $actorId, $spokeId, $roles, $capabilities, 1, $now, $roleProviders, $requireMachineProfile) === [])) {
+                || $this->candidates($teamId, $actorId, $spokeId, $roles, $capabilities, 1, $now, $roleProviders, $requireMachineProfile, $ignoreCapacityCeiling, combinedCapacity: $combinedCapacity) === [])) {
                 break;
             }
         }
@@ -200,15 +207,16 @@ final readonly class WorkClaimService
         ?array $taskIds = null,
         bool $ordinaryOnly = false,
         bool $arbitrateMachine = false,
+        bool $combinedCapacity = false,
     ): array {
         if ($requireMachineProfile) {
             $setting = $this->runtime->eligibleSetting($teamId, $actorId, $spokeId, $roles, $capabilities, $roleProviders, $now);
             if (! $setting instanceof MachineTeamWorkSetting
-                || (! $ignoreCeiling && $this->runtime->authoritativeClaimedCount($spokeId) >= $setting->concurrency_ceiling)) {
+                || (! $ignoreCeiling && $this->runtime->authoritativeClaimedCount($spokeId, $combinedCapacity) >= $setting->concurrency_ceiling)) {
                 return [];
             }
             if (! $ignoreCeiling) {
-                $wanted = min($wanted, $setting->concurrency_ceiling - $this->runtime->authoritativeClaimedCount($spokeId));
+                $wanted = min($wanted, $setting->concurrency_ceiling - $this->runtime->authoritativeClaimedCount($spokeId, $combinedCapacity));
             }
         }
         $eligible = [];
@@ -359,12 +367,14 @@ final readonly class WorkClaimService
         bool $requireMachineProfile = false,
         ?Closure $afterDependencyGate = null,
         bool $preemptOnly = false,
+        bool $ignoreCapacityCeiling = false,
+        bool $combinedCapacity = false,
     ): ?WorkItem {
         $attempt = 0;
 
         beginning:
         try {
-            return DB::transaction(function () use ($candidate, $teamId, $actorId, $spokeId, $now, $leaseSeconds, $roles, $capabilities, $roleProviders, $requireMachineProfile, $afterDependencyGate, $preemptOnly): ?WorkItem {
+            return DB::transaction(function () use ($candidate, $teamId, $actorId, $spokeId, $now, $leaseSeconds, $roles, $capabilities, $roleProviders, $requireMachineProfile, $afterDependencyGate, $preemptOnly, $ignoreCapacityCeiling, $combinedCapacity): ?WorkItem {
                 if (! Spoke::query()->workEligible()->whereKey($spokeId)->where('actor_id', $actorId)->lockForUpdate()->exists()) {
                     return null;
                 }
@@ -392,7 +402,7 @@ final readonly class WorkClaimService
                             $this->capabilities($candidate->required_capabilities),
                             $spokeId,
                             $now,
-                            $preemptOnly,
+                            $preemptOnly || $ignoreCapacityCeiling,
                             $task->user_actor_address,
                             $task->owner_actor,
                             $task->routing_pool_work,
@@ -400,7 +410,7 @@ final readonly class WorkClaimService
                         ))) {
                         return null;
                     }
-                    if ($this->runtime->authoritativeClaimedCount($spokeId) >= $setting->concurrency_ceiling) {
+                    if (! $ignoreCapacityCeiling && $this->runtime->authoritativeClaimedCount($spokeId, $combinedCapacity) >= $setting->concurrency_ceiling) {
                         if (($task->user_actor_address !== null && $task->user_actor_address !== $actorId)
                             || ($task->user_actor_address === null && ! $task->routing_pool_work && $task->owner_actor !== $actorId)
                             || ($task->device_spoke_id !== null && $task->device_spoke_id !== $spokeId)
@@ -474,6 +484,13 @@ final readonly class WorkClaimService
                         'claimant_actor' => $actorId,
                         'lease_until' => $leaseUntil,
                         'claimed_at' => $now,
+                        'handed_off_at' => null,
+                        'handed_off_session_ref' => null,
+                        'launch_nonce' => (string) Str::uuid7(),
+                        'first_fetched_at' => null,
+                        'agent_model' => null,
+                        'fetched_brief_revision_id' => null,
+                        'fetched_page_version_id' => null,
                         'waiting_on_host_at' => null,
                         'waiting_on_host_notified_at' => null,
                         'fence' => $nextFence,

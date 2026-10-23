@@ -146,6 +146,50 @@ test('an orchestrator changes PR metadata with one waking event and idempotent r
     expect($parent->items()->where('role', WorkItem::ROLE_ORCHESTRATOR)->where('state', 'queued')->count())->toBe(1);
 });
 
+test('an orchestrator repins one workflow across the tree and records one old-new event', function (): void {
+    $oldSha = str_repeat('a', 40);
+    $newSha = str_repeat('b', 40);
+    $parent = orchestrationTask();
+    $parent->update(['workflow_ref' => 'org/workflows:workflow.md', 'workflow_sha' => $oldSha]);
+    $child = orchestrationTask($parent);
+    orchestrationEvent($parent, 'workflow-repin-turn');
+    $turn = orchestrationClaims($parent, orchestrationHost('workflow-repin-host'))[0];
+    $surface = resolve(WorkOrchestrationSurface::class);
+    $context = $surface->claimed($turn->id, $turn->fence);
+
+    $surface->act($context, 'repin_workflow', [
+        'workflow_ref' => 'org/workflows:workflow.md', 'workflow_sha' => $newSha,
+    ], CarbonImmutable::now());
+    $surface->act($context, 'repin_workflow', [
+        'workflow_ref' => 'org/workflows:workflow.md', 'workflow_sha' => $newSha,
+    ], CarbonImmutable::now());
+
+    $event = WorkOrchestrationEvent::query()->where('kind', 'workflow_repinned')->sole();
+    expect($parent->fresh()->workflow_sha)->toBe($newSha)
+        ->and($child->fresh()->workflow_sha)->toBe($newSha)
+        ->and($event->evidence)->toBe([
+            'old_ref' => 'org/workflows:workflow.md', 'old_sha' => $oldSha,
+            'new_ref' => 'org/workflows:workflow.md', 'new_sha' => $newSha,
+        ])
+        ->and(WorkOrchestrationEvent::query()->where('kind', 'workflow_repinned')->count())->toBe(1);
+});
+
+test('orchestrator PR updates normalize numeric strings before event storage and replay', function (): void {
+    $parent = orchestrationTask();
+    orchestrationEvent($parent, 'numeric-pr-turn');
+    $turn = orchestrationClaims($parent, orchestrationHost('numeric-pr-host'))[0];
+    $surface = resolve(WorkOrchestrationSurface::class);
+    $context = $surface->claimed($turn->id, $turn->fence);
+    $pr = ['repo' => 'artisan-build/capstan', 'number' => '125', 'url' => 'https://example.test/pull/125'];
+
+    $surface->act($context, 'set_pr', ['task_id' => $parent->id, 'pr' => $pr], CarbonImmutable::now());
+    $surface->act($context, 'set_pr', ['task_id' => $parent->id, 'pr' => $pr], CarbonImmutable::now());
+
+    expect($parent->fresh()->pr['number'])->toBeInt()->toBe(125)
+        ->and(WorkOrchestrationEvent::query()->where('kind', 'task_pr_changed')->sole()->evidence['new_pr']['number'])->toBeInt()->toBe(125)
+        ->and(WorkOrchestrationEvent::query()->where('kind', 'task_pr_changed')->count())->toBe(1);
+});
+
 test('set_pr refuses invalid keys numbers and URLs before changing the task', function (array $pr): void {
     $parent = orchestrationTask();
     orchestrationEvent($parent, 'invalid-pr-turn');

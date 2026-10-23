@@ -132,6 +132,22 @@ test('tasks reserve routing fields and items carry one open vocabulary scalar ro
         ->and($child->fresh()?->deviceSpoke)->toBeNull();
 });
 
+test('children preserve explicit legacy workflow refs when the root has no immutable pin', function (): void {
+    $root = workDomainTask();
+    $child = workDomainTask([
+        'parent_task_id' => $root->id,
+        'workflow_ref' => 'workflows/review.yml',
+    ]);
+
+    expect($child->fresh()?->workflow_ref)->toBe('workflows/review.yml')
+        ->and($child->fresh()?->workflow_sha)->toBeNull();
+
+    expect(fn () => workDomainTask([
+        'parent_task_id' => $root->id,
+        'workflow_sha' => str_repeat('a', 40),
+    ]))->toThrow(LogicException::class, 'A child workflow SHA requires a workflow reference.');
+});
+
 test('team work settings have safe database and model defaults', function (): void {
     $team = Team::query()->create([
         'name' => 'Test work team',

@@ -48,7 +48,7 @@ test('worker links cap expiry by lease and timebox with grace', function (): voi
     }
     $item->update(['lease_until' => now()->addHour()]);
     $firstLinks = resolve(WorkWorkerLinks::class)->forItem($item->refresh());
-    expect(resolve(WorkWorkerLinks::class)->forItem($item))->not->toBe($firstLinks);
+    expect(resolve(WorkWorkerLinks::class)->forItem($item))->toBe($firstLinks);
     foreach (resolve(WorkWorkerLinks::class)->forItem($item->refresh()) as $url) {
         parse_str(parse_url($url, PHP_URL_QUERY), $query);
         expect((int) $query['expires'])->toBe(now()->addMinutes(11)->timestamp);
@@ -219,6 +219,21 @@ test('signed pr_opened sets PR metadata once and safely replays only the same va
         ->and($item->milestones()->count())->toBe(1);
 });
 
+test('signed pr_opened normalizes numeric strings before storage milestone replay and representation', function (): void {
+    $item = workerLinkItem();
+    $payload = ['kind' => 'pr_opened', 'payload' => ['pr' => [
+        'repo' => 'artisan-build/capstan', 'number' => '112', 'url' => 'https://example.test/pull/112',
+    ]]];
+    $url = resolve(WorkWorkerLinks::class)->forItem($item)['milestone'];
+
+    $this->postJson($url, $payload)->assertCreated();
+    $this->postJson($url, $payload)->assertCreated();
+
+    expect($item->workTask->fresh()->pr['number'])->toBeInt()->toBe(112)
+        ->and($item->milestones()->sole()->payload['pr']['number'])->toBeInt()->toBe(112)
+        ->and(resolve(WorkRepresentation::class)->task($item->workTask->fresh())['pr']['number'])->toBeInt()->toBe(112);
+});
+
 test('terminal milestones cannot skip the legal state machine', function (): void {
     $item = workerLinkItem(['state' => 'claimed']);
     $this->postJson(resolve(WorkWorkerLinks::class)->forItem($item)['milestone'], ['kind' => 'done', 'payload' => (object) []])->assertUnprocessable();
@@ -252,8 +267,10 @@ test('stale callback cannot stamp a brief or append partial milestone effects', 
     $race = fn () => WorkItem::query()->whereKey($item->id)->update(['fence' => 2]);
     try {
         $service = resolve(WorkWorkerService::class);
+        $links = resolve(WorkWorkerLinks::class)->forItem($item);
+        parse_str(parse_url($links['brief'], PHP_URL_QUERY), $query);
         $operation === 'brief'
-            ? $service->brief($item->id, 1, $race)
+            ? $service->brief($item->id, 1, $query['nonce'], null, $race)
             : $service->milestone($item->id, 1, WorkMilestoneKind::Released, ['summary' => 'must not persist'], $race);
         test()->fail('Expected lost claim');
     } catch (HttpException $exception) {

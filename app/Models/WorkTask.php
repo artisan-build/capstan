@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Casts\WorkPullRequest;
 use App\Enums\WorkPriority;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Collection;
@@ -33,6 +34,9 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property CarbonImmutable|null $cancelled_at
  * @property string|null $parent_task_id
  * @property string|null $workflow_ref
+ * @property string|null $workflow_sha
+ * @property string|null $brief_page_id
+ * @property string|null $brief_page_version_id
  * @property CarbonImmutable $created_at
  * @property CarbonImmutable $updated_at
  * @property-read Team $team
@@ -81,6 +85,9 @@ class WorkTask extends Model
         'cancelled_at',
         'parent_task_id',
         'workflow_ref',
+        'workflow_sha',
+        'brief_page_id',
+        'brief_page_version_id',
     ];
 
     /** @return array<string, string> */
@@ -95,7 +102,7 @@ class WorkTask extends Model
             'dependency_version' => 'integer',
             'routing_pool_work' => 'boolean',
             'expires_at' => 'immutable_datetime',
-            'pr' => 'array',
+            'pr' => WorkPullRequest::class,
             'cancelled_at' => 'datetime',
         ];
     }
@@ -120,6 +127,13 @@ class WorkTask extends Model
             $task->owner_actor = $root->owner_actor;
             $task->escalation_actor = $root->escalation_actor;
             $task->priority = $root->priority;
+            if ($root->workflow_ref !== null && $root->workflow_sha !== null) {
+                $task->workflow_ref = $root->workflow_ref;
+                $task->workflow_sha = $root->workflow_sha;
+            }
+            if ($task->workflow_ref === null && $task->workflow_sha !== null) {
+                throw new \LogicException('A child workflow SHA requires a workflow reference.');
+            }
         });
     }
 

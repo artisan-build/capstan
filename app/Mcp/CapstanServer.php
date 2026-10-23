@@ -34,6 +34,7 @@ final class CapstanServer extends Server
     /** @var array<int, class-string<Tool>> */
     protected array $tools = [
         Tools\CreateTaskTool::class,
+        Tools\KickoffTool::class,
         Tools\ReviseBriefTool::class,
         Tools\QueueItemTool::class,
         Tools\CancelItemTool::class,

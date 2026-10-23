@@ -2,6 +2,7 @@
 
 namespace App\Work;
 
+use App\Casts\WorkPullRequest;
 use App\Enums\WorkItemState;
 use App\Enums\WorkPriority;
 use App\Http\ApiErrorException;
@@ -91,6 +92,8 @@ final readonly class WorkOrchestrationCapability
     /** @param array{repo: string, number: int, url: string} $pr */
     public function setPullRequest(WorkOrchestrationContext $context, string $taskId, array $pr, CarbonImmutable $now): WorkTask
     {
+        $pr = WorkPullRequest::normalize($pr);
+
         return $this->authorised($context, $now, function (WorkTask $parent) use ($taskId, $pr): WorkTask {
             $target = $this->target($parent, $taskId, allowParent: true);
             $old = $target->pr;
@@ -107,6 +110,32 @@ final readonly class WorkOrchestrationCapability
             );
 
             return $target->refresh();
+        });
+    }
+
+    public function repinWorkflow(WorkOrchestrationContext $context, string $workflowRef, string $workflowSha, CarbonImmutable $now): WorkTask
+    {
+        return $this->authorised($context, $now, function (WorkTask $parent) use ($workflowRef, $workflowSha): WorkTask {
+            $oldRef = $parent->workflow_ref;
+            $oldSha = $parent->workflow_sha;
+            if ($oldRef === $workflowRef && $oldSha === $workflowSha) {
+                return $parent;
+            }
+
+            $ids = [$parent->id];
+            for ($offset = 0; $offset < count($ids); $offset++) {
+                $ids = [...$ids, ...WorkTask::query()->where('parent_task_id', $ids[$offset])->pluck('id')->all()];
+            }
+            WorkTask::query()->whereKey($ids)->update(['workflow_ref' => $workflowRef, 'workflow_sha' => $workflowSha]);
+            $this->orchestration->event(
+                $parent->refresh(),
+                'workflow-repin:'.Str::uuid7(),
+                'workflow_repinned',
+                ['old_ref' => $oldRef, 'old_sha' => $oldSha, 'new_ref' => $workflowRef, 'new_sha' => $workflowSha],
+                inheritAuthor: false,
+            );
+
+            return $parent->refresh();
         });
     }
 
@@ -153,6 +182,9 @@ final readonly class WorkOrchestrationCapability
                 'task' => array_filter([
                     'id' => $parent->id, 'team_id' => $parent->team_id, 'title' => $parent->title,
                     'workflow_ref' => $parent->workflow_ref, 'owner_actor' => $parent->owner_actor,
+                    'workflow_sha' => $parent->workflow_sha,
+                    'brief_page_id' => $parent->brief_page_id,
+                    'brief_page_version_id' => $parent->brief_page_version_id,
                     'escalation_actor' => $parent->effectiveEscalationActor(),
                     'priority' => $parent->priority->value,
                     'depends_on' => $parent->dependencies()->orderBy('work_tasks.id')->pluck('work_tasks.id')->all(),
@@ -347,6 +379,10 @@ final readonly class WorkOrchestrationCapability
                 try {
                     [$turn, $seat] = $this->orchestration->guardTurn($turn, $context->itemFence, $context->seatFence, $now);
                 } catch (\Throwable) {
+                    throw $this->forbidden('Orchestrator turn authority was lost.');
+                }
+                if ($context->launchNonce !== null
+                    && ($turn->launch_nonce === null || ! hash_equals($turn->launch_nonce, $context->launchNonce))) {
                     throw $this->forbidden('Orchestrator turn authority was lost.');
                 }
                 if ($turn->work_task_id !== $parent->id || $seat->holder_actor !== $context->actorId

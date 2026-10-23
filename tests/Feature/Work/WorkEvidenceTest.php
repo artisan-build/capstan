@@ -57,6 +57,22 @@ final class InterleavedEvidenceDatabaseStore extends DatabaseStore
     }
 }
 
+final class RotatingEvidenceRateLimiter extends ConcreteRateLimiter
+{
+    public function __construct(Repository $cache, private readonly Closure $afterHit)
+    {
+        parent::__construct($cache);
+    }
+
+    public function hit($key, $decaySeconds = 60)
+    {
+        $attempts = parent::hit($key, $decaySeconds);
+        ($this->afterHit)();
+
+        return $attempts;
+    }
+}
+
 beforeEach(function (): void {
     config([
         'app.url' => 'https://capstan-evidence.test',
@@ -353,6 +369,23 @@ test('a successful rate reservation remains consumed when later evidence storage
     expect(RateLimiter::attempts('work-evidence:'.hash('sha256', 'actor:'.$item->claimant_actor)))->toBe(1)
         ->and(WorkEvidence::query()->count())->toBe(0)
         ->and(Storage::disk()->allFiles())->toBe([]);
+});
+
+test('nonce rotation after evidence rate reservation prevents storage', function (): void {
+    [$item, $url] = evidenceWorkerItem();
+    $limiter = new RotatingEvidenceRateLimiter(
+        resolve('cache')->store(),
+        fn () => $item->update(['launch_nonce' => (string) Str::uuid7()]),
+    );
+    RateLimiter::clearResolvedInstance(ConcreteRateLimiter::class);
+    app()->instance(ConcreteRateLimiter::class, $limiter);
+
+    $this->post($url, ['file' => UploadedFile::fake()->createWithContent('rotated.txt', "rotated\n")])
+        ->assertConflict();
+
+    expect($item->evidence()->count())->toBe(0)
+        ->and(Storage::disk()->allFiles())->toBe([])
+        ->and($limiter->attempts('work-evidence:'.hash('sha256', 'actor:'.$item->claimant_actor)))->toBe(1);
 });
 
 test('stale worker and unauthorized MCP evidence uploads have no durable effects', function (): void {

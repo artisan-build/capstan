@@ -16,7 +16,7 @@ final class WorkOrchestrationWorkerController extends Controller
     public function __invoke(Request $request, string $item, WorkOrchestrationSurface $surface, DurableWriteCoordinator $writes): JsonResponse
     {
         abort_unless($request->hasValidSignatureWhileIgnoring(['after', 'decisions_after']), 403);
-        $context = $surface->claimed($item, (int) $request->query('fence'));
+        $context = $surface->claimed($item, (int) $request->query('fence'), (string) $request->query('nonce'));
 
         if ($request->isMethod('GET')) {
             $validated = validator($request->query(), [

@@ -11,6 +11,9 @@ final class WorkWorkerLinks
     /** @return array<string, string> */
     public function forItem(WorkItem $item): array
     {
+        if ($item->launch_nonce === null) {
+            $item->forceFill(['launch_nonce' => (string) Str::uuid7()])->save();
+        }
         $grace = max(0, (int) config('capstan.work.link_grace_seconds', 60));
         $expires = $item->lease_until->min($item->claimed_at->addMinutes($item->workTask->timebox_minutes))->addSeconds($grace);
         $links = [];
@@ -19,7 +22,7 @@ final class WorkWorkerLinks
             $links[$action] = URL::temporarySignedRoute('api.work.worker.'.$action, $expires, [
                 'item' => $item->id,
                 'fence' => $item->fence,
-                'nonce' => (string) Str::uuid7(),
+                'nonce' => $item->launch_nonce,
             ]);
         }
 
@@ -28,7 +31,7 @@ final class WorkWorkerLinks
                 $links[$action] = URL::temporarySignedRoute('api.work.worker.'.$action, $expires, [
                     'item' => $item->id,
                     'fence' => $item->fence,
-                    'nonce' => (string) Str::uuid7(),
+                    'nonce' => $item->launch_nonce,
                 ]);
             }
         }

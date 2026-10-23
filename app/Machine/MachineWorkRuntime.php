@@ -35,6 +35,7 @@ final class MachineWorkRuntime
         int $requestedCapacity,
         int $reportedClaimedCount,
         CarbonImmutable $now,
+        bool $combinedCapacity = false,
     ): ?MachineWorkPresence {
         if ($requestedCapacity < 0 || $requestedCapacity > MachineRecordBounds::MAX_PROFILE_ENTRIES) {
             throw new InvalidArgumentException('The requested capacity is invalid.');
@@ -43,7 +44,7 @@ final class MachineWorkRuntime
             throw new InvalidArgumentException('The reported claimed item count is invalid.');
         }
 
-        return DB::transaction(function () use ($teamId, $actorId, $credentialId, $roles, $capabilities, $roleProviders, $requestedCapacity, $now): ?MachineWorkPresence {
+        return DB::transaction(function () use ($teamId, $actorId, $credentialId, $roles, $capabilities, $roleProviders, $requestedCapacity, $now, $combinedCapacity): ?MachineWorkPresence {
             $machine = Spoke::query()->workEligible()
                 ->where('actor_id', $actorId)
                 ->where('credential_id', $credentialId)
@@ -59,7 +60,7 @@ final class MachineWorkRuntime
                 return null;
             }
 
-            $current = $this->authoritativeClaimedCount($machine->id);
+            $current = $this->authoritativeClaimedCount($machine->id, $combinedCapacity);
             $presence = MachineWorkPresence::query()
                 ->where('spoke_id', $machine->id)
                 ->where('team_id', $teamId)
@@ -79,7 +80,7 @@ final class MachineWorkRuntime
         });
     }
 
-    public function refreshCount(MachineWorkPresence $presence): void
+    public function refreshCount(MachineWorkPresence $presence, bool $combinedCapacity = false): void
     {
         $setting = MachineTeamWorkSetting::query()
             ->where('spoke_id', $presence->spoke_id)
@@ -89,7 +90,7 @@ final class MachineWorkRuntime
             return;
         }
 
-        $current = min($this->authoritativeClaimedCount($presence->spoke_id), $setting->concurrency_ceiling);
+        $current = min($this->authoritativeClaimedCount($presence->spoke_id, $combinedCapacity), $setting->concurrency_ceiling);
         $newlyClaimed = max(0, $current - $presence->current_claimed_item_count);
         $presence->forceFill([
             'current_claimed_item_count' => $current,
@@ -157,11 +158,21 @@ final class MachineWorkRuntime
         return $setting;
     }
 
-    public function authoritativeClaimedCount(int $spokeId): int
+    public function authoritativeClaimedCount(int $spokeId, bool $includeOrchestrators = false): int
     {
         return WorkItem::query()
             ->where('claimant_spoke_id', $spokeId)
             ->whereIn('state', ['claimed', 'delivered', 'routed'])
+            ->unless($includeOrchestrators, fn (Builder $query) => $query->where('role', '!=', WorkItem::ROLE_ORCHESTRATOR))
+            ->count();
+    }
+
+    public function authoritativeOrchestratorCount(int $spokeId): int
+    {
+        return WorkItem::query()
+            ->where('claimant_spoke_id', $spokeId)
+            ->whereIn('state', ['claimed', 'delivered', 'routed'])
+            ->where('role', WorkItem::ROLE_ORCHESTRATOR)
             ->count();
     }
 
