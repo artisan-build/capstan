@@ -40,7 +40,7 @@ final readonly class WorkSweepService
                         return;
                     }
                     $latest = $item->milestones()->where('fence', $item->fence)
-                        ->reorder()->orderByDesc('created_at')->orderByDesc('id')->first();
+                        ->reorder()->latest()->orderByDesc('id')->first();
                     $anchor = $latest === null ? $item->claimed_at : $latest->created_at;
                     $deadline = $anchor->addMinutes($item->workTask->timebox_minutes);
                     if ($deadline->lte($now)) {
