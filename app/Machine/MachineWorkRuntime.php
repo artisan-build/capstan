@@ -163,7 +163,7 @@ final class MachineWorkRuntime
         return WorkItem::query()
             ->where('claimant_spoke_id', $spokeId)
             ->whereIn('state', ['claimed', 'delivered', 'routed'])
-            ->when(! $includeOrchestrators, fn (Builder $query) => $query->where('role', '!=', WorkItem::ROLE_ORCHESTRATOR))
+            ->unless($includeOrchestrators, fn (Builder $query) => $query->where('role', '!=', WorkItem::ROLE_ORCHESTRATOR))
             ->count();
     }
 

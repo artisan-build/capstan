@@ -181,16 +181,14 @@ final readonly class WorkWorkerService
     public function evidence(string $id, int $fence, string $filename, string $bytes, ?string $nonce = null): WorkEvidence
     {
         $metadata = $this->evidence->inspect($filename, $bytes);
+        $actor = $this->guarded($id, $fence, fn (WorkItem $item): string => (string) $item->claimant_actor, nonce: $nonce);
+        $this->evidence->throttle('actor:'.$actor);
         $attempts = new WorkEvidenceAttemptLog;
 
         return $attempts->settle(fn (): WorkEvidence => $this->guarded(
             $id,
             $fence,
-            function (WorkItem $item) use ($bytes, $metadata, $attempts): WorkEvidence {
-                $this->evidence->throttle('actor:'.(string) $item->claimant_actor);
-
-                return $this->evidence->store($item, $bytes, $metadata, $attempts);
-            },
+            fn (WorkItem $item): WorkEvidence => $this->evidence->store($item, $bytes, $metadata, $attempts),
             nonce: $nonce,
         ));
     }
