@@ -138,14 +138,14 @@ test('a guest viewer is sent to sign in identically before any page or version q
     $version = $page->latestVersion()->firstOrFail();
     $missingPage = (string) Str::uuid();
     $missingVersion = (string) Str::uuid();
-    $urls = [
-        route('pages.show', ['page' => $page]),
-        route('pages.show', ['page' => $missingPage]),
-        route('pages.show', ['page' => 'not-a-uuid']),
-        route('pages.versions.show', ['page' => $page, 'version' => $version]),
-        route('pages.versions.show', ['page' => $page, 'version' => $missingVersion]),
-        route('pages.versions.show', ['page' => $missingPage, 'version' => $missingVersion]),
-        route('pages.versions.show', ['page' => 'not-a-uuid', 'version' => 'also-not-a-uuid']),
+    $paths = [
+        route('pages.show', ['page' => $page], absolute: false),
+        route('pages.show', ['page' => $missingPage], absolute: false),
+        route('pages.show', ['page' => 'not-a-uuid'], absolute: false),
+        route('pages.versions.show', ['page' => $page, 'version' => $version], absolute: false),
+        route('pages.versions.show', ['page' => $page, 'version' => $missingVersion], absolute: false),
+        route('pages.versions.show', ['page' => $missingPage, 'version' => $missingVersion], absolute: false),
+        route('pages.versions.show', ['page' => 'not-a-uuid', 'version' => 'also-not-a-uuid'], absolute: false),
     ];
     $privateLookups = [];
     DB::listen(function ($query) use (&$privateLookups): void {
@@ -158,30 +158,57 @@ test('a guest viewer is sent to sign in identically before any page or version q
     // the URL it asked for; a JSON caller keeps the opaque not-found. Either
     // answer is the same for every page id, and none of them reaches a query.
     foreach (['text/html' => 302, 'application/json' => 404] as $accept => $status) {
-        $responses = collect($urls)->map(
-            fn (string $url) => $this->get($url, ['Accept' => $accept])->assertStatus($status),
+        $responses = collect($paths)->map(
+            fn (string $path): array => [
+                'path' => $path,
+                'response' => $this->get($path, ['Accept' => $accept])->assertStatus($status),
+            ],
         );
-        $expectedBody = $responses->firstOrFail()->getContent();
-        $expectedLocation = $responses->firstOrFail()->headers->get('Location');
+        $normalizeResponse = function ($response, string $path): array {
+            $body = $response->getContent();
+            $location = $response->headers->get('Location');
 
-        if ($accept === 'text/html') {
-            expect($expectedLocation)->toBe(route('bfc.login'));
-        }
-        $expectedCookieNames = collect($responses->firstOrFail()->headers->getCookies())
+            if ($location === null) {
+                return [$body, null];
+            }
+
+            parse_str((string) parse_url($location, PHP_URL_QUERY), $query);
+            expect($query)->toBe(['intended' => $path]);
+
+            $encodedPath = rawurlencode($path);
+
+            return [
+                str_replace($encodedPath, '', $body),
+                str_replace($encodedPath, '', $location),
+            ];
+        };
+        $first = $responses->firstOrFail();
+        [$expectedBody, $expectedLocation] = $normalizeResponse($first['response'], $first['path']);
+        $expectedCookieNames = collect($first['response']->headers->getCookies())
             ->map(fn ($cookie): string => $cookie->getName())
             ->sort()
             ->values()
             ->all();
 
-        foreach ($responses as $response) {
-            expect($response->getContent())->toBe($expectedBody)
-                ->and($response->headers->get('Location'))->toBe($expectedLocation)
+        foreach ($responses as ['path' => $path, 'response' => $response]) {
+            if ($accept === 'text/html') {
+                $response->assertRedirect(route('bfc.login', ['intended' => $path]));
+            }
+
+            [$normalizedBody, $normalizedLocation] = $normalizeResponse($response, $path);
+            expect($normalizedBody)->toBe($expectedBody)
+                ->and($normalizedLocation)->toBe($expectedLocation)
                 ->and(collect($response->headers->getCookies())->map(fn ($cookie): string => $cookie->getName())->sort()->values()->all())
                 ->toBe($expectedCookieNames);
 
-            foreach ([$page->id, $version->id, $title, $recipe, $html] as $privateValue) {
+            foreach ([$title, $recipe, $html] as $privateValue) {
                 expect($response->getContent())->not->toContain($privateValue);
             }
+
+            expect($normalizedBody)->not->toContain($page->id);
+            expect((string) $normalizedLocation)->not->toContain($page->id);
+            expect($normalizedBody)->not->toContain($version->id);
+            expect((string) $normalizedLocation)->not->toContain($version->id);
         }
     }
 
@@ -228,10 +255,11 @@ test('viewer preserves authoritative account admission behind its opaque boundar
 
     // A session the installation has already retired is no longer an
     // authenticated human, so it is sent to sign in rather than refused.
+    $stalePath = route('pages.show', ['page' => $stalePage], absolute: false);
     $staleResponse = $this->actingAs($stale)
         ->withSession([StandaloneAccess::SESSION_VERSION_KEY => $stale->auth_session_version + 1])
-        ->get(route('pages.show', ['page' => $stalePage]))
-        ->assertRedirect(route('bfc.login'))
+        ->get($stalePath)
+        ->assertRedirect(route('bfc.login', ['intended' => $stalePath]))
         ->assertSessionMissing(StandaloneAccess::SESSION_VERSION_KEY);
     $inactiveResponse = $this->actingAsVersioned($inactive)
         ->get(route('pages.show', ['page' => $inactivePage]))
@@ -242,7 +270,15 @@ test('viewer preserves authoritative account admission behind its opaque boundar
         ->assertNotFound()
         ->assertSessionMissing(StandaloneAccess::SESSION_VERSION_KEY);
 
-    foreach ([$stalePage->id, 'stale private', 'Stale recipe', 'Stale page', 'signature=', 'expires='] as $privateValue) {
+    $staleLocation = (string) $staleResponse->headers->get('Location');
+    $encodedStalePath = rawurlencode($stalePath);
+    $normalizedStaleBody = str_replace($encodedStalePath, '', $staleResponse->getContent());
+    $normalizedStaleLocation = str_replace($encodedStalePath, '', $staleLocation);
+
+    expect($normalizedStaleBody)->not->toContain($stalePage->id);
+    expect($normalizedStaleLocation)->not->toContain($stalePage->id);
+
+    foreach (['stale private', 'Stale recipe', 'Stale page', 'signature=', 'expires='] as $privateValue) {
         expect($staleResponse->getContent())->not->toContain($privateValue);
     }
 

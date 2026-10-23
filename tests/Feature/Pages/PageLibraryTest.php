@@ -230,7 +230,7 @@ test('library admission failures are opaque and happen before page share or vers
         ->get(route('pages.index'));
 
     foreach ($signInResponses as $response) {
-        $response->assertRedirect(route('bfc.login'))
+        $response->assertRedirect(route('bfc.login', ['intended' => route('pages.index', absolute: false)]))
             ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
         expect($response->getContent())->not->toContain($privatePage->title);
     }
