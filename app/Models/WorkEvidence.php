@@ -20,6 +20,8 @@ use LogicException;
  * @property CarbonImmutable $created_at
  * @property-read WorkTask $workTask
  * @property-read WorkItem $workItem
+ *
+ * @mixin IdeHelperWorkEvidence
  */
 class WorkEvidence extends Model
 {

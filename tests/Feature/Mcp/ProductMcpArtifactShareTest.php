@@ -139,6 +139,7 @@ test('advertises the exact artifact share contract only through the write door',
             'update_brand_draft',
             'update_page',
             'upload_brand_asset',
+            'upload_work_evidence',
         ])
         ->and(data_get($tool, '_meta.effect'))->toBe('write')
         ->and(data_get($tool, '_meta.classification'))->toBe('content')

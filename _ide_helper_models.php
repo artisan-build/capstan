@@ -777,6 +777,28 @@ namespace App\Models{
 /**
  * @property string $id
  * @property string $work_task_id
+ * @property string $work_item_id
+ * @property string $public_token
+ * @property string $storage_key
+ * @property string $content_type
+ * @property string $extension
+ * @property int $size_bytes
+ * @property CarbonImmutable $created_at
+ * @property-read WorkTask $workTask
+ * @property-read WorkItem $workItem
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEvidence newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEvidence newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkEvidence query()
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperWorkEvidence {}
+}
+
+namespace App\Models{
+/**
+ * @property string $id
+ * @property string $work_task_id
  * @property string $role
  * @property WorkItemState $state
  * @property int|null $claimant_spoke_id
@@ -804,6 +826,8 @@ namespace App\Models{
  * @property-read WorkBriefRevision|null $fetchedBriefRevision
  * @property-read Collection<int, WorkItemTransition> $transitions
  * @property-read Collection<int, WorkMilestone> $milestones
+ * @property-read Collection<int, WorkEvidence> $evidence
+ * @property-read int|null $evidence_count
  * @property-read int|null $milestones_count
  * @property-read int|null $transitions_count
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem newModelQuery()
@@ -1094,11 +1118,13 @@ namespace App\Models{
  * @property-read WorkBriefRevision|null $latestBriefRevision
  * @property-read Collection<int, WorkItem> $items
  * @property-read Collection<int, WorkMilestone> $milestones
+ * @property-read Collection<int, WorkEvidence> $evidence
  * @property-read Collection<int, WorkSteer> $steers
  * @property-read int|null $brief_revisions_count
  * @property-read int|null $children_count
  * @property-read int|null $dependencies_count
  * @property-read int|null $dependents_count
+ * @property-read int|null $evidence_count
  * @property-read int|null $items_count
  * @property-read int|null $milestones_count
  * @property-read int|null $steers_count

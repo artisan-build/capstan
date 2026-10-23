@@ -15,9 +15,9 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
-final class WorkWorkerService
+final readonly class WorkWorkerService
 {
-    public function __construct(private readonly WorkEvidenceService $evidence) {}
+    public function __construct(private WorkEvidenceService $evidence) {}
 
     /** @return Builder<WorkItem> */
     public function recoveryQuery(): Builder

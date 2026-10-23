@@ -141,7 +141,7 @@ test('claim and renewed records carry fresh signed links with capped expiry', fu
     $issued = workDrainCredential(capstanUser());
     $claim = $this->withHeaders($issued['headers'])->postJson(route('api.work.claim', $team), workDrainClaimPayload())->assertOk();
     $links = $claim->json('items.0.links');
-    expect(array_keys($links))->toBe(['brief', 'milestone', 'steers']);
+    expect(array_keys($links))->toBe(['brief', 'milestone', 'steers', 'evidence']);
     Date::setTestNow(now()->addMinutes(2));
     $renew = $this->withHeaders($issued['headers'])->postJson(route('api.work.renew', $team), [
         'items' => [['item_id' => $item->id, 'fence' => 1]],
@@ -164,7 +164,7 @@ test('orchestrator claim and renew return usable signed context and action links
 
     $claim = $this->withHeaders($issued['headers'])
         ->postJson(route('api.work.claim', $team), workDrainClaimPayload(1, ['orchestrator']))->assertOk();
-    expect(array_keys($claim->json('items.0.links')))->toBe(['brief', 'milestone', 'steers', 'orchestration', 'orchestrate']);
+    expect(array_keys($claim->json('items.0.links')))->toBe(['brief', 'milestone', 'steers', 'evidence', 'orchestration', 'orchestrate']);
     $this->getJson($claim->json('items.0.links.orchestration'))->assertOk()
         ->assertJsonPath('context.task.id', $task->id)
         ->assertJsonPath('context.brief.content', 'Orchestrator brief')
@@ -173,7 +173,7 @@ test('orchestrator claim and renew return usable signed context and action links
     $renew = $this->withHeaders($issued['headers'])->postJson(route('api.work.renew', $team), [
         'items' => [['item_id' => $claim->json('items.0.id'), 'fence' => $claim->json('items.0.fence')]],
     ])->assertOk()->assertJsonPath('results.0.status', 'renewed');
-    expect(array_keys($renew->json('results.0.item.links')))->toBe(['brief', 'milestone', 'steers', 'orchestration', 'orchestrate']);
+    expect(array_keys($renew->json('results.0.item.links')))->toBe(['brief', 'milestone', 'steers', 'evidence', 'orchestration', 'orchestrate']);
     $this->getJson($renew->json('results.0.item.links.orchestration'))->assertOk();
 });
 
