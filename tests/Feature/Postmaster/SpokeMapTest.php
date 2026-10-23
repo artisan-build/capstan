@@ -493,7 +493,7 @@ test('an existing Livewire snapshot remains available', function (): void {
 });
 
 test('an unauthenticated map request redirects to login', function (): void {
-    $this->get(route('postmaster.map'))->assertRedirect(route('bfc.login'));
+    $this->get(route('postmaster.map'))->assertRedirect(route('bfc.login', ['intended' => '/postmaster']));
 });
 
 test('rendering several routed spokes uses a bounded query count', function (): void {

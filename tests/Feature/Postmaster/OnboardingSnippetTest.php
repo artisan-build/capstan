@@ -94,7 +94,7 @@ test('every active package role can see and generate onboarding', function (User
 })->with(UserRole::cases());
 
 test('onboarding requires authentication and is available without a product feature gate', function (): void {
-    $this->get(route('postmaster.map'))->assertRedirect(route('bfc.login'));
+    $this->get(route('postmaster.map'))->assertRedirect(route('bfc.login', ['intended' => '/postmaster']));
     expect(DB::table('credential_authorizations')->count())->toBe(0);
 
     $operator = capstanUser();
