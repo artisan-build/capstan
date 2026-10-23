@@ -89,12 +89,22 @@ final readonly class WorkDirectiveService
             if ($directive->kind === 'respawn' && $held['directive_outcome'] === 'succeeded'
                 && isset($held['launch_nonce'], $held['session_ref'])
                 && hash_equals((string) ($directive->payload['launch_nonce'] ?? ''), $held['launch_nonce'])) {
-                WorkItem::query()->whereKey($locked->id)->where('fence', $locked->fence)->update([
-                    'launch_nonce' => $held['launch_nonce'],
-                    'handed_off_session_ref' => $held['session_ref'],
-                    'handed_off_at' => $now,
-                ]);
-                $this->seats->adoptVerifiedSession($locked->refresh(), $now);
+                $accepted = WorkItem::query()->whereKey($locked->id)
+                    ->where('fence', $locked->fence)
+                    ->where('launch_nonce', $held['launch_nonce'])
+                    ->whereNull('handed_off_session_ref')
+                    ->update([
+                        'handed_off_session_ref' => $held['session_ref'],
+                        'handed_off_at' => $now,
+                    ]);
+                $current = $locked->refresh();
+                $idempotent = $current->launch_nonce !== null
+                    && hash_equals($current->launch_nonce, $held['launch_nonce'])
+                    && $current->handed_off_session_ref !== null
+                    && hash_equals($current->handed_off_session_ref, $held['session_ref']);
+                if ($accepted === 1 || $idempotent) {
+                    $this->seats->adoptVerifiedSession($current, $now);
+                }
             }
         });
     }
