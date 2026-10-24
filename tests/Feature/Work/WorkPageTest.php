@@ -200,6 +200,7 @@ test('root board derives columns and renders escaped read only tree details', fu
     expect($runningCard?->textContent)->not->toContain('Answered question');
     expect($runningCard?->textContent)->not->toContain('Older progress');
     expect($xpath->query('.//*[@data-testid="work-detail"]', $runningCard)->length)->toBe(1)
+        ->and($xpath->query('.//*[@data-testid="work-task-evidence"]', $runningCard)->length)->toBe(1)
         ->and($xpath->query('.//a[@href="'.route('work.evidence.show', ['token' => $rootEvidence->public_token]).'"]', $runningCard)->length)->toBe(1)
         ->and($xpath->query('.//a[@href="'.route('work.evidence.show', ['token' => $childEvidence->public_token]).'"]', $runningCard)->length)->toBe(1)
         ->and($xpath->query('.//form | .//button | .//input | .//textarea | .//select', $xpath->query('//*[@data-testid="work-board"]')->item(0))->length)->toBe(0);

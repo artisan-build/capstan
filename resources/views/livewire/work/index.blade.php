@@ -91,7 +91,7 @@
                                 @endif
 
                                 @if ($card['evidence']->isNotEmpty())
-                                    <section class="mt-3 space-y-2">
+                                    <section data-testid="work-task-evidence" class="mt-3 space-y-2">
                                         <flux:heading size="sm">{{ __('Evidence') }}</flux:heading>
                                         <ul class="list-disc space-y-1 ps-5">
                                             @foreach ($card['evidence'] as $evidence)
