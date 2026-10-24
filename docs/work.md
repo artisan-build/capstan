@@ -146,6 +146,22 @@ Each change adds a row to `team_work_policy_changes` with the team, the actor id
 it, where it came from (`web` for the page, `mcp` for the tool), the old and new values, and the time.
 Setting the value a team already has adds no row, and the MCP response reports `changed` as `false`.
 
+## Reading the Work board
+
+The Work page shows the latest 25 root tasks from the signed-in user's teams in Queued, Running, and Finished
+columns. Child tasks stay inside their root card. A child title links to its pull request when Capstan has
+canonical GitHub PR metadata; otherwise the title is plain text.
+
+A root is Finished when its root-and-direct-child tree has at least one item and every item is terminal. It is
+Running when any item in that tree is claimed, delivered, or routed. All other roots are Queued, including roots
+with no items and trees containing only terminal and queued items. Nested descendants are not expanded on this
+board.
+
+Each card shows the root title, owner, priority, and direct children. Its details list every running item with its
+role and machine name, unanswered escalations, evidence from the root and direct children, deduplicated
+dependencies, and the newest saved state of play. The board is read-only. Use the MCP tools or a separate form
+for reassignment and priority changes.
+
 ## Starting work from a Page
 
 `create_task` accepts either an inline `brief` or a `page_id`, never both. A Page brief is resolved to the

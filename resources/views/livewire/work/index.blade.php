@@ -1,6 +1,5 @@
-<div data-testid="work-board" class="space-y-6">
+<div class="space-y-6">
     <flux:heading size="xl">{{ __('Work') }}</flux:heading>
-    <flux:text>{{ __('Latest 25 tasks, up to 25 items per task.') }}</flux:text>
     <section data-testid="work-pool-setting-{{ $team->pool_work ? 'on' : 'off' }}" class="space-y-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-700">
         <flux:heading size="lg">{{ __('Pooled work') }}</flux:heading>
         <flux:text>{{ __('Changes apply to the :team team.', ['team' => $team->name]) }}</flux:text>
@@ -48,77 +47,86 @@
             <flux:text>{{ __('No pending escalations.') }}</flux:text>
         @endforelse
     </section>
-    @foreach ($tasks as $task)
-        <section data-testid="work-task" data-task-id="{{ $task->id }}" class="space-y-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-700">
-            <flux:heading>{{ $task->title }}</flux:heading>
-            <flux:text>{{ $task->team_id }} · {{ $task->creator_actor }}</flux:text>
-            @if (is_array($task->pr) && is_string($task->pr['url'] ?? null) && str_starts_with($task->pr['url'], 'https://'))
-                <div data-testid="work-task-pr">
-                    <a href="{{ $task->pr['url'] }}" rel="noopener noreferrer">{{ $task->pr['repo'] }}#{{ $task->pr['number'] }}</a>
-                </div>
-            @endif
-            @if ($task->cancelled_at)
-                <flux:badge>{{ __('Cancelled') }}</flux:badge>
-            @endif
-            @if ($revision = $task->briefRevisions->first())
-                <details data-testid="work-task-brief">
-                    <summary>{{ __('Brief') }} · {{ $revision->sequence }}</summary>
-                    <pre class="whitespace-pre-wrap break-all">{{ $revision->content }}</pre>
-                </details>
-            @endif
-            @if ($task->steers->isNotEmpty())
-                <details data-testid="work-task-steers">
-                    <summary>{{ __('Latest steers (up to 10)') }}</summary>
-                    @foreach ($task->steers as $steer)
-                        <div data-testid="work-steer">
-                            <flux:text>{{ $steer->author_actor }} · {{ $steer->work_item_id }}</flux:text>
-                            <pre class="whitespace-pre-wrap break-all">{{ $steer->text }}</pre>
-                        </div>
-                    @endforeach
-                </details>
-            @endif
-            @if ($task->evidence->isNotEmpty())
-                <section data-testid="work-task-evidence" class="space-y-2">
-                    <flux:heading size="sm">{{ __('Evidence') }}</flux:heading>
-                    <ul class="list-disc space-y-1 ps-5">
-                        @foreach ($task->evidence as $evidence)
-                            <li>
-                                <a href="{{ route('work.evidence.show', ['token' => $evidence->public_token]) }}">{{ $evidence->id }}</a>
-                                <span>{{ $evidence->content_type }} · {{ $evidence->size_bytes }}</span>
-                            </li>
-                        @endforeach
-                    </ul>
-                </section>
-            @endif
-            @foreach ($task->items as $item)
-                <article data-testid="work-item" data-item-id="{{ $item->id }}" class="space-y-2 border-s-2 ps-4">
-                    <flux:heading size="sm">{{ $item->role }}</flux:heading>
-                    <flux:badge data-testid="work-item-state">{{ $item->state->value }}</flux:badge>
-                    @if ($item->claimant_actor !== null)
-                        <flux:text data-testid="work-item-claimant">{{ $item->claimant_actor }} · {{ $item->claimant_spoke_id }}</flux:text>
-                    @endif
-                    @if ($item->stalled_at)
-                        <flux:badge data-testid="work-item-stalled" color="amber">{{ __('Stalled') }}</flux:badge>
-                    @endif
-                    @if ($item->waiting_on_host_at)
-                        <flux:badge data-testid="work-item-waiting" color="amber">{{ __('Waiting on host') }}</flux:badge>
-                    @endif
-                    @if ($milestone = $item->milestones->first())
-                        <div data-testid="work-item-milestone">
-                            <flux:text>{{ $milestone->kind->value }}</flux:text>
-                            @foreach (['summary', 'url'] as $field)
-                                @if (isset($milestone->payload[$field]))
-                                    <flux:text>{{ $milestone->payload[$field] }}</flux:text>
+    <section data-testid="work-board" class="space-y-3">
+        <flux:text>{{ __('Latest 25 root tasks.') }}</flux:text>
+        <div class="grid gap-4 xl:grid-cols-3">
+            @foreach (['queued' => __('Queued'), 'running' => __('Running'), 'finished' => __('Finished')] as $column => $label)
+                <section data-testid="work-column-{{ $column }}" class="space-y-3 rounded-lg bg-zinc-50 p-3 dark:bg-zinc-900">
+                    <flux:heading size="lg">{{ $label }}</flux:heading>
+                    @forelse ($boardColumns[$column] as $card)
+                        <article data-testid="work-card" data-task-id="{{ $card['task']->id }}" class="space-y-3 rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-800">
+                            <flux:heading>{{ $card['task']->title }}</flux:heading>
+                            <flux:text>{{ $card['task']->owner_actor }} · {{ $card['task']->priority->value }}</flux:text>
+
+                            @if ($card['children']->isNotEmpty())
+                                <ul class="space-y-2">
+                                    @foreach ($card['children'] as $child)
+                                        <li data-testid="work-child">
+                                            @if ($child['prUrl'] !== null)
+                                                <a href="{{ $child['prUrl'] }}" rel="noopener noreferrer">{{ $child['task']->title }}</a>
+                                            @else
+                                                <span>{{ $child['task']->title }}</span>
+                                            @endif
+                                        </li>
+                                    @endforeach
+                                </ul>
+                            @endif
+
+                            <details data-testid="work-detail" class="space-y-3">
+                                <summary>{{ __('Details') }}</summary>
+
+                                @foreach ($card['runningItems'] as $running)
+                                    <section data-testid="work-running-item" data-machine-source="{{ $running['machineSource'] }}" class="mt-3 border-s-2 ps-3">
+                                        <flux:text>{{ $running['item']->role }} · {{ $running['machine'] }}</flux:text>
+                                    </section>
+                                @endforeach
+
+                                @if ($card['escalations']->isNotEmpty())
+                                    <section class="mt-3 space-y-2">
+                                        <flux:heading size="sm">{{ __('Open escalations') }}</flux:heading>
+                                        @foreach ($card['escalations'] as $escalation)
+                                            <pre class="whitespace-pre-wrap break-all">{{ $escalation->question }}</pre>
+                                        @endforeach
+                                    </section>
                                 @endif
-                            @endforeach
-                            <pre class="whitespace-pre-wrap break-all">{{ json_encode($milestone->payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) }}</pre>
-                        </div>
-                    @endif
-                </article>
+
+                                @if ($card['evidence']->isNotEmpty())
+                                    <section data-testid="work-task-evidence" class="mt-3 space-y-2">
+                                        <flux:heading size="sm">{{ __('Evidence') }}</flux:heading>
+                                        <ul class="list-disc space-y-1 ps-5">
+                                            @foreach ($card['evidence'] as $evidence)
+                                                <li>
+                                                    <a href="{{ route('work.evidence.show', ['token' => $evidence->public_token]) }}">{{ $evidence->id }}</a>
+                                                </li>
+                                            @endforeach
+                                        </ul>
+                                    </section>
+                                @endif
+
+                                @if ($card['dependencies']->isNotEmpty())
+                                    <section class="mt-3 space-y-2">
+                                        <flux:heading size="sm">{{ __('Dependencies') }}</flux:heading>
+                                        <ul class="list-disc space-y-1 ps-5">
+                                            @foreach ($card['dependencies'] as $dependency)
+                                                <li>{{ $dependency->title }}</li>
+                                            @endforeach
+                                        </ul>
+                                    </section>
+                                @endif
+
+                                @if ($card['stateOfPlay'] !== null)
+                                    <section class="mt-3 space-y-2">
+                                        <flux:heading size="sm">{{ __('State of play') }}</flux:heading>
+                                        <pre class="whitespace-pre-wrap break-all">{{ $card['stateOfPlay'] }}</pre>
+                                    </section>
+                                @endif
+                            </details>
+                        </article>
+                    @empty
+                        <flux:text>{{ __('No tasks.') }}</flux:text>
+                    @endforelse
+                </section>
             @endforeach
-            @if ($task->items_count > $task->items->count())
-                <flux:text data-testid="work-task-truncated">{{ $task->items_count - $task->items->count() }} {{ __('more items') }}</flux:text>
-            @endif
-        </section>
-    @endforeach
+        </div>
+    </section>
 </div>
