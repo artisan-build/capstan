@@ -23,7 +23,6 @@ beforeEach(function (): void {
     config([
         'app.key' => 'base64:'.base64_encode(str_repeat('a', 32)),
         'app.url' => 'https://app.capstan.test',
-        'capstan.features.artifacts' => true,
         'capstan.artifacts.max_content_bytes' => 1_048_576,
         'capstan.artifacts.render_origin' => 'https://artifacts.capstan.test',
     ]);

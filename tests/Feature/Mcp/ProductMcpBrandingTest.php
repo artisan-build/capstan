@@ -33,7 +33,6 @@ beforeEach(function (): void {
     config([
         'app.key' => 'base64:'.base64_encode(str_repeat('g', 32)),
         'app.url' => 'https://app.brand-mcp.test',
-        'capstan.features.artifacts' => true,
         'capstan.artifacts.render_origin' => 'https://render.brand-mcp.test',
     ]);
     Feature::flushCache();

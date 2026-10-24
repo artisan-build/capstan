@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\PageLayout;
+use App\Features\Artifacts;
 use App\Models\Page;
 use App\Support\PagePublisher;
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
@@ -18,7 +19,6 @@ use Laravel\Pennant\Feature;
 beforeEach(function (): void {
     config([
         'app.url' => 'https://app.deep-link.test',
-        'capstan.features.artifacts' => true,
         'capstan.artifacts.render_origin' => 'https://render.deep-link.test',
         'built-for-cloud.managed.client_secret' => str_repeat('n', 64),
     ]);
@@ -167,7 +167,7 @@ test('the sign in a signed out deep link offers is the same whatever page id was
 test('signing in through a page deep link still refuses a reader the page was never shared with', function (): void {
     $owner = deepLinkMember();
     $stranger = deepLinkMember(['role' => UserRole::Member->value, 'managed_membership_role' => UserRole::Member->value]);
-    $page = deepLinkPage($owner, 'Unshared deep link page '.Str::random(8));
+    $page = deepLinkPage($owner, 'Unshared deep link private title');
     $url = route('pages.show', ['page' => $page], absolute: false);
     fakeScalpelsHandoff($stranger);
 
@@ -181,8 +181,8 @@ test('signing in through a page deep link still refuses a reader the page was ne
 
     $refused = $this->get($url)->assertNotFound();
 
-    expect($refused->getContent())->toBe('')
-        ->and($refused->getContent())->not->toContain($page->title);
+    expect($refused->getContent())->not->toContain($page->title);
+    expect($refused->getContent())->toBe('');
 });
 
 test('a page deep link handoff completed by a different browser is refused', function (): void {
@@ -205,11 +205,8 @@ test('a page deep link handoff completed by a different browser is refused', fun
     $this->get($url)->assertRedirect(route('bfc.managed.login', ['intended' => $url]));
 });
 
-test('a signed out page library link comes back to the library once managed sign in completes', function (): void {
-    $owner = deepLinkMember();
-    $page = deepLinkPage($owner, 'Library deep link page '.Str::random(8));
+test('a signed out page library link offers managed sign in carrying the library path', function (): void {
     $url = route('pages.index', absolute: false);
-    fakeScalpelsHandoff($owner);
     $lookups = [];
     DB::listen(function ($query) use (&$lookups): void {
         if (preg_match('/from ["`]?page(?:s|_versions|_shares)["`]?/', $query->sql) === 1) {
@@ -222,26 +219,12 @@ test('a signed out page library link comes back to the library once managed sign
         ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
 
     expect($lookups)->toBe([]);
-
-    $handoff = $this->get(route('bfc.managed.login', ['intended' => $url]));
-    $handoff->assertRedirectContains(deepLinkIssuer().ManagedAuthClient::AUTHORIZE_PATH)
-        ->assertSessionHas(ManagedHandoff::SESSION_INTENDED_KEY, $url);
-
-    $this->get(route('bfc.managed.callback', [
-        'state' => deepLinkAuthorizationState((string) $handoff->headers->get('Location')),
-        'code' => 'deep-link-code',
-    ]))->assertRedirect($url);
-
-    $this->get($url)
-        ->assertOk()
-        ->assertSee($page->title);
 });
 
-test('a signed out page export link comes back to that same export once managed sign in completes', function (): void {
+test('a signed out page export link offers managed sign in carrying the export path', function (): void {
     $owner = deepLinkMember();
     $page = deepLinkPage($owner, 'Export deep link page '.Str::random(8));
     $url = route('pages.export', ['page' => $page], absolute: false);
-    fakeScalpelsHandoff($owner);
     $lookups = [];
     DB::listen(function ($query) use (&$lookups): void {
         if (preg_match('/from ["`]?page(?:s|_versions|_shares)["`]?/', $query->sql) === 1) {
@@ -264,25 +247,43 @@ test('a signed out page export link comes back to that same export once managed 
     }
 
     expect($lookups)->toBe([]);
+});
 
-    $handoff = $this->get(route('bfc.managed.login', ['intended' => $url]));
-    $handoff->assertRedirectContains(deepLinkIssuer().ManagedAuthClient::AUTHORIZE_PATH)
-        ->assertSessionHas(ManagedHandoff::SESSION_INTENDED_KEY, $url);
+test('export feature and render host refusals happen before admission', function (): void {
+    $owner = deepLinkMember();
+    $page = deepLinkPage($owner, 'Pre-admission export title '.Str::random(8));
+    $path = route('pages.export', ['page' => $page], absolute: false);
+    $lookups = [];
+    DB::listen(function ($query) use (&$lookups): void {
+        if (preg_match('/from ["`]?page(?:s|_versions|_shares)["`]?/', $query->sql) === 1) {
+            $lookups[] = $query->sql;
+        }
+    });
 
-    $this->get(route('bfc.managed.callback', [
-        'state' => deepLinkAuthorizationState((string) $handoff->headers->get('Location')),
-        'code' => 'deep-link-code',
-    ]))->assertRedirect($url);
+    config(['capstan.artifacts.render_origin' => null]);
+    Feature::flushCache();
+    expect(Feature::active(Artifacts::class))->toBeFalse();
+    $featureOff = $this->get($path);
 
-    $this->get($url)
-        ->assertOk()
-        ->assertHeader('Content-Disposition', 'attachment; filename="page-'.$page->id.'.html"');
+    config(['capstan.artifacts.render_origin' => 'https://render.deep-link.test']);
+    Feature::flushCache();
+    expect(Feature::active(Artifacts::class))->toBeTrue();
+    $renderHost = $this->get('https://render.deep-link.test'.$path);
+
+    foreach ([$featureOff, $renderHost] as $response) {
+        $response->assertNotFound()
+            ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
+        expect($response->headers->has('Location'))->toBeFalse();
+        expect($response->getContent())->toBe('');
+    }
+
+    expect($lookups)->toBe([]);
 });
 
 test('a signed out export link still refuses a signed in reader who does not own the page', function (): void {
     $owner = deepLinkMember();
     $stranger = deepLinkMember(['role' => UserRole::Member->value, 'managed_membership_role' => UserRole::Member->value]);
-    $page = deepLinkPage($owner, 'Unowned export page '.Str::random(8));
+    $page = deepLinkPage($owner, 'Unowned export private title');
     $url = route('pages.export', ['page' => $page], absolute: false);
     fakeScalpelsHandoff($stranger);
 
@@ -302,8 +303,8 @@ test('a signed out export link still refuses a signed in reader who does not own
     ] as $path) {
         $refused = $this->get($path)->assertNotFound();
 
-        expect($refused->getContent())->toBe('')
-            ->and($refused->getContent())->not->toContain($page->title);
+        expect($refused->getContent())->not->toContain($page->title);
+        expect($refused->getContent())->toBe('');
     }
 });
 

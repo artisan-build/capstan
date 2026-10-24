@@ -21,7 +21,6 @@ beforeEach(function (): void {
     config([
         'app.key' => 'base64:'.base64_encode(str_repeat('l', 32)),
         'app.url' => 'https://app.library.test',
-        'capstan.features.artifacts' => true,
         'capstan.artifacts.render_origin' => 'https://render.library.test',
     ]);
     Feature::flushCache();
@@ -429,12 +428,20 @@ test('only the owner can delete and deletion cascades access without deleting sh
     $shareContentUrl = $origin->signedPageShareContentUrl($link);
     $storageKey = $currentVersion->storage_key;
 
+    $this->actingAsVersioned($owner)
+        ->get(route('pages.show', ['page' => $page]))
+        ->assertOk()
+        ->assertSee($title)
+        ->assertSee($recipe);
+
     foreach ([$recipient, $foreign] as $deniedUser) {
         $denied = $this->actingAsVersioned($deniedUser)
             ->delete(route('pages.destroy', ['page' => $page]))
             ->assertNotFound()
             ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
-        expect($denied->getContent())->toBe('')->not->toContain($title, $recipe);
+        expect($denied->getContent())->toBe('')
+            ->not->toContain($title)
+            ->not->toContain($recipe);
     }
     expect($page->fresh())->toBeInstanceOf(Page::class);
 
@@ -529,7 +536,9 @@ test('delete rejects unavailable principals malformed ids and render-host reques
     foreach ($responses as $response) {
         $response->assertNotFound()
             ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
-        expect($response->getContent())->toBe('')->not->toContain($title, $page->refresh_recipe);
+        expect($response->getContent())->toBe('')
+            ->not->toContain($title)
+            ->not->toContain($page->refresh_recipe);
     }
     expect($privateLookups)->toBe([]);
 
@@ -539,6 +548,12 @@ test('delete rejects unavailable principals malformed ids and render-host reques
         ->delete(route('pages.destroy', ['page' => Str::uuid()]))
         ->assertNotFound()
         ->assertHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
-    expect($unknown->getContent())->toBe('')->not->toContain($title, $page->refresh_recipe);
+    expect($unknown->getContent())->toBe('')
+        ->not->toContain($title)
+        ->not->toContain($page->refresh_recipe);
     expect($page->fresh())->toBeInstanceOf(Page::class);
+
+    // Positive control: both exclusion needles are real private values on the page.
+    expect($page->title)->toBe($title)
+        ->and($page->refresh_recipe)->toBeString()->not->toBe('');
 });

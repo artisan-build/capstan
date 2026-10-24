@@ -19,7 +19,6 @@ beforeEach(function (): void {
     config([
         'app.key' => 'base64:'.base64_encode(str_repeat('u', 32)),
         'app.url' => 'https://app.brand-ui.test',
-        'capstan.features.artifacts' => true,
         'capstan.artifacts.render_origin' => 'https://render.brand-ui.test',
     ]);
     Feature::flushCache();

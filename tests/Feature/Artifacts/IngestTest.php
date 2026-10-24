@@ -13,7 +13,6 @@ use Laravel\Pennant\Feature;
 beforeEach(function (): void {
     config([
         'app.url' => 'https://app.capstan.test',
-        'capstan.features.artifacts' => true,
         // The feature needs an isolated render origin as well as the flag,
         // so name it here instead of inheriting one from the environment.
         'capstan.artifacts.render_origin' => 'https://artifacts.capstan.test',

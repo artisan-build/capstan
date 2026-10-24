@@ -30,7 +30,6 @@ beforeEach(function (): void {
     config([
         'app.key' => 'base64:'.base64_encode(str_repeat('s', 32)),
         'app.url' => 'https://app.sharing.test',
-        'capstan.features.artifacts' => true,
         'capstan.artifacts.render_origin' => 'https://render.sharing.test',
     ]);
     Feature::flushCache();

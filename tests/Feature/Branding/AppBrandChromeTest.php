@@ -24,7 +24,6 @@ beforeEach(function (): void {
         'app.key' => 'base64:'.base64_encode(str_repeat('c', 32)),
         'app.name' => 'Configured '.Str::random(8),
         'app.url' => 'https://app.chrome-brand.test',
-        'capstan.features.artifacts' => true,
         'capstan.artifacts.render_origin' => 'https://render.chrome-brand.test',
     ]);
     Feature::flushCache();

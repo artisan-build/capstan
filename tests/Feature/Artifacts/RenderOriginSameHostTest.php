@@ -11,7 +11,6 @@ beforeEach(function (): void {
     config([
         'app.key' => 'base64:'.base64_encode(str_repeat('a', 32)),
         'app.url' => 'https://app.test',
-        'capstan.features.artifacts' => true,
     ]);
     Feature::flushCache();
     Storage::fake();

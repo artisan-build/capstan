@@ -3,9 +3,7 @@
 namespace Tests\Feature;
 
 use App\Auth\CapstanCredentialDeclaration;
-use App\Features\Artifacts;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
-use Laravel\Pennant\Feature;
 use Tests\TestCase;
 
 class FeatureFlagsTest extends TestCase
@@ -18,14 +16,6 @@ class FeatureFlagsTest extends TestCase
             'app.url' => 'https://app.capstan.test',
             'capstan.artifacts.render_origin' => 'https://artifacts.capstan.test',
         ]);
-    }
-
-    public function test_artifacts_remains_gated_only_by_its_runtime_requirements(): void
-    {
-        config(['capstan.features.artifacts' => false]);
-        Feature::flushCache();
-
-        $this->assertTrue(Feature::active(Artifacts::class));
     }
 
     public function test_obsolete_feature_config_is_not_declared(): void

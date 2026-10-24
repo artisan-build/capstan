@@ -21,7 +21,6 @@ beforeEach(function (): void {
         'app.key' => 'base64:'.base64_encode(str_repeat('m', 32)),
         'app.url' => 'https://app.capstan.test',
         'capstan.artifacts.render_origin' => 'https://artifacts.capstan.test',
-        'capstan.features.artifacts' => true,
         'capstan.features.postmaster' => true,
         'capstan.features.work' => true,
         'capstan.postmaster.server_id' => '01ARZ3NDEKTSV4RRFFQ69G5FAV',
