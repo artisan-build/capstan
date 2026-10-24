@@ -2,6 +2,7 @@
 
 namespace App\Livewire\Work;
 
+use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkEscalation;
 use App\Models\WorkItem;
@@ -33,18 +34,59 @@ class Index extends Component
     {
         $this->guardAccess();
         $actor = (string) request()->user()->getKey();
+        $tasks = WorkTask::query()->whereNull('parent_task_id')->orderByDesc('id')->limit(25)
+            ->with([
+                'items.claimantSpoke',
+                'evidence' => fn ($query) => $query->orderBy('id'),
+                'dependencies' => fn ($query) => $query->orderBy('work_tasks.id'),
+                'children' => fn ($query) => $query->orderBy('id'),
+                'children.items.claimantSpoke',
+                'children.evidence' => fn ($query) => $query->orderBy('id'),
+                'children.dependencies' => fn ($query) => $query->orderBy('work_tasks.id'),
+            ])->get();
+        $rootTaskIds = $tasks->modelKeys();
+        $openEscalations = WorkEscalation::query()->whereHas('workTask', fn ($query) => $query
+            ->whereIn('id', $rootTaskIds)->orWhereIn('parent_task_id', $rootTaskIds))
+            ->whereNull('answered_at')->orderBy('id')->get()->groupBy('work_task_id');
+
+        /** @var array<string, list<array<string, mixed>>> $boardColumns */
+        $boardColumns = ['queued' => [], 'running' => [], 'finished' => []];
+        foreach ($tasks as $task) {
+            $treeTasks = collect([$task])->concat($task->children);
+            $items = $treeTasks->flatMap(fn (WorkTask $treeTask) => $treeTask->items);
+            $runningItems = $items->filter(
+                fn (WorkItem $item) => in_array($item->state->value, ['claimed', 'delivered', 'routed'], true),
+            );
+            $column = $items->isNotEmpty() && $items->every(fn (WorkItem $item) => $item->state->isTerminal())
+                ? 'finished'
+                : ($runningItems->isNotEmpty() ? 'running' : 'queued');
+            $stateOfPlay = $items->whereNotNull('last_progress')->sortByDesc('updated_at')->first();
+
+            $boardColumns[$column][] = [
+                'task' => $task,
+                'children' => $task->children->map(fn (WorkTask $child) => [
+                    'task' => $child,
+                    'prUrl' => $this->safePullRequestUrl($child->pr),
+                ]),
+                'runningItems' => $runningItems->map(function (WorkItem $item): array {
+                    $machine = $this->machineDisplay($item->claimantSpoke);
+
+                    return ['item' => $item, ...$machine];
+                }),
+                'escalations' => $treeTasks->flatMap(
+                    fn (WorkTask $treeTask) => $openEscalations->get($treeTask->id, collect()),
+                ),
+                'evidence' => $treeTasks->flatMap(fn (WorkTask $treeTask) => $treeTask->evidence),
+                'dependencies' => $treeTasks->flatMap(fn (WorkTask $treeTask) => $treeTask->dependencies)
+                    ->unique('id')->values(),
+                'stateOfPlay' => $stateOfPlay?->last_progress,
+            ];
+        }
 
         return view('livewire.work.index', [
             'team' => Team::default(),
             'canManagePoolWork' => RolePolicy::canManageMembers(request()->user()->role),
-            'tasks' => WorkTask::query()->orderByDesc('id')->limit(25)
-                ->with([
-                    'items' => fn ($query) => $query->orderBy('id')->limit(25),
-                    'items.milestones' => fn ($query) => $query->orderByDesc('id')->limit(1),
-                    'evidence' => fn ($query) => $query->orderBy('id'),
-                    'briefRevisions' => fn ($query) => $query->reorder()->orderByDesc('sequence')->limit(1),
-                    'steers' => fn ($query) => $query->orderByDesc('id')->limit(10),
-                ])->withCount('items')->get(),
+            'boardColumns' => $boardColumns,
             'escalations' => WorkEscalation::query()
                 ->where('addressed_actor', $actor)->whereNull('answered_at')
                 ->whereHas('workTask', fn ($query) => $query->whereNull('cancelled_at'))
@@ -52,6 +94,33 @@ class Index extends Component
                     ->where('addressed_actor', $actor)->where('state', 'queued'))
                 ->orderBy('id')->limit(25)->get(),
         ]);
+    }
+
+    /** @param array{repo: string, number: int, url: string}|null $pullRequest */
+    private function safePullRequestUrl(?array $pullRequest): ?string
+    {
+        if ($pullRequest === null || trim($pullRequest['repo']) === '' || $pullRequest['number'] < 1) {
+            return null;
+        }
+
+        $url = $pullRequest['url'];
+
+        return filter_var($url, FILTER_VALIDATE_URL) !== false && parse_url($url, PHP_URL_SCHEME) === 'https'
+            ? $url
+            : null;
+    }
+
+    /** @return array{machine: string, machineSource: string} */
+    private function machineDisplay(?Spoke $spoke): array
+    {
+        foreach (['device_name', 'name'] as $source) {
+            $label = $spoke?->{$source};
+            if (is_string($label) && trim($label) !== '') {
+                return ['machine' => $label, 'machineSource' => $source];
+            }
+        }
+
+        return ['machine' => __('Unavailable'), 'machineSource' => 'unavailable'];
     }
 
     public function answerEscalation(string $escalationId, WorkOrchestrationService $orchestration): void
