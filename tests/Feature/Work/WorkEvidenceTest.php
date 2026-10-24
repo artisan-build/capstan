@@ -550,6 +550,12 @@ test('MCP settlement failure keeps the one blob linked by its durable accepted e
 test('task detail lists evidence while Pages Artifacts and list_pages do not expose it', function (): void {
     $user = capstanUser(['role' => 'owner']);
     [$item] = evidenceWorkerItem();
+    DB::table('team_user')->insert([
+        'team_id' => $item->workTask->team_id,
+        'user_id' => $user->id,
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
     $service = resolve(WorkEvidenceService::class);
     $bytes = "visible only on Work\n";
     $stored = $service->store($item, $bytes, $service->inspect('work-only.txt', $bytes), new WorkEvidenceAttemptLog);

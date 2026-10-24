@@ -2,6 +2,7 @@
 
 namespace App\Livewire\Work;
 
+use App\Machine\TeamMemberships;
 use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkEscalation;
@@ -34,7 +35,11 @@ class Index extends Component
     {
         $this->guardAccess();
         $actor = (string) request()->user()->getKey();
-        $tasks = WorkTask::query()->whereNull('parent_task_id')->orderByDesc('id')->limit(25)
+        /** @var User $user */
+        $user = request()->user();
+        $tasks = WorkTask::query()->whereNull('parent_task_id')
+            ->whereIn('team_id', resolve(TeamMemberships::class)->teamsFor($user)->select('id'))
+            ->orderByDesc('id')->limit(25)
             ->with([
                 'items.claimantSpoke',
                 'evidence' => fn ($query) => $query->orderBy('id'),
@@ -104,10 +109,22 @@ class Index extends Component
         }
 
         $url = $pullRequest['url'];
+        $parts = filter_var($url, FILTER_VALIDATE_URL) !== false ? parse_url($url) : false;
 
-        return filter_var($url, FILTER_VALIDATE_URL) !== false && parse_url($url, PHP_URL_SCHEME) === 'https'
-            ? $url
-            : null;
+        if (! is_array($parts)
+            || ! isset($parts['scheme'], $parts['host'], $parts['path'])
+            || strcasecmp($parts['scheme'], 'https') !== 0
+            || strcasecmp($parts['host'], 'github.com') !== 0
+            || array_key_exists('user', $parts)
+            || array_key_exists('pass', $parts)
+            || array_key_exists('port', $parts)
+            || array_key_exists('query', $parts)
+            || array_key_exists('fragment', $parts)
+            || $parts['path'] !== '/'.$pullRequest['repo'].'/pull/'.$pullRequest['number']) {
+            return null;
+        }
+
+        return $url;
     }
 
     /** @return array{machine: string, machineSource: string} */

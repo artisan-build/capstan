@@ -148,9 +148,9 @@ Setting the value a team already has adds no row, and the MCP response reports `
 
 ## Reading the Work board
 
-The Work page shows the latest 25 root tasks in Queued, Running, and Finished columns. Child tasks stay inside
-their root card. A child title links to its pull request when Capstan has valid HTTPS PR metadata; otherwise the
-title is plain text.
+The Work page shows the latest 25 root tasks from the signed-in user's teams in Queued, Running, and Finished
+columns. Child tasks stay inside their root card. A child title links to its pull request when Capstan has
+canonical GitHub PR metadata; otherwise the title is plain text.
 
 A root is Finished when its root-and-direct-child tree has at least one item and every item is terminal. It is
 Running when any item in that tree is claimed, delivered, or routed. All other roots are Queued, including roots

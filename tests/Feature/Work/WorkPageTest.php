@@ -2,6 +2,7 @@
 
 use App\Livewire\Postmaster\SpokeMap;
 use App\Livewire\Work\Index;
+use App\Machine\TeamMemberships;
 use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkEscalation;
@@ -9,6 +10,7 @@ use App\Models\WorkTask;
 use App\Work\WorkOrchestrationService;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
+use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
@@ -37,6 +39,16 @@ function workNavigationTags(string $html): array
     return $matches[0];
 }
 
+function workPageJoinTeam(User $user, Team $team): void
+{
+    DB::table('team_user')->insertOrIgnore([
+        'team_id' => $team->id,
+        'user_id' => $user->getKey(),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+}
+
 function workPageXPath(string $html): DOMXPath
 {
     $dom = new DOMDocument;
@@ -47,6 +59,8 @@ function workPageXPath(string $html): DOMXPath
 
 test('root board derives columns and renders escaped read only tree details', function (): void {
     $team = Team::query()->create(['name' => 'Board team', 'slug' => Str::random(16)]);
+    $viewer = capstanUser();
+    workPageJoinTeam($viewer, $team);
     $hostile = '<script data-board="hostile">alert("board")</script>';
     $baseTime = now();
 
@@ -64,7 +78,7 @@ test('root board derives columns and renders escaped read only tree details', fu
     ]);
     $validChild = workPageTask([
         'team_id' => $team->id, 'parent_task_id' => $running->id, 'title' => 'Linked child '.$hostile,
-        'pr' => ['repo' => 'artisan-build/capstan', 'number' => 812, 'url' => 'https://example.test/pull/812'],
+        'pr' => ['repo' => 'artisan-build/capstan', 'number' => 812, 'url' => 'https://github.com/artisan-build/capstan/pull/812'],
     ]);
     $plainChild = workPageTask([
         'team_id' => $team->id, 'parent_task_id' => $running->id, 'title' => 'Unlinked child',
@@ -145,7 +159,7 @@ test('root board derives columns and renders escaped read only tree details', fu
         'team_id' => $team->id, 'parent_task_id' => $noItems->id, 'title' => 'No-item child',
     ]);
 
-    $response = $this->actingAsVersioned(capstanUser())->get(route('work.index'))->assertOk();
+    $response = $this->actingAsVersioned($viewer)->get(route('work.index'))->assertOk();
     $xpath = workPageXPath($response->content());
 
     expect($xpath->query('//*[@data-testid="work-board"]')->length)->toBe(1)
@@ -182,7 +196,7 @@ test('root board derives columns and renders escaped read only tree details', fu
     foreach ($xpath->query('.//li', $runningCard) as $listItem) {
         $listItems[] = trim($listItem->textContent);
     }
-    expect($xpath->query('.//*[@data-testid="work-child"]/a[@href="https://example.test/pull/812" and @rel="noopener noreferrer"]', $runningCard)->length)->toBe(1)
+    expect($xpath->query('.//*[@data-testid="work-child"]/a[@href="https://github.com/artisan-build/capstan/pull/812" and @rel="noopener noreferrer"]', $runningCard)->length)->toBe(1)
         ->and($xpath->query('.//*[@data-testid="work-child"]/a', $runningCard)->length)->toBe(1)
         ->and($xpath->query('.//*[@data-testid="work-running-item"]', $runningCard)->length)->toBe(3)
         ->and($xpath->query('.//*[@data-testid="work-running-item" and @data-machine-source="device_name"]', $runningCard)->length)->toBe(1)
@@ -206,6 +220,129 @@ test('root board derives columns and renders escaped read only tree details', fu
         ->and($xpath->query('.//form | .//button | .//input | .//textarea | .//select', $xpath->query('//*[@data-testid="work-board"]')->item(0))->length)->toBe(0);
     $response->assertSee($hostile)->assertDontSee($hostile, false)
         ->assertDontSee('href="javascript:', false)->assertDontSee('href="https:// bad.example', false);
+});
+
+test('Work board shows only joined teams until another membership is granted', function (): void {
+    $viewer = capstanUser();
+    $joinedTeam = Team::query()->create(['name' => 'Joined board team', 'slug' => Str::random(16)]);
+    $foreignTeam = Team::query()->create(['name' => 'Foreign board team', 'slug' => Str::random(16)]);
+    workPageJoinTeam($viewer, $joinedTeam);
+
+    $makeTree = function (Team $team, string $marker, string $token, int $prNumber): array {
+        $root = workPageTask(['team_id' => $team->id, 'title' => $marker.' root']);
+        $prUrl = 'https://github.com/artisan-build/capstan/pull/'.$prNumber;
+        $child = workPageTask([
+            'team_id' => $team->id,
+            'parent_task_id' => $root->id,
+            'title' => $marker.' child',
+            'pr' => ['repo' => 'artisan-build/capstan', 'number' => $prNumber, 'url' => $prUrl],
+        ]);
+        $spoke = Spoke::query()->create([
+            'actor_id' => $marker.' actor',
+            'credential_id' => (string) Str::uuid7(),
+            'device_name' => $marker.' machine',
+        ]);
+        $item = $child->items()->create([
+            'role' => $marker.' role',
+            'state' => 'claimed',
+            'claimant_spoke_id' => $spoke->id,
+            'last_progress' => $marker.' progress',
+        ]);
+        WorkEscalation::query()->create([
+            'work_task_id' => $child->id,
+            'work_item_id' => $item->id,
+            'request_key' => $marker.'-question',
+            'addressed_actor' => $marker.' person',
+            'question' => $marker.' question',
+            'metadata' => [],
+        ]);
+        $evidence = $item->evidence()->create([
+            'work_task_id' => $child->id,
+            'public_token' => str_repeat($token, 64),
+            'storage_key' => 'work-evidence/private/'.$marker,
+            'content_type' => 'text/plain',
+            'extension' => 'txt',
+            'size_bytes' => 12,
+        ]);
+
+        return [
+            $marker.' root',
+            $marker.' child',
+            $marker.' progress',
+            $marker.' question',
+            $marker.' machine',
+            $prUrl,
+            $evidence->id,
+            route('work.evidence.show', ['token' => $evidence->public_token]),
+        ];
+    };
+
+    $joinedMarkers = $makeTree($joinedTeam, 'Joined-only', 'c', 821);
+    $foreignMarkers = $makeTree($foreignTeam, 'Foreign-only', 'd', 822);
+    expect(resolve(TeamMemberships::class)->belongsTo($viewer, $joinedTeam->id))->toBeTrue()
+        ->and(resolve(TeamMemberships::class)->belongsTo($viewer, $foreignTeam->id))->toBeFalse();
+
+    $restricted = $this->actingAsVersioned($viewer)->get(route('work.index'))->assertOk();
+    foreach ($joinedMarkers as $marker) {
+        $restricted->assertSee($marker, false);
+    }
+    foreach ($foreignMarkers as $marker) {
+        $restricted->assertDontSee($marker, false);
+    }
+
+    workPageJoinTeam($viewer, $foreignTeam);
+    expect(resolve(TeamMemberships::class)->belongsTo($viewer, $foreignTeam->id))->toBeTrue();
+    $expanded = $this->get(route('work.index'))->assertOk();
+    foreach ([...$joinedMarkers, ...$foreignMarkers] as $marker) {
+        $expanded->assertSee($marker, false);
+    }
+});
+
+test('Work board links only canonical GitHub pull request metadata', function (): void {
+    $viewer = capstanUser();
+    $team = Team::query()->create(['name' => 'PR link team', 'slug' => Str::random(16)]);
+    workPageJoinTeam($viewer, $team);
+    $root = workPageTask(['team_id' => $team->id, 'title' => 'PR link root']);
+    $cases = [
+        'Canonical PR' => [900, 'https://github.com/artisan-build/capstan/pull/900', true],
+        'Unrelated host' => [901, 'https://attacker.example/artisan-build/capstan/pull/901', false],
+        'GitHub userinfo attacker host' => [902, 'https://github.com@attacker.example/artisan-build/capstan/pull/902', false],
+        'Exact host with userinfo' => [903, 'https://attacker@github.com/artisan-build/capstan/pull/903', false],
+        'Explicit port' => [904, 'https://github.com:443/artisan-build/capstan/pull/904', false],
+        'Mismatched repository' => [905, 'https://github.com/artisan-build/other/pull/905', false],
+        'Mismatched number' => [906, 'https://github.com/artisan-build/capstan/pull/999', false],
+        'Query suffix' => [907, 'https://github.com/artisan-build/capstan/pull/907?tab=files', false],
+        'Fragment suffix' => [908, 'https://github.com/artisan-build/capstan/pull/908#discussion', false],
+        'Path suffix' => [909, 'https://github.com/artisan-build/capstan/pull/909/files', false],
+        'Mixed-case HTTPS scheme' => [910, 'HTTPS://github.com/artisan-build/capstan/pull/910', true],
+        'Mixed-case GitHub host' => [911, 'https://GitHub.Com/artisan-build/capstan/pull/911', true],
+    ];
+    foreach ($cases as $title => [$number, $url]) {
+        workPageTask([
+            'team_id' => $team->id,
+            'parent_task_id' => $root->id,
+            'title' => $title,
+            'pr' => ['repo' => 'artisan-build/capstan', 'number' => $number, 'url' => $url],
+        ]);
+    }
+
+    $response = $this->actingAsVersioned($viewer)->get(route('work.index'))->assertOk();
+    $xpath = workPageXPath($response->content());
+    $card = $xpath->query('//*[@data-testid="work-card" and @data-task-id="'.$root->id.'"]')->item(0);
+    $children = [];
+    foreach ($xpath->query('.//*[@data-testid="work-child"]', $card) as $child) {
+        $children[trim($child->textContent)] = $child;
+    }
+
+    foreach ($cases as $title => [, $url, $shouldLink]) {
+        expect($children)->toHaveKey($title);
+        $links = $xpath->query('.//a', $children[$title]);
+        expect($links->length)->toBe($shouldLink ? 1 : 0);
+        if ($shouldLink) {
+            expect($links->item(0)?->attributes?->getNamedItem('href')?->nodeValue)->toBe($url)
+                ->and($links->item(0)?->attributes?->getNamedItem('rel')?->nodeValue)->toBe('noopener noreferrer');
+        }
+    }
 });
 
 test('sidebar and desktop mobile header Work navigation is structurally current', function (): void {
@@ -242,7 +379,10 @@ test('Work page requires active product admission and guards both mount and late
 });
 
 test('Work board bounds root cards and eager loads populated trees without per-card queries', function (): void {
+    $viewer = capstanUser();
     $team = Team::query()->create(['name' => 'Query team', 'slug' => Str::random(16)]);
+    $foreignTeam = Team::query()->create(['name' => 'Foreign query team', 'slug' => Str::random(16)]);
+    workPageJoinTeam($viewer, $team);
     foreach (range(1, 27) as $rootNumber) {
         $root = workPageTask(['team_id' => $team->id, 'title' => 'Root '.$rootNumber]);
         $root->items()->create(['role' => 'root-'.$rootNumber, 'state' => 'queued']);
@@ -254,15 +394,19 @@ test('Work board bounds root cards and eager loads populated trees without per-c
             $child->items()->create(['role' => 'child-'.$rootNumber.'-'.$childNumber, 'state' => 'queued']);
         }
     }
+    foreach (range(1, 25) as $rootNumber) {
+        workPageTask(['team_id' => $foreignTeam->id, 'title' => 'Foreign root '.$rootNumber]);
+    }
     $queries = [];
     DB::listen(function (QueryExecuted $query) use (&$queries): void {
         if (str_contains($query->sql, 'work_')) {
             $queries[] = $query->sql;
         }
     });
-    $response = $this->actingAsVersioned(capstanUser())->get(route('work.index'))->assertOk();
+    $response = $this->actingAsVersioned($viewer)->get(route('work.index'))->assertOk();
     expect(substr_count($response->content(), 'data-testid="work-card"'))->toBe(25)
         ->and(substr_count($response->content(), 'data-testid="work-child"'))->toBe(75)
+        ->and($response->content())->not->toContain('Foreign root')
         ->and(count($queries))->toBeLessThanOrEqual(12);
 });
 
