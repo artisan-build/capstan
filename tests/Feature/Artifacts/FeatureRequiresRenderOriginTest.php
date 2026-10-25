@@ -12,7 +12,6 @@ beforeEach(function (): void {
     config([
         'app.key' => 'base64:'.base64_encode(str_repeat('a', 32)),
         'app.url' => 'https://app.capstan.test',
-        'capstan.features.artifacts' => true,
         'capstan.artifacts.render_origin' => 'https://artifacts.capstan.test',
     ]);
     Feature::flushCache();
@@ -56,13 +55,6 @@ test('the feature is inactive when the render origin is unset', function (): voi
 });
 
 test('the feature is active when the render origin is a separate host', function (): void {
-    originConfig('https://artifacts.capstan.test');
-
-    expect(Feature::active(ArtifactsFeature::class))->toBeTrue();
-});
-
-test('obsolete feature config cannot disable a safe render origin', function (): void {
-    config(['capstan.features.artifacts' => false]);
     originConfig('https://artifacts.capstan.test');
 
     expect(Feature::active(ArtifactsFeature::class))->toBeTrue();

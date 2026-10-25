@@ -106,7 +106,6 @@ beforeEach(function (): void {
         'built-for-cloud.managed.client_secret' => str_repeat('s', 64),
         'capstan.features.work' => true,
         'capstan.features.postmaster' => true,
-        'capstan.features.artifacts' => true,
         'capstan.artifacts.render_origin' => 'https://render.delegated-principal.test',
         'capstan.postmaster.server_id' => '01ARZ3NDEKTSV4RRFFQ69G5FAV',
     ]);

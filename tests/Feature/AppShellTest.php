@@ -20,7 +20,6 @@ beforeEach(function (): void {
     config([
         'app.key' => 'base64:'.base64_encode(str_repeat('s', 32)),
         'app.url' => 'https://shell.test',
-        'capstan.features.artifacts' => true,
         'capstan.artifacts.render_origin' => 'https://render.shell.test',
     ]);
     Feature::flushCache();

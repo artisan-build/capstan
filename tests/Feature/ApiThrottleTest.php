@@ -35,7 +35,6 @@ test('product api routes authenticate their endpoint purposes before applying th
 test('subject mismatch cannot consume a credential api throttle and credentials have independent budgets', function (): void {
     config([
         'app.url' => 'https://app.capstan.test',
-        'capstan.features.artifacts' => true,
         'capstan.artifacts.render_origin' => 'https://artifacts.capstan.test',
     ]);
     Feature::flushCache();

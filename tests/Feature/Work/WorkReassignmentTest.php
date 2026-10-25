@@ -33,7 +33,6 @@ use Illuminate\Testing\TestResponse;
 beforeEach(function (): void {
     config([
         'app.key' => 'base64:'.base64_encode(str_repeat('r', 32)),
-        'capstan.features.artifacts' => false,
         'capstan.work.lease_seconds' => 300,
         'capstan.work.orchestration.turn_budget' => 20,
     ]);

@@ -26,7 +26,6 @@ beforeEach(function (): void {
         'app.key' => 'base64:'.base64_encode(str_repeat('k', 32)),
         'capstan.features.work' => true,
         'capstan.features.postmaster' => false,
-        'capstan.features.artifacts' => false,
         'capstan.work.lease_seconds' => 300,
     ]);
     Feature::flushCache();

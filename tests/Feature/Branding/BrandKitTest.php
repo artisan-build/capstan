@@ -38,7 +38,6 @@ beforeEach(function (): void {
         'app.key' => 'base64:'.base64_encode(str_repeat('b', 32)),
         'app.name' => 'Safe test default',
         'app.url' => 'https://app.brand.test',
-        'capstan.features.artifacts' => true,
         'capstan.artifacts.render_origin' => 'https://render.brand.test',
     ]);
     Feature::flushCache();

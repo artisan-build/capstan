@@ -18,10 +18,6 @@ use Illuminate\Support\HtmlString;
 use Illuminate\Support\Str;
 use Livewire\Livewire;
 
-beforeEach(function (): void {
-    config(['capstan.features.artifacts' => false]);
-});
-
 function workPageTask(array $attributes = []): WorkTask
 {
     $team = Team::query()->create(['name' => 'Page team', 'slug' => Str::random(16)]);

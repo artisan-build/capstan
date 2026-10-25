@@ -17,7 +17,6 @@ use Laravel\Pennant\Feature;
 beforeEach(function (): void {
     config([
         'app.url' => 'https://app.test',
-        'capstan.features.artifacts' => true,
         'capstan.artifacts.render_origin' => 'https://render.test',
     ]);
     Feature::flushCache();

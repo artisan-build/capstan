@@ -25,7 +25,6 @@ beforeEach(function (): void {
     config([
         'app.key' => 'base64:'.base64_encode(str_repeat('p', 32)),
         'app.url' => 'https://app.pages.test',
-        'capstan.features.artifacts' => true,
         'capstan.artifacts.render_origin' => 'https://render.pages.test',
     ]);
     Feature::flushCache();
