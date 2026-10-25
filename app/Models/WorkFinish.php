@@ -29,6 +29,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property-read WorkOrchestrationEvent|null $orchestrationEvent
  * @property-read WorkSteer|null $correctionSteer
  * @property-read WorkMilestone|null $terminalMilestone
+ *
+ * @mixin IdeHelperWorkFinish
  */
 class WorkFinish extends Model
 {

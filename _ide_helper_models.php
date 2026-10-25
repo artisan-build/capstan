@@ -16,9 +16,16 @@ namespace App\Models{
  * @property int $id
  * @property string $amp_user_id
  * @property int $user_id
+ * @property \Carbon\CarbonImmutable|null $created_at
+ * @property \Carbon\CarbonImmutable|null $updated_at
  * @method static \Illuminate\Database\Eloquent\Builder<static>|AmpIdentity newModelQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|AmpIdentity newQuery()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|AmpIdentity query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|AmpIdentity whereAmpUserId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|AmpIdentity whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|AmpIdentity whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|AmpIdentity whereUpdatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|AmpIdentity whereUserId($value)
  * @mixin \Eloquent
  */
 	#[\AllowDynamicProperties]
@@ -863,12 +870,65 @@ namespace App\Models{
 namespace App\Models{
 /**
  * @property string $id
+ * @property string $work_item_id
+ * @property int $fence
+ * @property string $writeup
+ * @property array{repo: string, number: int, url: string} $pr
+ * @property string $status
+ * @property string|null $orchestration_event_id
+ * @property string|null $verdict_actor
+ * @property int|null $verdict_spoke_id
+ * @property int|null $verdict_seat_fence
+ * @property string|null $verdict_turn_item_id
+ * @property int|null $verdict_turn_fence
+ * @property string|null $correction_text
+ * @property string|null $correction_steer_id
+ * @property string|null $terminal_milestone_id
+ * @property CarbonImmutable|null $verdict_at
+ * @property-read WorkItem $workItem
+ * @property-read WorkOrchestrationEvent|null $orchestrationEvent
+ * @property-read WorkSteer|null $correctionSteer
+ * @property-read WorkMilestone|null $terminalMilestone
+ * @property \Carbon\CarbonImmutable|null $created_at
+ * @property \Carbon\CarbonImmutable|null $updated_at
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkFinish newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkFinish newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkFinish query()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkFinish whereCorrectionSteerId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkFinish whereCorrectionText($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkFinish whereCreatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkFinish whereFence($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkFinish whereId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkFinish whereOrchestrationEventId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkFinish wherePr($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkFinish whereStatus($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkFinish whereTerminalMilestoneId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkFinish whereUpdatedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkFinish whereVerdictActor($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkFinish whereVerdictAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkFinish whereVerdictSeatFence($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkFinish whereVerdictSpokeId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkFinish whereVerdictTurnFence($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkFinish whereVerdictTurnItemId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkFinish whereWorkItemId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkFinish whereWriteup($value)
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	class IdeHelperWorkFinish {}
+}
+
+namespace App\Models{
+/**
+ * @property string $id
  * @property string $work_task_id
  * @property string $role
  * @property WorkItemState $state
  * @property int|null $claimant_spoke_id
  * @property string|null $claimant_actor
  * @property CarbonImmutable|null $lease_until
+ * @property CarbonImmutable|null $work_deadline_at
+ * @property CarbonImmutable|null $first_deadline_missed_at
  * @property CarbonImmutable|null $claimed_at
  * @property CarbonImmutable|null $handed_off_at
  * @property string|null $handed_off_session_ref
@@ -901,8 +961,10 @@ namespace App\Models{
  * @property-read Collection<int, WorkMilestone> $milestones
  * @property-read Collection<int, WorkEvidence> $evidence
  * @property-read Collection<int, WorkDirective> $directives
+ * @property-read Collection<int, WorkFinish> $finishes
  * @property-read int|null $directives_count
  * @property-read int|null $evidence_count
+ * @property-read int|null $finishes_count
  * @property-read int|null $milestones_count
  * @property-read int|null $transitions_count
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem newModelQuery()
@@ -910,6 +972,8 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem query()
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereAddressedActor($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereAgentModel($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereAmpProjectId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereAmpThreadId($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereAttempts($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereClaimantActor($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereClaimantSpokeId($value)
@@ -918,6 +982,7 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereFence($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereFetchedBriefRevisionId($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereFetchedPageVersionId($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereFirstDeadlineMissedAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereFirstFetchedAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereHandedOffAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereHandedOffSessionRef($value)
@@ -937,6 +1002,7 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereUpdatedAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereWaitingOnHostAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereWaitingOnHostNotifiedAt($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereWorkDeadlineAt($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkItem whereWorkTaskId($value)
  * @mixin \Eloquent
  */
