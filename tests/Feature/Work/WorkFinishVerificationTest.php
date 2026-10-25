@@ -200,6 +200,35 @@ test('corrections preserve the claim and Amp thread while creating one steer and
         ->and($item->work_deadline_at?->equalTo(now()->addMinutes(10)))->toBeTrue()
         ->and($item->first_deadline_missed_at)->toBeNull()
         ->and($item->stalled_at)->toBeNull();
+
+    $secondWriteup = 'Corrected finish writeup '.Str::random(8);
+    $second = resolve(WorkFinishService::class)->declare(
+        $item->id,
+        $item->fence,
+        (string) $item->launch_nonce,
+        $secondWriteup,
+        $finish->pr,
+    );
+    $refinished = $item->fresh();
+    $newEvent = WorkOrchestrationEvent::query()->whereKey($second->orchestration_event_id)->sole();
+
+    expect($second->id)->not->toBe($finish->id)
+        ->and($second->status)->toBe('awaiting')
+        ->and($second->writeup)->toBe($secondWriteup)
+        ->and(WorkFinish::query()->where('work_item_id', $item->id)->count())->toBe(2)
+        ->and(WorkOrchestrationEvent::query()->where('kind', 'child_awaiting_verification')->count())->toBe(2)
+        ->and($newEvent->id)->not->toBe($finish->orchestration_event_id)
+        ->and($newEvent->evidence['finish_id'])->toBe($second->id)
+        ->and($refinished->state)->toBe(WorkItemState::AwaitingVerification)
+        ->and($refinished->fence)->toBe($itemBefore->fence)
+        ->and($refinished->claimant_spoke_id)->toBe($itemBefore->claimant_spoke_id)
+        ->and($refinished->claimant_actor)->toBe($itemBefore->claimant_actor)
+        ->and($refinished->launch_nonce)->toBe($itemBefore->launch_nonce)
+        ->and($refinished->amp_project_id)->toBe($itemBefore->amp_project_id)
+        ->and($refinished->amp_thread_id)->toBe($itemBefore->amp_thread_id)
+        ->and($refinished->handed_off_session_ref)->toBe($itemBefore->handed_off_session_ref)
+        ->and($refinished->work_deadline_at)->toBeNull()
+        ->and(WorkSteer::query()->where('work_item_id', $item->id)->count())->toBe(1);
 });
 
 test('review finish refuses stale turn and seat fences wrong targets and invalid verdict payloads without effects', function (): void {

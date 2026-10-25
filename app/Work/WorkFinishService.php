@@ -46,14 +46,16 @@ final readonly class WorkFinishService
             $item = WorkItem::query()->with('workTask')->find($itemId);
             abort_if($item === null, 409, 'claim lost');
             abort_if($item->state === WorkItemState::Cancelled || $item->workTask->cancelled_at !== null, 410, 'cancelled');
-            abort_unless(in_array($item->state, [WorkItemState::Routed, WorkItemState::AwaitingVerification], true)
+            abort_unless(! in_array($item->role, [WorkItem::ROLE_HUMAN, WorkItem::ROLE_ORCHESTRATOR], true)
+                && in_array($item->state, [WorkItemState::Routed, WorkItemState::AwaitingVerification], true)
                 && $item->fence === $fence && $item->claimant_spoke_id !== null && $item->claimant_actor !== null
                 && $item->launch_nonce !== null && hash_equals($item->launch_nonce, $launchNonce)
                 && $item->lease_until !== null && $item->lease_until->isAfter(CarbonImmutable::now()), 409, 'claim lost');
             $afterIdentified?->__invoke($item);
             $this->locks->tasks($item->work_task_id);
             $item = WorkItem::query()->with('workTask')->whereKey($itemId)->lockForUpdate()->firstOrFail();
-            abort_unless(in_array($item->state, [WorkItemState::Routed, WorkItemState::AwaitingVerification], true)
+            abort_unless(! in_array($item->role, [WorkItem::ROLE_HUMAN, WorkItem::ROLE_ORCHESTRATOR], true)
+                && in_array($item->state, [WorkItemState::Routed, WorkItemState::AwaitingVerification], true)
                 && $item->fence === $fence && $item->claimant_spoke_id !== null && $item->claimant_actor !== null
                 && $item->launch_nonce !== null && hash_equals($item->launch_nonce, $launchNonce)
                 && $item->lease_until !== null && $item->lease_until->isAfter(CarbonImmutable::now()), 409, 'claim lost');
