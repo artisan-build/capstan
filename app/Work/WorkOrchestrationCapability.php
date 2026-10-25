@@ -9,6 +9,7 @@ use App\Http\ApiErrorException;
 use App\Models\Spoke;
 use App\Models\WorkBriefRevision;
 use App\Models\WorkEscalation;
+use App\Models\WorkFinish;
 use App\Models\WorkItem;
 use App\Models\WorkOrchestrationDecision;
 use App\Models\WorkOrchestrationEvent;
@@ -33,6 +34,7 @@ final readonly class WorkOrchestrationCapability
         private BriefRevisionService $briefs,
         private WorkItemStateService $states,
         private WorkDependencyService $dependencies,
+        private WorkFinishService $finishes,
     ) {}
 
     /** @param array<string, mixed> $attributes */
@@ -245,6 +247,30 @@ final readonly class WorkOrchestrationCapability
                 'author_actor' => $context->actorId,
             ]);
         });
+    }
+
+    public function reviewFinish(
+        WorkOrchestrationContext $context,
+        string $finishId,
+        string $itemId,
+        string $verdict,
+        ?string $corrections,
+        CarbonImmutable $now,
+    ): WorkFinish {
+        return $this->authorised(
+            $context,
+            $now,
+            fn (WorkTask $parent, WorkOrchestratorSeat $seat, ?WorkItem $turn): WorkFinish => $this->finishes->review(
+                $parent,
+                $seat,
+                $turn,
+                $finishId,
+                $itemId,
+                $verdict,
+                $corrections,
+                $now,
+            ),
+        );
     }
 
     /** @param array<string, mixed> $evidence */

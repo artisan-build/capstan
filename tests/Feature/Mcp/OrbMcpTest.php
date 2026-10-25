@@ -5,10 +5,14 @@ use App\Models\AmpIdentity;
 use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkDirective;
+use App\Models\WorkFinish;
 use App\Models\WorkItem;
+use App\Models\WorkOrchestrationEvent;
+use App\Models\WorkSteer;
 use App\Models\WorkTask;
 use App\Work\AmpSessionReference;
 use App\Work\WorkRepresentation;
+use App\Work\WorkSweepService;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
@@ -220,18 +224,18 @@ test('session references reject malformed noncanonical duplicate and mismatched 
     ];
 });
 
-test('a valid exact claim can list and call only the three orb tools', function (): void {
+test('a valid exact claim can list and call only the four orb tools', function (): void {
     $claim = orbClaim();
     $token = orbToken();
 
     $tools = collect(orbList($token)->assertOk()->json('result.tools'))->pluck('name')->sort()->values()->all();
-    expect($tools)->toBe(['work_brief', 'work_progress', 'work_started']);
+    expect($tools)->toBe(['work_brief', 'work_finished', 'work_progress', 'work_started']);
 
     $brief = orbCall('work_brief', (object) [], $token)->assertOk();
     expect($brief->json('result.structuredContent.revision.content'))->toBe($claim['task']->briefRevisions()->sole()->content)
         ->and($claim['item']->fresh()->first_fetched_at)->not->toBeNull();
 
-    foreach (['get_task', 'orchestrate', 'upload_work_evidence', 'steer', 'work_finished'] as $excluded) {
+    foreach (['get_task', 'orchestrate', 'upload_work_evidence', 'steer'] as $excluded) {
         $response = orbCall($excluded, (object) [], $token);
         expect($response->status())->toBeIn([200, 400]);
         expect($response->getContent())->not->toContain($claim['reference']->encode());
@@ -241,16 +245,21 @@ test('a valid exact claim can list and call only the three orb tools', function 
 test('started is idempotent and progress extends the deadline with frozen stall semantics', function (): void {
     $claim = orbClaim();
     $token = orbToken();
+    $lease = $claim['item']->lease_until;
 
     $started = orbCall('work_started', (object) [], $token)->assertOk();
     expect($claim['item']->milestones()->where('kind', WorkMilestoneKind::Started)->count())->toBe(1)
-        ->and($claim['item']->fresh()->lease_until?->equalTo(now()->addMinutes(12)))->toBeTrue();
+        ->and($claim['item']->fresh()->work_deadline_at?->equalTo(now()->addMinutes(12)))->toBeTrue()
+        ->and($claim['item']->fresh()->lease_until?->equalTo($lease))->toBeTrue();
     Date::setTestNow(now()->addMinute());
     orbCall('work_started', (object) [], $token)->assertOk()
         ->assertJsonPath('result.structuredContent.milestone_id', $started->json('result.structuredContent.milestone_id'));
     expect($claim['item']->milestones()->where('kind', WorkMilestoneKind::Started)->count())->toBe(1);
 
     $claim['item']->forceFill(['stalled_at' => now()->subSecond()])->save();
+    orbCall('work_started', (object) [], $token)->assertOk();
+    expect($claim['item']->fresh()->stalled_at)->not->toBeNull()
+        ->and($claim['item']->fresh()->work_deadline_at?->equalTo(now()->subMinute()->addMinutes(12)))->toBeTrue();
     $directive = WorkDirective::query()->create([
         'work_item_id' => $claim['item']->id,
         'claimant_spoke_id' => $claim['spoke']->id,
@@ -266,10 +275,128 @@ test('started is idempotent and progress extends the deadline with frozen stall 
     orbCall('work_progress', ['summary' => $summary], $token)->assertOk();
     $item = $claim['item']->fresh();
     expect($item->last_progress)->toBe($summary)
-        ->and($item->lease_until?->equalTo(now()->addMinutes(12)))->toBeTrue()
+        ->and($item->work_deadline_at?->equalTo(now()->addMinutes(12)))->toBeTrue()
+        ->and($item->lease_until?->equalTo($lease))->toBeTrue()
         ->and($item->stalled_at)->toBeNull()
         ->and($item->milestones()->where('kind', WorkMilestoneKind::Note)->sole()->payload['summary'])->toBe($summary)
         ->and($directive->fresh()->outcome)->toBe(['result' => 'resolved_by_progress']);
+});
+
+test('finished declares one awaiting verification record and exact replay without closing the item', function (): void {
+    $claim = orbClaim([
+        'state' => 'routed',
+        'lease_until' => now()->addHour(),
+        'work_deadline_at' => now()->addMinutes(12),
+        'first_deadline_missed_at' => now()->subMinute(),
+        'stalled_at' => now()->subMinute(),
+    ]);
+    $directive = $claim['item']->directives()->create([
+        'claimant_spoke_id' => $claim['spoke']->id,
+        'fence' => $claim['item']->fence,
+        'sequence' => 1,
+        'kind' => 'nudge',
+        'reason' => 'deadline',
+        'payload' => ['message' => 'Test-created deadline nudge'],
+        'status' => 'pending',
+        'issued_at' => now()->subMinute(),
+    ]);
+    $writeup = 'Test-created finish writeup '.Str::random(12);
+    $pr = [
+        'repo' => 'artisan-build/capstan',
+        'number' => 123,
+        'url' => 'https://github.com/artisan-build/capstan/pull/123',
+    ];
+
+    $first = orbCall('work_finished', ['writeup' => $writeup, 'pr' => $pr], orbToken())->assertOk();
+    $finishId = $first->json('result.structuredContent.finish_id');
+    $replay = orbCall('work_finished', ['writeup' => $writeup, 'pr' => $pr], orbToken())->assertOk();
+
+    $item = $claim['item']->fresh();
+    $finish = WorkFinish::query()->sole();
+    $event = WorkOrchestrationEvent::query()->where('kind', 'child_awaiting_verification')->sole();
+    expect($replay->json('result.structuredContent.finish_id'))->toBe($finishId)
+        ->and($finish->id)->toBe($finishId)
+        ->and($finish->writeup)->toBe($writeup)
+        ->and($finish->pr)->toBe($pr)
+        ->and($item->state->value)->toBe('awaiting_verification')
+        ->and($item->last_progress)->toBeNull()
+        ->and($item->work_deadline_at)->toBeNull()
+        ->and($item->first_deadline_missed_at)->toBeNull()
+        ->and($item->stalled_at)->toBeNull()
+        ->and($item->claimant_spoke_id)->toBe($claim['spoke']->id)
+        ->and($item->amp_thread_id)->toBe('T-orb-thread-1')
+        ->and($directive->fresh()->outcome)->toBe(['result' => 'resolved_by_finish'])
+        ->and($event->evidence)->toBe([
+            'item_id' => $item->id,
+            'task_id' => $item->work_task_id,
+            'fence' => $item->fence,
+            'finish_id' => $finish->id,
+            'writeup' => $writeup,
+            'pr' => $pr,
+        ]);
+
+    foreach ([
+        ['writeup' => $writeup.' changed', 'pr' => $pr],
+        ['writeup' => $writeup, 'pr' => [...$pr, 'number' => 124, 'url' => 'https://github.com/artisan-build/capstan/pull/124']],
+    ] as $different) {
+        orbCall('work_finished', $different, orbToken())->assertOk()
+            ->assertJsonPath('result.isError', true);
+    }
+    orbCall('work_started', (object) [], orbToken())->assertOk()->assertJsonPath('result.isError', true);
+    orbCall('work_progress', ['summary' => 'Must be refused'], orbToken())->assertOk()->assertJsonPath('result.isError', true);
+    expect(WorkFinish::query()->count())->toBe(1)
+        ->and(WorkOrchestrationEvent::query()->where('kind', 'child_awaiting_verification')->count())->toBe(1)
+        ->and($claim['item']->fresh()->state->value)->toBe('awaiting_verification');
+
+    Date::setTestNow(now()->addMinutes(20));
+    resolve(WorkSweepService::class)->liveness(now());
+    expect($claim['item']->fresh()->state->value)->toBe('awaiting_verification')
+        ->and($claim['item']->fresh()->stalled_at)->toBeNull()
+        ->and($claim['item']->directives()->where('reason', 'deadline')->count())->toBe(1);
+});
+
+test('finished rejects blank oversized noncanonical mismatched and extra input without effects', function (array $arguments): void {
+    $claim = orbClaim(['state' => 'routed']);
+
+    orbCall('work_finished', $arguments, orbToken());
+
+    expect(WorkFinish::query()->count())->toBe(0)
+        ->and(WorkOrchestrationEvent::query()->where('kind', 'child_awaiting_verification')->count())->toBe(0)
+        ->and($claim['item']->fresh()->state->value)->toBe('routed')
+        ->and($claim['task']->fresh()->pr)->toBeNull();
+})->with([
+    'blank writeup' => [['writeup' => '   ', 'pr' => ['repo' => 'artisan-build/capstan', 'number' => 1, 'url' => 'https://github.com/artisan-build/capstan/pull/1']]],
+    'oversized writeup' => [['writeup' => str_repeat('x', WorkFinish::WRITEUP_MAX_LENGTH + 1), 'pr' => ['repo' => 'artisan-build/capstan', 'number' => 1, 'url' => 'https://github.com/artisan-build/capstan/pull/1']]],
+    'noncanonical URL' => [['writeup' => 'Done', 'pr' => ['repo' => 'artisan-build/capstan', 'number' => 1, 'url' => 'https://github.com/artisan-build/capstan/pull/1/']]],
+    'mismatched URL' => [['writeup' => 'Done', 'pr' => ['repo' => 'artisan-build/capstan', 'number' => 1, 'url' => 'https://github.com/artisan-build/capstan/pull/2']]],
+    'extra PR field' => [['writeup' => 'Done', 'pr' => ['repo' => 'artisan-build/capstan', 'number' => 1, 'url' => 'https://github.com/artisan-build/capstan/pull/1', 'head' => 'main']]],
+    'extra top field' => [['writeup' => 'Done', 'pr' => ['repo' => 'artisan-build/capstan', 'number' => 1, 'url' => 'https://github.com/artisan-build/capstan/pull/1'], 'token' => 'not-a-credential']],
+]);
+
+test('finished rejects reserved roles without creating a waiting episode', function (string $role): void {
+    $claim = orbClaim(['role' => $role, 'state' => 'routed']);
+
+    orbCall('work_finished', [
+        'writeup' => 'Reserved roles cannot enter finish verification.',
+        'pr' => [
+            'repo' => 'artisan-build/capstan',
+            'number' => 123,
+            'url' => 'https://github.com/artisan-build/capstan/pull/123',
+        ],
+    ], orbToken())->assertOk()->assertJsonPath('result.isError', true);
+
+    expect(WorkFinish::query()->count())->toBe(0)
+        ->and(WorkOrchestrationEvent::query()->where('kind', 'child_awaiting_verification')->count())->toBe(0)
+        ->and($claim['item']->fresh()->state->value)->toBe('routed');
+})->with([WorkItem::ROLE_HUMAN, WorkItem::ROLE_ORCHESTRATOR]);
+
+test('orb contracts contain no machine PR facts verification nonce or GitHub credential field', function (): void {
+    orbClaim();
+    $contract = orbList(orbToken())->getContent();
+
+    foreach (['expected_head', 'reported_head', 'expected_base', 'reported_state', 'verification_nonce', 'github_token', 'verify_finish'] as $excluded) {
+        expect($contract)->not->toContain($excluded);
+    }
 });
 
 test('brief fetch resolves a stall directive by fetch without becoming a stall-clearing receipt', function (): void {
@@ -573,6 +700,10 @@ test('orb and product or machine authentication doors do not cross', function ()
     $orbToken = orbToken();
     orbList($orbToken)->assertOk();
     orbList($orbToken, '/mcp')->assertUnauthorized();
+    $this->postJson('/mcp', [
+        'jsonrpc' => '2.0', 'id' => 2, 'method' => 'tools/call',
+        'params' => ['name' => 'orchestrate', 'arguments' => (object) []],
+    ], ['Authorization' => 'Bearer '.$orbToken])->assertUnauthorized();
     $this->postJson('/api/v1/work/'.$claim['team']->id.'/claim', [], ['Authorization' => 'Bearer '.$orbToken])->assertUnauthorized();
 
     $productToken = 'product-'.Str::random(40);
@@ -592,6 +723,58 @@ test('orb and product or machine authentication doors do not cross', function ()
     expect($productNames)->toContain('get_task')
         ->and($productNames)->not->toContain('work_brief')
         ->and($productNames)->not->toContain('work_started')
-        ->and($productNames)->not->toContain('work_progress');
+        ->and($productNames)->not->toContain('work_progress')
+        ->and($productNames)->not->toContain('work_finished');
     orbList($productToken)->assertUnauthorized();
+});
+
+test('an orb workload token cannot authenticate a complete verdict at the product MCP ingress', function (): void {
+    $claim = orbClaim(['state' => 'routed', 'lease_until' => now()->addHour()]);
+    $token = orbToken();
+    orbList($token)->assertOk();
+    $finishResponse = orbCall('work_finished', [
+        'writeup' => 'Awaiting a real orchestrator verdict.',
+        'pr' => [
+            'repo' => 'artisan-build/capstan',
+            'number' => 123,
+            'url' => 'https://github.com/artisan-build/capstan/pull/123',
+        ],
+    ], $token)->assertOk();
+    $finish = WorkFinish::query()->findOrFail($finishResponse->json('result.structuredContent.finish_id'));
+    $before = [
+        'finish' => $finish->fresh()->getRawOriginal(),
+        'item' => $claim['item']->fresh()->getRawOriginal(),
+        'milestones' => $claim['item']->milestones()->count(),
+        'steers' => WorkSteer::query()->where('work_item_id', $claim['item']->id)->count(),
+    ];
+
+    $this->postJson('/mcp', [
+        'jsonrpc' => '2.0',
+        'id' => 2,
+        'method' => 'tools/call',
+        'params' => [
+            'name' => 'orchestrate',
+            'arguments' => [
+                'team_id' => $claim['team']->id,
+                'task_id' => $claim['task']->id,
+                'spoke_id' => $claim['spoke']->id,
+                'seat_fence' => 1,
+                'session_ref' => $claim['reference']->encode(),
+                'action' => 'review_finish',
+                'input' => [
+                    'finish_id' => $finish->id,
+                    'item_id' => $claim['item']->id,
+                    'verdict' => 'accept',
+                ],
+                'idempotency_key' => 'orb-verdict-must-not-authenticate',
+            ],
+        ],
+    ], ['Authorization' => 'Bearer '.$token])->assertUnauthorized();
+
+    expect([
+        'finish' => $finish->fresh()->getRawOriginal(),
+        'item' => $claim['item']->fresh()->getRawOriginal(),
+        'milestones' => $claim['item']->milestones()->count(),
+        'steers' => WorkSteer::query()->where('work_item_id', $claim['item']->id)->count(),
+    ])->toBe($before);
 });

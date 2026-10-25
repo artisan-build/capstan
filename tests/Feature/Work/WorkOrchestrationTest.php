@@ -252,7 +252,12 @@ test('five mixed source facts coalesce durably and own subtree writes never self
     }
     $blocked = $child->items()->create(['role' => 'builder', 'state' => 'routed', 'fence' => 1, 'claimant_actor' => $host->actor_id, 'claimant_spoke_id' => $host->id, 'lease_until' => now()->addHour()]);
     resolve(WorkWorkerService::class)->milestone($blocked->id, 1, WorkMilestoneKind::Blocked, ['summary' => Str::random()]);
-    $stalled = $child->items()->create(['role' => 'builder', 'state' => 'routed', 'fence' => 1, 'claimant_actor' => $host->actor_id, 'claimant_spoke_id' => $host->id, 'claimed_at' => now()->subMinutes(11), 'lease_until' => now()->addHour()]);
+    $stalled = $child->items()->create([
+        'role' => 'builder', 'state' => 'routed', 'fence' => 1,
+        'claimant_actor' => $host->actor_id, 'claimant_spoke_id' => $host->id,
+        'claimed_at' => now()->subMinutes(11), 'lease_until' => now()->addHour(),
+        'work_deadline_at' => now()->subMinutes(11), 'first_deadline_missed_at' => now()->subMinutes(10),
+    ]);
     resolve(WorkSweepService::class)->liveness(CarbonImmutable::now());
     resolve(WorkSweepService::class)->liveness(CarbonImmutable::now());
     expect(WorkOrchestrationEvent::query()->count())->toBe(5)

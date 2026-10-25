@@ -80,6 +80,7 @@ final readonly class WorkPreemptionService
                     ->update([
                         'state' => 'queued', 'fence' => DB::raw('fence + 1'), 'attempts' => DB::raw('attempts + 1'),
                         'claimant_actor' => null, 'claimant_spoke_id' => null, 'lease_until' => null,
+                        'work_deadline_at' => null, 'first_deadline_missed_at' => null,
                         'claimed_at' => null, 'stalled_at' => null,
                         ...self::cleared(), 'updated_at' => $now,
                     ]);

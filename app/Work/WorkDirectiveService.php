@@ -114,6 +114,11 @@ final readonly class WorkDirectiveService
         $exhausted = null;
         $directive = DB::transaction(function () use ($item, $now, &$exhausted): ?WorkDirective {
             $locked = WorkItem::query()->whereKey($item->id)->lockForUpdate()->firstOrFail();
+            $deadlineNudge = $locked->directives()->where('fence', $locked->fence)
+                ->where('reason', 'deadline')->where('status', 'pending')->first();
+            if ($deadlineNudge instanceof WorkDirective) {
+                return $deadlineNudge;
+            }
             $reason = $locked->stalled_at !== null ? 'stall' : 'receipt';
             $anchor = $reason === 'stall' ? $locked->stalled_at : $locked->handed_off_at;
             if ($reason === 'receipt' && $locked->first_fetched_at !== null) {

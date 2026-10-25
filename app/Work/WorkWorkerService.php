@@ -23,7 +23,7 @@ final readonly class WorkWorkerService
     /** @return Builder<WorkItem> */
     public function recoveryQuery(): Builder
     {
-        return WorkItem::query()->whereIn('state', ['claimed', 'delivered', 'routed'])
+        return WorkItem::query()->whereIn('state', ['claimed', 'delivered', 'routed', 'awaiting_verification'])
             ->whereNotNull('claimant_spoke_id')->whereNotNull('claimant_actor')
             ->whereHas('workTask', fn ($query) => $query->whereNull('cancelled_at'));
     }
@@ -46,7 +46,7 @@ final readonly class WorkWorkerService
      */
     public function guarded(string $id, int $fence, Closure $operation, ?Closure $afterIdentified = null, ?string $nonce = null): mixed
     {
-        return DB::transaction(function () use ($id, $fence, $operation, $afterIdentified, $nonce): mixed {
+        $result = DB::transaction(function () use ($id, $fence, $operation, $afterIdentified, $nonce): array {
             $item = WorkItem::query()->with('workTask')->find($id);
             abort_if($item === null, 409, 'claim lost');
             abort_if($item->state === WorkItemState::Cancelled || $item->workTask->cancelled_at !== null, 410, 'cancelled');
@@ -62,15 +62,27 @@ final readonly class WorkWorkerService
             abort_unless($spokeLocked === 1, 409, 'claim lost');
             $afterIdentified?->__invoke($item);
             resolve(WorkOrchestrationLock::class)->tasks($item->work_task_id);
-            $updated = $this->activeQuery()->whereKey($id)->where('fence', $fence)
+            $updated = $this->activeQuery()
+                ->whereIn('state', [WorkItemState::Claimed->value, WorkItemState::Delivered->value, WorkItemState::Routed->value])
+                ->whereKey($id)->where('fence', $fence)
                 ->where('claimant_spoke_id', $item->claimant_spoke_id)
                 ->where('claimant_actor', $item->claimant_actor)
                 ->when($nonce !== null, fn (Builder $query) => $query->where('launch_nonce', $nonce))
                 ->update(['fetched_brief_revision_id' => DB::raw('fetched_brief_revision_id')]);
-            abort_unless($updated === 1, 409, 'claim lost');
+            if ($updated !== 1) {
+                return ['claim_lost' => true];
+            }
 
-            return $operation($item->refresh());
+            return ['claim_lost' => false, 'value' => $operation($item->refresh())];
         }, 5);
+
+        // Refuse after the transaction so the callback seam can durably model
+        // a concurrent writer that committed before this final guard.
+        if ($result['claim_lost']) {
+            abort(409, 'claim lost');
+        }
+
+        return $result['value'];
     }
 
     /** @return array<string, mixed> */
@@ -131,28 +143,32 @@ final readonly class WorkWorkerService
         );
     }
 
-    /** @return array{milestone: WorkMilestone, lease_until: CarbonImmutable} */
-    public function started(string $id, int $fence, string $nonce, ?Closure $afterIdentified = null): array
+    /**
+     * @param  array{url?: string, summary?: string}  $payload
+     * @return array{milestone: WorkMilestone, work_deadline_at: CarbonImmutable}
+     */
+    public function started(string $id, int $fence, string $nonce, ?Closure $afterIdentified = null, array $payload = []): array
     {
-        return $this->guarded($id, $fence, function (WorkItem $item): array {
+        return $this->guarded($id, $fence, function (WorkItem $item) use ($payload): array {
             $existing = $item->milestones()->where('fence', $item->fence)
                 ->where('kind', WorkMilestoneKind::Started->value)->oldest()->first();
             if ($existing instanceof WorkMilestone) {
-                return ['milestone' => $existing, 'lease_until' => $item->lease_until ?? $existing->created_at];
+                return ['milestone' => $existing, 'work_deadline_at' => $item->work_deadline_at ?? $existing->created_at];
             }
 
             $now = CarbonImmutable::now();
             $deadline = $now->addMinutes($item->workTask->timebox_minutes);
-            $item->lease_until = $deadline;
+            $item->work_deadline_at = $deadline;
+            $item->first_deadline_missed_at = null;
 
             return [
-                'milestone' => $this->recordMilestone($item, WorkMilestoneKind::Started, [], $now),
-                'lease_until' => $deadline,
+                'milestone' => $this->recordMilestone($item, WorkMilestoneKind::Started, $payload, $now, clearStall: false),
+                'work_deadline_at' => $deadline,
             ];
         }, $afterIdentified, $nonce);
     }
 
-    /** @return array{milestone: WorkMilestone, lease_until: CarbonImmutable} */
+    /** @return array{milestone: WorkMilestone, work_deadline_at: CarbonImmutable} */
     public function progress(string $id, int $fence, string $nonce, string $summary, ?Closure $afterIdentified = null): array
     {
         abort_if(trim($summary) === '' || mb_strlen($summary) > WorkItem::LAST_PROGRESS_MAX_LENGTH, 422, 'Invalid progress summary.');
@@ -160,17 +176,18 @@ final readonly class WorkWorkerService
         return $this->guarded($id, $fence, function (WorkItem $item) use ($summary): array {
             $now = CarbonImmutable::now();
             $deadline = $now->addMinutes($item->workTask->timebox_minutes);
-            $item->lease_until = $deadline;
+            $item->work_deadline_at = $deadline;
+            $item->first_deadline_missed_at = null;
 
             return [
                 'milestone' => $this->recordMilestone($item, WorkMilestoneKind::Note, ['summary' => $summary], $now),
-                'lease_until' => $deadline,
+                'work_deadline_at' => $deadline,
             ];
         }, $afterIdentified, $nonce);
     }
 
     /** @param array{url?: string, summary?: string, pr?: array{repo: string, number: int, url: string}} $payload */
-    private function recordMilestone(WorkItem $item, WorkMilestoneKind $kind, array $payload, CarbonImmutable $now): WorkMilestone
+    private function recordMilestone(WorkItem $item, WorkMilestoneKind $kind, array $payload, CarbonImmutable $now, bool $clearStall = true): WorkMilestone
     {
         if ($kind === WorkMilestoneKind::PullRequestOpened) {
             $pr = $payload['pr'] ?? null;
@@ -210,6 +227,8 @@ final readonly class WorkWorkerService
         if ($target !== null) {
             $item->state = $target;
             $item->fill(WorkPreemptionService::cleared());
+            $item->work_deadline_at = null;
+            $item->first_deadline_missed_at = null;
             if ($target === WorkItemState::Queued) {
                 $item->attempts++;
                 $item->claimant_actor = null;
@@ -224,16 +243,24 @@ final readonly class WorkWorkerService
                 'fence' => $item->fence, 'occurred_at' => $now,
             ]);
         }
-        $item->stalled_at = null;
+        if ($clearStall) {
+            $item->stalled_at = null;
+            if ($target === null) {
+                $item->work_deadline_at = $now->addMinutes($item->workTask->timebox_minutes);
+                $item->first_deadline_missed_at = null;
+            }
+        }
         $item->save();
 
         $milestone = $item->milestones()->create(['fence' => $item->fence, 'kind' => $kind, 'payload' => $payload]);
-        WorkDirective::query()->where('work_item_id', $item->id)->where('fence', $item->fence)
-            ->where('reason', 'stall')->where('status', 'pending')->update([
-                'status' => 'succeeded',
-                'outcome' => ['result' => 'resolved_by_progress'],
-                'completed_at' => $now,
-            ]);
+        if ($clearStall) {
+            WorkDirective::query()->where('work_item_id', $item->id)->where('fence', $item->fence)
+                ->whereIn('reason', ['deadline', 'stall'])->where('status', 'pending')->update([
+                    'status' => 'succeeded',
+                    'outcome' => ['result' => 'resolved_by_progress'],
+                    'completed_at' => $now,
+                ]);
+        }
         resolve(WorkEventProjector::class)->terminal($item);
         resolve(WorkEventProjector::class)->blocked($item, $milestone);
 

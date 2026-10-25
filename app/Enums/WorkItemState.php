@@ -8,6 +8,7 @@ enum WorkItemState: string
     case Claimed = 'claimed';
     case Delivered = 'delivered';
     case Routed = 'routed';
+    case AwaitingVerification = 'awaiting_verification';
     case Acted = 'acted';
     case Failed = 'failed';
     case Cancelled = 'cancelled';

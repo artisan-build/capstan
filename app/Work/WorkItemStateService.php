@@ -67,6 +67,8 @@ class WorkItemStateService
             $locked->claimant_spoke_id = $claimantSpokeId;
             $locked->claimant_actor = $claimantActor;
             $locked->lease_until = $leaseUntil;
+            $locked->work_deadline_at = null;
+            $locked->first_deadline_missed_at = null;
             $locked->claimed_at = $occurredAt;
             $locked->fence++;
 
@@ -128,6 +130,7 @@ class WorkItemStateService
             )->update([
                 'state' => $to->value,
                 ...($to->isTerminal() ? WorkPreemptionService::cleared() : []),
+                ...($to->isTerminal() ? ['work_deadline_at' => null, 'first_deadline_missed_at' => null] : []),
                 'updated_at' => $at,
             ]);
 
@@ -173,6 +176,8 @@ class WorkItemStateService
                 'claimant_spoke_id' => null,
                 'claimant_actor' => null,
                 'lease_until' => null,
+                'work_deadline_at' => null,
+                'first_deadline_missed_at' => null,
                 'claimed_at' => null,
                 'stalled_at' => null,
                 'updated_at' => $at,
@@ -202,7 +207,7 @@ class WorkItemStateService
             resolve(WorkOrchestrationLock::class)->tasks($item->work_task_id);
             $updated = $this->guardedClaimQuery(
                 $item,
-                [WorkItemState::Claimed, WorkItemState::Delivered, WorkItemState::Routed],
+                [WorkItemState::Claimed, WorkItemState::Delivered, WorkItemState::Routed, WorkItemState::AwaitingVerification],
                 $teamId,
                 $claimantSpokeId,
                 $claimantActor,
@@ -253,6 +258,8 @@ class WorkItemStateService
             $locked->claimant_spoke_id = null;
             $locked->claimant_actor = null;
             $locked->lease_until = null;
+            $locked->work_deadline_at = null;
+            $locked->first_deadline_missed_at = null;
             $locked->claimed_at = null;
             $locked->stalled_at = null;
             $locked->fill(WorkPreemptionService::cleared());
@@ -338,6 +345,8 @@ class WorkItemStateService
         $item->state = $to;
         if ($to->isTerminal()) {
             $item->fill(WorkPreemptionService::cleared());
+            $item->work_deadline_at = null;
+            $item->first_deadline_missed_at = null;
         }
         $item->save();
 

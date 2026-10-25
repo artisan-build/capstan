@@ -5,6 +5,7 @@ use App\Enums\SpokeLiveness;
 use App\Enums\WorkItemState;
 use App\Models\Spoke;
 use App\Models\Team;
+use App\Models\WorkDirective;
 use App\Models\WorkItem;
 use App\Models\WorkTask;
 use App\Postmaster\RetireSpoke;
@@ -13,6 +14,7 @@ use App\Work\WorkClaimService;
 use App\Work\WorkItemStateService;
 use App\Work\WorkNotifier;
 use App\Work\WorkSweepService;
+use App\Work\WorkWorkerService;
 use ArtisanBuild\BuiltForCloud\Actions\OffboardSubject;
 use ArtisanBuild\BuiltForCloud\OffboardOptions;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -48,6 +50,8 @@ function sweepItem(array $attributes = []): WorkItem
         'role' => 'builder', 'state' => 'routed', 'fence' => 1,
         'claimant_actor' => 'worker', 'claimant_spoke_id' => $spoke->id,
         'claimed_at' => now()->subMinutes(11), 'lease_until' => now()->addMinutes(5),
+        'work_deadline_at' => now()->subMinutes(11),
+        'first_deadline_missed_at' => now()->subMinutes(10),
     ], $attributes));
 }
 
@@ -209,11 +213,11 @@ test('a competing sweep wins once even when the loser already read its candidate
 
 test('stalls and heartbeat outages mark and notify exactly once with negative controls', function (): void {
     $item = sweepItem();
-    $progress = sweepItem();
+    $progress = sweepItem(['work_deadline_at' => now()->addMinutes(5), 'first_deadline_missed_at' => null]);
     $milestone = $progress->milestones()->make(['kind' => 'started', 'fence' => 1, 'payload' => []]);
     $milestone->forceFill(['created_at' => now()->subMinutes(5)])->save();
     $expired = sweepItem(['lease_until' => now()->subSecond(), 'claimed_at' => now()->subMinutes(2)]);
-    $fresh = sweepItem(['claimed_at' => now()]);
+    $fresh = sweepItem(['claimed_at' => now(), 'work_deadline_at' => now()->addMinutes(10), 'first_deadline_missed_at' => null]);
     $fresh->claimantSpoke->update(['last_polled_at' => now()]);
     $notifier = Mockery::mock(WorkNotifier::class);
     $notifier->shouldReceive('stalled')->once()->withArgs(fn (WorkItem $arg): bool => $arg->id === $item->id);
@@ -227,8 +231,12 @@ test('stalls and heartbeat outages mark and notify exactly once with negative co
         ->and(Spoke::query()->find($expired->claimant_spoke_id)->work_heartbeat_notified_at)->toBeNull();
 });
 
-test('a current-fence milestone starts a fresh stall deadline while an old-fence milestone does not', function (): void {
-    $item = sweepItem(['lease_until' => now()->addMinutes(30)]);
+test('the explicit work deadline controls a two-stage episode independently of milestones', function (): void {
+    $item = sweepItem([
+        'lease_until' => now()->addMinutes(30),
+        'work_deadline_at' => now()->addMinutes(10),
+        'first_deadline_missed_at' => null,
+    ]);
     $item->milestones()->create(['kind' => 'note', 'fence' => 1, 'payload' => []]);
     $second = sweepItem(['fence' => 2]);
     $milestone = $second->milestones()->make(['kind' => 'note', 'fence' => 1, 'payload' => []]);
@@ -244,7 +252,49 @@ test('a current-fence milestone starts a fresh stall deadline while an old-fence
 
     Date::setTestNow(now()->addMinutes(11));
     $sweep->liveness(CarbonImmutable::now());
+    expect($item->fresh()->stalled_at)->toBeNull()
+        ->and($item->fresh()->first_deadline_missed_at)->not->toBeNull()
+        ->and($item->directives()->where('reason', 'deadline')->count())->toBe(1);
+
+    Date::setTestNow(now()->addMinutes(10));
+    $sweep->liveness(CarbonImmutable::now());
     expect($item->fresh()->stalled_at)->not->toBeNull();
+});
+
+test('first deadline miss nudges once second miss stalls and real progress resets the episode', function (): void {
+    $item = sweepItem([
+        'claimed_at' => now(),
+        'lease_until' => now()->addHour(),
+        'work_deadline_at' => now(),
+        'first_deadline_missed_at' => null,
+        'stalled_at' => null,
+        'launch_nonce' => (string) Str::uuid7(),
+    ]);
+    $notifier = Mockery::mock(WorkNotifier::class);
+    $notifier->shouldReceive('stalled')->once();
+    $notifier->shouldReceive('missedHeartbeat')->once();
+    app()->instance(WorkNotifier::class, $notifier);
+    $sweep = resolve(WorkSweepService::class);
+
+    $sweep->liveness(now());
+    $sweep->liveness(now());
+    $nudge = WorkDirective::query()->where('work_item_id', $item->id)->where('reason', 'deadline')->sole();
+    expect($item->fresh()->stalled_at)->toBeNull()
+        ->and($item->fresh()->state)->toBe(WorkItemState::Routed)
+        ->and($nudge->kind)->toBe('nudge')
+        ->and($nudge->payload)->toBe(['message' => 'Post work progress or declare the work finished.']);
+
+    Date::setTestNow(now()->addMinutes(10));
+    $sweep->liveness(now());
+    expect($item->fresh()->stalled_at)->not->toBeNull()
+        ->and($nudge->fresh()->outcome)->toBe(['result' => 'escalated_to_stall']);
+
+    $summary = 'Test-created recovery progress '.Str::random(8);
+    resolve(WorkWorkerService::class)->progress($item->id, $item->fence, (string) $item->launch_nonce, $summary);
+    expect($item->fresh()->last_progress)->toBe($summary)
+        ->and($item->fresh()->stalled_at)->toBeNull()
+        ->and($item->fresh()->first_deadline_missed_at)->toBeNull()
+        ->and($item->fresh()->work_deadline_at?->equalTo(now()->addMinutes(10)))->toBeTrue();
 });
 
 test('a stale stall candidate cannot stamp the replacement fence', function (): void {
@@ -258,7 +308,12 @@ test('a stale stall candidate cannot stamp the replacement fence', function (): 
 });
 
 test('heartbeat recovery clears only work notification marker and permits a later outage', function (): void {
-    $item = sweepItem(['claimed_at' => now(), 'lease_until' => now()->addHour()]);
+    $item = sweepItem([
+        'claimed_at' => now(),
+        'lease_until' => now()->addHour(),
+        'work_deadline_at' => now()->addHour(),
+        'first_deadline_missed_at' => null,
+    ]);
     $spoke = $item->claimantSpoke;
     $spoke->update(['probe_status' => SpokeLiveness::Red, 'probe_failed_at' => now()->subHour()]);
     $notifier = Mockery::mock(WorkNotifier::class);

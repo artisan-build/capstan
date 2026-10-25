@@ -799,6 +799,7 @@ test('current-holder progress ends one stall episode and a later stall starts a 
     $poll($held)->assertJsonCount(0, 'directives');
     expect(WorkEscalation::query()->where('request_key', 'like', 'directive-exhausted:'.$item->id.':1:stall:%')->count())->toBe(0);
 
+    $item->update(['work_deadline_at' => now()->subMinute(), 'first_deadline_missed_at' => now()->subMinute()]);
     resolve(WorkSweepService::class)->liveness(CarbonImmutable::now());
     expect($item->fresh()->stalled_at?->toJSON())->toBe(now()->toJSON());
     Date::setTestNow(now()->addSeconds(61));
@@ -854,6 +855,7 @@ test('renewed HTTP capabilities survive a swept stall and later repair links rem
     $held = ['item_id' => $item->id, 'fence' => 1];
 
     Date::setTestNow(now()->addSeconds(61));
+    $item->update(['work_deadline_at' => now()->subMinute(), 'first_deadline_missed_at' => now()->subMinute()]);
     resolve(WorkSweepService::class)->liveness(CarbonImmutable::now());
     $firstEpisode = $item->fresh()->stalled_at;
     expect($firstEpisode)->not->toBeNull();
@@ -875,6 +877,7 @@ test('renewed HTTP capabilities survive a swept stall and later repair links rem
         ->and($item->fresh()->stalled_at)->toBeNull();
 
     Date::setTestNow(now()->addSeconds(61));
+    $item->update(['work_deadline_at' => now()->subMinute(), 'first_deadline_missed_at' => now()->subMinute()]);
     resolve(WorkSweepService::class)->liveness(CarbonImmutable::now());
     $secondEpisode = $item->fresh()->stalled_at;
     expect($secondEpisode)->not->toBeNull();
@@ -911,6 +914,8 @@ test('each exhausted stall episode creates one owner-visible escalation', functi
         'claimant_spoke_id' => $issued['spoke']->id,
         'claimed_at' => now()->subMinutes(2),
         'lease_until' => now()->addHour(),
+        'work_deadline_at' => now()->subMinutes(2),
+        'first_deadline_missed_at' => now()->subMinute(),
         'first_fetched_at' => now(),
         'launch_nonce' => (string) Str::uuid7(),
     ]);
@@ -966,6 +971,7 @@ test('each exhausted stall episode creates one owner-visible escalation', functi
     expect($item->fresh()->stalled_at)->toBeNull();
 
     Date::setTestNow(now()->addSeconds(61));
+    $item->update(['work_deadline_at' => now()->subMinute(), 'first_deadline_missed_at' => now()->subMinute()]);
     resolve(WorkSweepService::class)->liveness(CarbonImmutable::now());
     $secondAnchor = $item->fresh()->stalled_at;
     expect($secondAnchor)->not->toBeNull();

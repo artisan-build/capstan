@@ -3,6 +3,7 @@
 namespace App\Mcp;
 
 use App\Mcp\Tools\OrbWorkBriefTool;
+use App\Mcp\Tools\OrbWorkFinishedTool;
 use App\Mcp\Tools\OrbWorkProgressTool;
 use App\Mcp\Tools\OrbWorkStartedTool;
 use Laravel\Mcp\Server;
@@ -21,5 +22,6 @@ final class OrbServer extends Server
         OrbWorkBriefTool::class,
         OrbWorkStartedTool::class,
         OrbWorkProgressTool::class,
+        OrbWorkFinishedTool::class,
     ];
 }

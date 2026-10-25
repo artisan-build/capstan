@@ -289,10 +289,10 @@ Capstan stores and returns `number` as an integer.
 
 ### Amp orb workers
 
-Amp orbs connect to the dedicated MCP endpoint at `/mcp/orb`. It has three tools: `work_brief`,
-`work_started`, and `work_progress`. It does not expose the product MCP tools, orchestration actions,
-evidence uploads, steers, finish actions, or machine APIs. The existing `/mcp` and `/mcp/write` endpoints
-keep their Built for Cloud authentication and tool lists.
+Amp orbs connect to the dedicated MCP endpoint at `/mcp/orb`. It has four tools: `work_brief`,
+`work_started`, `work_progress`, and `work_finished`. It does not expose the product MCP tools,
+orchestration actions, evidence uploads, steers, verdict actions, or machine APIs. The existing `/mcp`
+and `/mcp/write` endpoints keep their Built for Cloud authentication and tool lists.
 
 The orb sends Amp's workload identity token as a bearer. Capstan verifies the token's signature using the
 issuer's discovered OpenID metadata and JWKS, then checks the issuer, the exact `/mcp/orb` audience for the
@@ -321,14 +321,34 @@ Amp id to another local account, and another Amp id cannot take an account that 
 must still belong to the claim's team on every call.
 
 `work_brief` uses the guarded worker brief path and records the existing fetch fields. A stall directive may
-be settled as `resolved_by_fetch`, but the fetch does not clear `stalled_at` or record progress. `work_started`
-adds one idempotent `started` milestone and sets the first deadline from the task's `timebox_minutes`.
-`work_progress` requires a short non-empty summary, records the existing progress milestone, extends the
-deadline from the call time, clears the current stall, and settles its pending directive as
+be settled as `resolved_by_fetch`, but the fetch does not clear `stalled_at` or move the work deadline.
+`work_started` adds one idempotent `started` milestone and sets the first deadline from the task's
+`timebox_minutes`. Repeating it does not move that deadline or clear an existing stall. `work_progress`
+requires a short non-empty summary, records the existing progress milestone, moves the deadline from the call
+time, clears the current stall and first-miss marker, and settles pending deadline or stall repair work as
 `resolved_by_progress`.
 
-Capstan stores the stable Amp user id, its local user link, and the opaque session reference. It does not store
-the workload identity token, an Amp secret, or a GitHub credential.
+`work_finished` requires a bounded non-empty writeup and a PR object containing exactly `repo`, `number`, and
+the matching canonical `https://github.com/<repo>/pull/<number>` URL. The first valid PR may populate the child
+task's PR metadata; a conflicting value is refused. The item moves to `awaiting_verification` with its claim,
+fence, launch nonce, and Amp thread unchanged. It is not complete, and the orb cannot start or post progress
+while it waits. An exact finish replay returns the same record, while a different writeup or PR is refused.
+
+The finish wakes the root orchestrator with one `child_awaiting_verification` event. The event contains the
+bounded writeup, PR, finish id, child task, item, and fence. The current fenced orchestrator seat or turn reviews
+it with `review_finish`. `accept` records the verdict, stores the writeup as the item's final progress and `done`
+milestone, moves the item to `acted`, and allows dependent work to be claimed. `corrections` requires bounded
+text, creates one item steer, returns the same claim to `routed`, and opens a fresh work deadline. The Amp thread
+stays attached so the drain can continue it rather than launch a replacement session.
+
+Declaring a finish clears the orb's work deadline and pending deadline or stall nudge. Deadline responsibility
+then belongs to the orchestrator event, turn receipt, and renewable orchestrator lease. The waiting orb is not
+nudged. Only a current orchestrator authority can record a verdict; the Amp workload bearer is not accepted by
+the product MCP or signed orchestrator action ingress.
+
+Capstan stores the stable Amp user id, its local user link, the opaque session reference, and the declared PR
+identity. It does not store the workload identity token, an Amp secret, or a GitHub credential. GitHub access
+stays in the local orchestrator environment that judges the PR; Capstan receives only its fenced verdict.
 
 ### Launch receipts and repair directives
 
@@ -359,12 +379,23 @@ Running items marked stalled use the same directive records and outcome rules. D
 separate from item transitions. Their item, fence, machine, sequence, reason, payload, status, timestamps, and
 bounded outcome make poll replay idempotent and keep policy on the server.
 
+The worker timebox is separate from the renewable infrastructure lease. Missing the first work deadline emits
+one channel-neutral `nudge` telling the worker to post progress or finish. It does not mark the item stalled or
+requeue the claim. If no real progress arrives for one more full task timebox, the second miss marks the item
+stalled once and hands it to the existing stall repair ladder. Lease expiry still recovers an abandoned claim,
+but a deadline sweep does not use lease expiry as a substitute for either work-deadline stage.
+
+The signed milestone link follows the same clock. Its idempotent `started` milestone opens the first deadline
+without clearing an existing stall. Each later non-terminal progress milestone moves the deadline by a full
+timebox, clears the first-miss marker and stall, and settles the current deadline or stall repair. Terminal and
+`released` milestones clear deadline state without opening another deadline.
+
 A matching brief fetch settles each pending directive according to its reason. A receipt repair records a
 successful receipt. A stall repair records `resolved_by_fetch` without a receipt marker. Fetching the brief
 does not clear `stalled_at`; without a later milestone, the next stall repair may be issued after its deadline.
 
-A newly accepted milestone from the current claim holder clears `stalled_at` and settles a pending stall
-directive as `resolved_by_progress`. The milestone, item update, and directive settlement commit together. An
+A newly accepted real-progress milestone from the current claim holder clears `stalled_at` and settles a
+pending stall directive as `resolved_by_progress`. The milestone, item update, and directive settlement commit together. An
 idempotent replay that returns an existing milestone does not clear a later stall. If the same claim holder
 stalls again after making progress, the repair order starts again at `send_enter`. Directive sequence numbers
 remain unique and continue across episodes so the earlier history is not replaced.

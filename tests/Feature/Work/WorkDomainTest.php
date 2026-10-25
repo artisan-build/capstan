@@ -195,7 +195,7 @@ test('brief revisions append in order and newest content is canonical', function
 
 test('closed work vocabularies persist as portable strings', function (): void {
     expect(array_column(WorkItemState::cases(), 'value'))
-        ->toBe(['queued', 'claimed', 'delivered', 'routed', 'acted', 'failed', 'cancelled', 'expired'])
+        ->toBe(['queued', 'claimed', 'delivered', 'routed', 'awaiting_verification', 'acted', 'failed', 'cancelled', 'expired'])
         ->not->toContain('superseded')
         ->and(WorkItemState::Cancelled->isTerminal())->toBeTrue()
         ->and(WorkItemState::Expired->isTerminal())->toBeTrue()
