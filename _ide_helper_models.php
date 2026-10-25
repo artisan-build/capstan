@@ -13,6 +13,20 @@
 
 namespace App\Models{
 /**
+ * @property int $id
+ * @property string $amp_user_id
+ * @property int $user_id
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|AmpIdentity newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|AmpIdentity newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|AmpIdentity query()
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	final class IdeHelperAmpIdentity {}
+}
+
+namespace App\Models{
+/**
  * @property string $id
  * @property string $actor_id
  * @property ArtifactVisibility $visibility

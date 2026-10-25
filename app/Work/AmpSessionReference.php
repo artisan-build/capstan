@@ -89,7 +89,7 @@ final readonly class AmpSessionReference
             throw new InvalidArgumentException('Invalid Amp session reference.');
         }
 
-        $segments = array_map('rawurldecode', explode('/', trim($parts['path'], '/')));
+        $segments = array_map(rawurldecode(...), explode('/', trim($parts['path'], '/')));
         if (! in_array($threadId, $segments, true)) {
             throw new InvalidArgumentException('Invalid Amp session reference.');
         }

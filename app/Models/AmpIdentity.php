@@ -8,6 +8,8 @@ use Illuminate\Database\Eloquent\Model;
  * @property int $id
  * @property string $amp_user_id
  * @property int $user_id
+ *
+ * @mixin IdeHelperAmpIdentity
  */
 final class AmpIdentity extends Model
 {

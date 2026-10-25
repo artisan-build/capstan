@@ -299,7 +299,7 @@ test('token claim and signature failures are closed', function (Closure $token):
     orbClaim();
     orbList($token())->assertUnauthorized()->assertExactJson(['message' => 'Unauthenticated.']);
 })->with([
-    'invalid signature' => [fn (): string => orbTokenWithInvalidSignature()],
+    'invalid signature' => [orbTokenWithInvalidSignature(...)],
     'unsupported algorithm' => [fn (): string => orbToken([], 'primary', 'HS256')],
     'wrong token use' => [fn (): string => orbToken(['token_use' => 'id'])],
     'unverified email claim' => [fn (): string => orbToken(['email_verified' => false])],

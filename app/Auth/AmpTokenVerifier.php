@@ -94,7 +94,7 @@ final class AmpTokenVerifier
         $jwksUri = is_array($metadata) ? ($metadata['jwks_uri'] ?? null) : null;
         if (! is_array($metadata) || ($metadata['issuer'] ?? null) !== self::ISSUER
             || ! is_string($jwksUri) || ! $this->trustedAmpUrl($jwksUri)
-            || ! is_array($algorithms) || array_filter($algorithms, 'is_string') !== $algorithms) {
+            || ! is_array($algorithms) || array_filter($algorithms, is_string(...)) !== $algorithms) {
             $this->deny();
         }
 
