@@ -60,7 +60,7 @@ class Index extends Component
             $treeTasks = collect([$task])->concat($task->children);
             $items = $treeTasks->flatMap(fn (WorkTask $treeTask) => $treeTask->items);
             $runningItems = $items->filter(
-                fn (WorkItem $item) => in_array($item->state->value, ['claimed', 'delivered', 'routed'], true),
+                fn (WorkItem $item) => in_array($item->state->value, ['claimed', 'delivered', 'routed', 'awaiting_verification'], true),
             );
             $column = $items->isNotEmpty() && $items->every(fn (WorkItem $item) => $item->state->isTerminal())
                 ? 'finished'

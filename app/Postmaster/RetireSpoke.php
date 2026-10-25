@@ -32,7 +32,7 @@ final readonly class RetireSpoke
 
             $hasLiveAuthority = WorkItem::query()
                 ->where('claimant_spoke_id', $spoke->id)
-                ->whereIn('state', ['claimed', 'delivered', 'routed'])
+                ->whereIn('state', ['claimed', 'delivered', 'routed', 'awaiting_verification'])
                 ->where('lease_until', '>', $now)
                 ->whereHas('workTask', fn ($query) => $query->whereNull('cancelled_at'))
                 ->exists()

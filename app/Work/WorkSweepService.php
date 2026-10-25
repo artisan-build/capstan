@@ -5,6 +5,7 @@ namespace App\Work;
 use App\Enums\WorkExpirationCause;
 use App\Enums\WorkItemState;
 use App\Models\Spoke;
+use App\Models\WorkDirective;
 use App\Models\WorkItem;
 use App\Models\WorkTask;
 use App\Models\WorkTaskExpiration;
@@ -30,41 +31,68 @@ final readonly class WorkSweepService
             $afterIdentified?->__invoke($item);
             DB::transaction(function () use ($item, $now): void {
                 resolve(WorkOrchestrationLock::class)->tasks($item->work_task_id);
-                // Inspect the timebox before requeuing an expired lease so a
-                // deadline and expiry in the same minute still records a stall.
-                if ($item->claimed_at !== null && $item->claimed_at->addMinutes($item->workTask->timebox_minutes)->lte($now)) {
-                    // Serialize with milestone writers before reading milestones.
-                    // A separate statement gets a fresh PostgreSQL snapshot after
-                    // any writer we waited for has committed its milestone.
-                    if ($this->sameClaim($item)->update(['updated_at' => DB::raw('work_items.updated_at')]) !== 1) {
-                        return;
-                    }
-                    $latest = $item->milestones()->where('fence', $item->fence)
-                        ->reorder()->latest()->orderByDesc('id')->first();
-                    $anchor = $latest === null ? $item->claimed_at : $latest->created_at;
-                    $deadline = $anchor->addMinutes($item->workTask->timebox_minutes);
-                    if ($deadline->lte($now)) {
-                        $updated = $this->sameClaim($item)->whereNull('stalled_at')
-                            ->update(['stalled_at' => $now]);
-                        if ($updated === 1) {
-                            resolve(WorkEventProjector::class)->stalled($item->fresh());
-                            $this->notifier->stalled($item->fresh());
-                        }
-                    }
-                }
-
                 if ($item->lease_until !== null && $item->lease_until->lte($now)) {
                     $updated = $this->sameClaim($item)->where('lease_until', '<=', $now)->update([
                         'state' => 'queued', 'attempts' => DB::raw('attempts + 1'),
                         ...WorkPreemptionService::cleared(),
                         'claimant_spoke_id' => null, 'claimant_actor' => null,
-                        'claimed_at' => null, 'lease_until' => null, 'stalled_at' => null,
+                        'claimed_at' => null, 'lease_until' => null, 'work_deadline_at' => null,
+                        'first_deadline_missed_at' => null, 'stalled_at' => null,
                         'updated_at' => $now,
                     ]);
                     if ($updated === 1) {
                         $this->audit($item, WorkItemState::Queued, $now, 'lease-expiry');
                         resolve(WorkEventProjector::class)->expired($item->fresh());
                     }
+
+                    return;
+                }
+
+                if ($item->state === WorkItemState::AwaitingVerification || $item->work_deadline_at === null
+                    || $item->work_deadline_at->isAfter($now)) {
+                    return;
+                }
+
+                if ($item->first_deadline_missed_at === null) {
+                    $updated = $this->sameClaim($item)
+                        ->where('work_deadline_at', '<=', $now)
+                        ->whereNull('first_deadline_missed_at')
+                        ->update(['first_deadline_missed_at' => $now, 'updated_at' => $now]);
+                    if ($updated === 1) {
+                        $fresh = $item->fresh();
+                        $sequence = ((int) $fresh->directives()->max('sequence')) + 1;
+                        $fresh->directives()->create([
+                            'claimant_spoke_id' => $fresh->claimant_spoke_id,
+                            'fence' => $fresh->fence,
+                            'sequence' => $sequence,
+                            'kind' => 'nudge',
+                            'reason' => 'deadline',
+                            'payload' => ['message' => 'Post work progress or declare the work finished.'],
+                            'status' => 'pending',
+                            'issued_at' => $now,
+                        ]);
+                    }
+
+                    return;
+                }
+
+                $secondDeadline = $item->first_deadline_missed_at->addMinutes($item->workTask->timebox_minutes);
+                if ($secondDeadline->isAfter($now)) {
+                    return;
+                }
+                $updated = $this->sameClaim($item)
+                    ->where('first_deadline_missed_at', $item->first_deadline_missed_at)
+                    ->whereNull('stalled_at')
+                    ->update(['stalled_at' => $now, 'updated_at' => $now]);
+                if ($updated === 1) {
+                    WorkDirective::query()->where('work_item_id', $item->id)->where('fence', $item->fence)
+                        ->where('reason', 'deadline')->where('status', 'pending')->update([
+                            'status' => 'succeeded',
+                            'outcome' => ['result' => 'escalated_to_stall'],
+                            'completed_at' => $now,
+                        ]);
+                    resolve(WorkEventProjector::class)->stalled($item->fresh());
+                    $this->notifier->stalled($item->fresh());
                 }
             }, 5);
         }

@@ -19,6 +19,8 @@ use InvalidArgumentException;
  * @property int|null $claimant_spoke_id
  * @property string|null $claimant_actor
  * @property CarbonImmutable|null $lease_until
+ * @property CarbonImmutable|null $work_deadline_at
+ * @property CarbonImmutable|null $first_deadline_missed_at
  * @property CarbonImmutable|null $claimed_at
  * @property CarbonImmutable|null $handed_off_at
  * @property string|null $handed_off_session_ref
@@ -51,6 +53,7 @@ use InvalidArgumentException;
  * @property-read Collection<int, WorkMilestone> $milestones
  * @property-read Collection<int, WorkEvidence> $evidence
  * @property-read Collection<int, WorkDirective> $directives
+ * @property-read Collection<int, WorkFinish> $finishes
  *
  * @mixin IdeHelperWorkItem
  */
@@ -82,6 +85,8 @@ class WorkItem extends Model
         'claimant_spoke_id',
         'claimant_actor',
         'lease_until',
+        'work_deadline_at',
+        'first_deadline_missed_at',
         'claimed_at',
         'handed_off_at',
         'handed_off_session_ref',
@@ -114,6 +119,8 @@ class WorkItem extends Model
             'state' => WorkItemState::class,
             'claimant_spoke_id' => 'integer',
             'lease_until' => 'datetime',
+            'work_deadline_at' => 'immutable_datetime',
+            'first_deadline_missed_at' => 'immutable_datetime',
             'claimed_at' => 'datetime',
             'handed_off_at' => 'immutable_datetime',
             'first_fetched_at' => 'immutable_datetime',
@@ -179,5 +186,11 @@ class WorkItem extends Model
     public function directives(): HasMany
     {
         return $this->hasMany(WorkDirective::class)->orderBy('sequence');
+    }
+
+    /** @return HasMany<WorkFinish, $this> */
+    public function finishes(): HasMany
+    {
+        return $this->hasMany(WorkFinish::class);
     }
 }

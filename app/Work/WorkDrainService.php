@@ -263,7 +263,7 @@ final readonly class WorkDrainService
         CarbonImmutable $now,
     ): bool {
         return $item !== null
-            && in_array($item->state, [WorkItemState::Claimed, WorkItemState::Delivered, WorkItemState::Routed], true)
+            && in_array($item->state, [WorkItemState::Claimed, WorkItemState::Delivered, WorkItemState::Routed, WorkItemState::AwaitingVerification], true)
             && $item->fence === $fence
             && $item->claimant_actor === $actorId
             && $item->claimant_spoke_id === $spokeId

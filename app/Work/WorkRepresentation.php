@@ -154,6 +154,7 @@ final class WorkRepresentation
             'item' => [
                 'id' => 'string', 'work_task_id' => 'string', 'role' => 'string', 'state' => 'string',
                 'claimant_spoke_id' => 'integer?', 'claimant_actor' => 'string?', 'lease_until' => 'string?',
+                'work_deadline_at' => 'string?', 'first_deadline_missed_at' => 'string?',
                 'fence' => 'integer', 'attempts' => 'integer', 'last_progress' => 'string?',
                 'handed_off_at' => 'string?', 'handed_off_session_ref' => 'string?',
                 'thread_url' => 'string?',

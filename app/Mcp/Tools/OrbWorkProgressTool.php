@@ -47,7 +47,7 @@ final class OrbWorkProgressTool extends OrbTool
 
             return [
                 'milestone_id' => $result['milestone']->id,
-                'lease_until' => $result['lease_until']->toISOString(),
+                'work_deadline_at' => $result['work_deadline_at']->toISOString(),
             ];
         });
     }

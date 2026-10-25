@@ -75,6 +75,7 @@ final readonly class WorkOrchestrationSurface
             'queue_item' => $this->queued($action, $this->capability->queue($context, $input['task_id'], $input['role'], $now)),
             'cancel_item' => $this->created($action, $this->capability->cancelItem($context, $input['item_id'], $now)),
             'steer' => $this->created($action, $this->capability->steer($context, $input['task_id'], $input['item_id'] ?? null, $input['content'], $now)),
+            'review_finish' => $this->created($action, $this->capability->reviewFinish($context, $input['finish_id'], $input['item_id'], $input['verdict'], $input['corrections'] ?? null, $now)),
             'decide' => $this->created($action, $this->capability->decide($context, $input['event_id'], $input['decision'], $input['rationale'], $input['evidence'], $now)),
             'request_wake' => $this->created($action, $this->capability->requestWake($context, $input['key'], CarbonImmutable::parse($input['due_at']), $input['reason'], $now)),
             'escalate' => $this->created($action, $this->capability->escalate($context, $input['key'], $input['addressed_actor'] ?? null, $input['question'], $input['options'], $input['recommendation'], $now)),
@@ -97,6 +98,7 @@ final readonly class WorkOrchestrationSurface
             'queue_item' => ['task_id', 'role'],
             'cancel_item' => ['item_id'],
             'steer' => ['task_id', 'item_id', 'content'],
+            'review_finish' => ['finish_id', 'item_id', 'verdict', 'corrections'],
             'decide' => ['event_id', 'decision', 'rationale', 'evidence'],
             'request_wake' => ['key', 'due_at', 'reason'],
             'escalate' => ['key', 'addressed_actor', 'question', 'options', 'recommendation'],
@@ -137,6 +139,12 @@ final readonly class WorkOrchestrationSurface
             'queue_item' => ['task_id' => ['required', 'uuid'], 'role' => ['required', 'string', 'min:1', 'max:64', Rule::notIn([WorkItem::ROLE_HUMAN, WorkItem::ROLE_ORCHESTRATOR])]],
             'cancel_item' => ['item_id' => ['required', 'uuid']],
             'steer' => ['task_id' => ['required', 'uuid'], 'item_id' => ['sometimes', 'uuid'], 'content' => ['required', 'string', 'min:1', 'max:8000']],
+            'review_finish' => [
+                'finish_id' => ['required', 'uuid'],
+                'item_id' => ['required', 'uuid'],
+                'verdict' => ['required', Rule::in(['accept', 'corrections'])],
+                'corrections' => ['required_if:verdict,corrections', 'string', 'min:1', 'max:4000'],
+            ],
             'decide' => ['event_id' => ['required', 'uuid'], 'decision' => ['required', 'string', 'min:1', 'max:10000'], 'rationale' => ['required', 'string', 'min:1', 'max:10000'], 'evidence' => ['required', 'array', 'max:25']],
             'request_wake' => ['key' => ['required', 'string', 'min:1', 'max:255'], 'due_at' => ['required', 'date'], 'reason' => ['required', 'string', 'min:1', 'max:2000']],
             'escalate' => ['key' => ['required', 'string', 'min:1', 'max:255'], 'addressed_actor' => ['sometimes', 'required', 'string', 'regex:/\A[1-9][0-9]{0,18}\z/D'], 'question' => ['required', 'string', 'min:1', 'max:10000'], 'options' => ['required', 'array', 'list', 'min:1', 'max:10'], 'options.*' => ['required', 'string', 'min:1', 'max:2000'], 'recommendation' => ['required', 'string', 'min:1', 'max:2000']],
@@ -192,6 +200,9 @@ final readonly class WorkOrchestrationSurface
         }
         if ($action === 'escalate' && isset($validated['addressed_actor'])
             && ! User::query()->whereKey($validated['addressed_actor'])->where('status', 'active')->exists()) {
+            throw $this->invalid();
+        }
+        if ($action === 'review_finish' && $validated['verdict'] === 'accept' && array_key_exists('corrections', $input)) {
             throw $this->invalid();
         }
 
