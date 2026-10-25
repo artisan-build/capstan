@@ -144,6 +144,7 @@ function orbClaim(array $itemAttributes = []): array
     $task = WorkTask::query()->create([
         'team_id' => $team->id,
         'title' => 'Test-created orb task '.Str::random(8),
+        'repository' => 'Artisan-Build/Capstan',
         'required_capabilities' => [],
         'timebox_minutes' => 12,
         'creator_actor' => (string) $user->id,
@@ -233,9 +234,10 @@ test('a valid exact claim can list and call only the four orb tools', function (
 
     $brief = orbCall('work_brief', (object) [], $token)->assertOk();
     expect($brief->json('result.structuredContent.revision.content'))->toBe($claim['task']->briefRevisions()->sole()->content)
+        ->and($brief->json('result.structuredContent.task.repository'))->toBe('artisan-build/capstan')
         ->and($claim['item']->fresh()->first_fetched_at)->not->toBeNull();
 
-    foreach (['get_task', 'orchestrate', 'upload_work_evidence', 'steer'] as $excluded) {
+    foreach (['get_task', 'orchestrate', 'set_repository', 'upload_work_evidence', 'steer'] as $excluded) {
         $response = orbCall($excluded, (object) [], $token);
         expect($response->status())->toBeIn([200, 400]);
         expect($response->getContent())->not->toContain($claim['reference']->encode());

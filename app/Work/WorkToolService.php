@@ -49,7 +49,7 @@ final readonly class WorkToolService
                         ...array_intersect_key($input, array_flip([
                             'team_id', 'title', 'user_actor_address', 'device_spoke_id', 'failover',
                             'required_capabilities', 'timebox_minutes', 'owner_actor', 'priority', 'expires_at', 'pr',
-                            'parent_task_id', 'workflow_ref', 'workflow_sha',
+                            'parent_task_id', 'repository', 'workflow_ref', 'workflow_sha',
                         ])),
                         'creator_actor' => $actor,
                         'owner_actor' => $input['owner_actor'] ?? $actor,

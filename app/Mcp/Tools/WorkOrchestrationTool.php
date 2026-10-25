@@ -8,6 +8,7 @@ use App\Mcp\OwnerSubjectResolver;
 use App\Mcp\ToolResponse;
 use App\Mcp\UnsupportedMcpPrincipal;
 use App\Models\Team;
+use App\Work\GitHubRepository;
 use App\Work\WorkOrchestrationMcpService;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\RolePolicy;
@@ -69,7 +70,7 @@ abstract class WorkOrchestrationTool extends CapstanTool
                     'state' => $schema->string()->enum(['acted', 'failed']), 'user_actor_address' => $schema->string()->min(1)->max(19), 'device_spoke_id' => $schema->integer()->min(1),
                     'verdict' => $schema->string()->enum(['accept', 'corrections']), 'corrections' => $schema->string()->min(1)->max(4000),
                     'failover' => $schema->boolean(), 'required_capabilities' => $schema->array()->items($schema->string()->min(1)->max(64))->max(25)->unique(),
-                    'timebox_minutes' => $schema->integer()->min(1)->max(1440), 'workflow_ref' => $schema->string()->max(2048),
+                    'timebox_minutes' => $schema->integer()->min(1)->max(1440), 'repository' => $schema->string()->max(GitHubRepository::MAX_LENGTH), 'workflow_ref' => $schema->string()->max(2048),
                     'workflow_sha' => $schema->string()->min(40)->max(40),
                     'owner_actor' => $schema->string()->min(1)->max(19), 'priority' => $schema->string()->enum(['P0', 'P1', 'P2', 'P3']),
                     'depends_on' => $schema->array()->items($schema->string())->max(25)->unique(), 'expires_at' => $schema->string(),
@@ -107,6 +108,7 @@ abstract class WorkOrchestrationTool extends CapstanTool
         $task = $schema->object([
             'id' => $schema->string()->required(), 'team_id' => $schema->integer()->required(),
             'title' => $schema->string()->required(), 'workflow_ref' => $schema->string(),
+            'repository' => $schema->string(),
             'workflow_sha' => $schema->string(),
             'brief_page_id' => $schema->string(), 'brief_page_version_id' => $schema->string(),
             'owner_actor' => $schema->string()->required(),

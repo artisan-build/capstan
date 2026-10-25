@@ -16,6 +16,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
+use InvalidArgumentException;
 
 /** Resolves production authority and exposes one bounded action envelope. */
 final readonly class WorkOrchestrationSurface
@@ -70,6 +71,7 @@ final readonly class WorkOrchestrationSurface
             )),
             'set_priority' => $this->created($action, $this->capability->setPriority($context, $input['priority'], $now)),
             'set_pr' => $this->created($action, $this->capability->setPullRequest($context, $input['task_id'], $input['pr'], $now)),
+            'set_repository' => $this->created($action, $this->capability->setRepository($context, $input['task_id'], $input['repository'], $now)),
             'repin_workflow' => $this->created($action, $this->capability->repinWorkflow($context, $input['workflow_ref'], $input['workflow_sha'], $now)),
             'revise_brief' => $this->created($action, $this->capability->reviseBrief($context, $input['task_id'], $input['brief'], $now)),
             'queue_item' => $this->queued($action, $this->capability->queue($context, $input['task_id'], $input['role'], $now)),
@@ -90,9 +92,10 @@ final readonly class WorkOrchestrationSurface
     public function validate(string $action, array $input): array
     {
         $shape = match ($action) {
-            'create_child' => ['under_task_id', 'title', 'brief', 'user_actor_address', 'device_spoke_id', 'failover', 'required_capabilities', 'timebox_minutes', 'workflow_ref', 'owner_actor', 'priority', 'depends_on', 'expires_at', 'pr'],
+            'create_child' => ['under_task_id', 'title', 'brief', 'user_actor_address', 'device_spoke_id', 'failover', 'required_capabilities', 'timebox_minutes', 'repository', 'workflow_ref', 'owner_actor', 'priority', 'depends_on', 'expires_at', 'pr'],
             'set_priority' => ['priority'],
             'set_pr' => ['task_id', 'pr'],
+            'set_repository' => ['task_id', 'repository'],
             'repin_workflow' => ['workflow_ref', 'workflow_sha'],
             'revise_brief' => ['task_id', 'brief'],
             'queue_item' => ['task_id', 'role'],
@@ -114,7 +117,8 @@ final readonly class WorkOrchestrationSurface
                 'brief' => ['required', 'string', 'min:1', 'max:32000'], 'user_actor_address' => ['sometimes', 'required', 'string', 'regex:/\A[1-9][0-9]{0,18}\z/D'],
                 'device_spoke_id' => ['sometimes', 'integer', 'min:1'], 'failover' => ['sometimes', 'boolean'],
                 'required_capabilities' => ['sometimes', 'array', 'list', 'max:25'], 'required_capabilities.*' => ['string', 'min:1', 'max:64', 'distinct'],
-                'timebox_minutes' => ['sometimes', 'integer', 'min:1', 'max:1440'], 'workflow_ref' => ['sometimes', 'string', 'max:2048'],
+                'timebox_minutes' => ['sometimes', 'integer', 'min:1', 'max:1440'],
+                'repository' => ['sometimes', 'string', 'max:'.GitHubRepository::MAX_LENGTH], 'workflow_ref' => ['sometimes', 'string', 'max:2048'],
                 'owner_actor' => ['sometimes', 'required', 'string', 'regex:/\A[1-9][0-9]{0,18}\z/D'],
                 'priority' => ['sometimes', 'required', Rule::enum(WorkPriority::class)],
                 'depends_on' => ['sometimes', 'array', 'list', 'max:25'], 'depends_on.*' => ['required', 'uuid', 'distinct:strict'],
@@ -130,6 +134,10 @@ final readonly class WorkOrchestrationSurface
                 'pr.repo' => ['required', 'string', 'min:1', 'max:255'],
                 'pr.number' => ['required', 'integer', 'min:1'],
                 'pr.url' => ['required', 'string', 'max:2048', 'url:https'],
+            ],
+            'set_repository' => [
+                'task_id' => ['required', 'uuid'],
+                'repository' => ['required', 'string', 'max:'.GitHubRepository::MAX_LENGTH],
             ],
             'repin_workflow' => [
                 'workflow_ref' => ['required', 'string', 'min:1', 'max:2048'],
@@ -162,6 +170,13 @@ final readonly class WorkOrchestrationSurface
             }
         }
         $validated = $validator->validated();
+        if (isset($validated['repository'])) {
+            try {
+                $validated['repository'] = GitHubRepository::normalize($validated['repository']);
+            } catch (InvalidArgumentException) {
+                throw $this->invalid();
+            }
+        }
         if (isset($validated['pr'])) {
             $validated['pr'] = WorkPullRequest::normalize($validated['pr']);
         }

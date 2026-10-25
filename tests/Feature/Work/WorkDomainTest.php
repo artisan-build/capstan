@@ -132,6 +132,33 @@ test('tasks reserve routing fields and items carry one open vocabulary scalar ro
         ->and($child->fresh()?->deviceSpoke)->toBeNull();
 });
 
+test('the repository migration leaves legacy tasks null and the model stores a canonical slug', function (): void {
+    $migration = require database_path('migrations/2026_10_25_030000_add_repository_to_work_tasks.php');
+    $migration->down();
+    $legacyId = (string) Str::uuid7();
+    DB::table('work_tasks')->insert([
+        'id' => $legacyId,
+        'team_id' => Team::default()->id,
+        'title' => 'Legacy repository task',
+        'required_capabilities' => '[]',
+        'timebox_minutes' => 30,
+        'creator_actor' => 'actor@test',
+        'owner_actor' => 'actor@test',
+        'priority' => 'P2',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    $migration->up();
+    $current = workDomainTask([
+        'title' => 'Repository task',
+        'repository' => 'Artisan-Build/Capstan--CLI',
+    ]);
+
+    expect(Schema::hasColumn('work_tasks', 'repository'))->toBeTrue()
+        ->and(WorkTask::query()->findOrFail($legacyId)->repository)->toBeNull()
+        ->and($current->fresh()?->repository)->toBe('artisan-build/capstan--cli');
+});
+
 test('children preserve explicit legacy workflow refs when the root has no immutable pin', function (): void {
     $root = workDomainTask();
     $child = workDomainTask([

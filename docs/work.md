@@ -169,10 +169,16 @@ latest Page version inside the task-creation transaction. Capstan records the Pa
 that version's content into the first Work brief revision. Publishing another Page version does not change an
 existing task. The caller must own the Page or hold an active internal share.
 
-`create_task` also accepts `parent_task_id`, `depends_on`, `priority`, `owner_actor`, `workflow_ref`, and
-`workflow_sha`. A child inherits the root owner, priority, workflow reference, and workflow SHA. The workflow
-reference and SHA must be supplied together; the SHA is a lowercase 40-character Git commit id. Capstan
-stores the pin and never fetches or interprets the workflow repository.
+`create_task` also accepts `parent_task_id`, `depends_on`, `priority`, `owner_actor`, `repository`,
+`workflow_ref`, and `workflow_sha`. `repository` names the target GitHub repository as a lowercase
+`owner/repository` slug. A child inherits its direct parent's repository when the caller omits one, but it may
+name a different target repository. Existing tasks and tasks created without a repository keep a null value and
+stay on the Solo lane. The future R4 projects table may replace this slug with a project reference.
+
+The workflow pin is independent of the target repository. `workflow_ref` identifies the how-repo method, and
+`workflow_sha` pins that method to a lowercase 40-character Git commit id. Both values must be supplied
+together. A child inherits the root's workflow reference and SHA, even when it targets a different repository.
+Capstan stores the pin and never fetches or interprets the workflow repository.
 
 `kickoff` takes a team, Page, title, optional priority, and optional workflow pin. In one idempotent database
 write it creates the root task from the pinned Page version and queues one orchestrator item. A failed Page
@@ -405,6 +411,11 @@ id with a `succeeded` or `failed` outcome. A successful respawn also reports its
 The response always has `spoke_id`, `items`, and `directives`. `spoke_id` is the machine identity resolved
 from the bound credential, not a caller-supplied value. A Solo launcher uses it in the authoritative session
 reference instead of guessing the machine identity. An old drain can ignore the added key.
+
+A drain that needs target repository metadata sends `item_shape: "repository-v1"` on both claim and renew.
+Claimed and renewed items then include `repository` when the task has one. Omitting `item_shape` keeps the
+original item response unchanged, and an unknown shape is refused. Transition responses never include this
+field.
 
 Leaf and orchestrator concurrency are separate when `orchestrator_capacity` is present. `capacity` admits only
 ordinary leaf roles, while `orchestrator_capacity` admits only the reserved orchestrator role. A full leaf pool

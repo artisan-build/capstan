@@ -1251,6 +1251,7 @@ namespace App\Models{
  * @property array{repo: string, number: int, url: string}|null $pr
  * @property CarbonImmutable|null $cancelled_at
  * @property string|null $parent_task_id
+ * @property string|null $repository
  * @property string|null $workflow_ref
  * @property string|null $workflow_sha
  * @property string|null $brief_page_id
@@ -1296,6 +1297,7 @@ namespace App\Models{
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereParentTaskId($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask wherePr($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask wherePriority($value)
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereRepository($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereRequiredCapabilities($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereRoutingPoolWork($value)
  * @method static \Illuminate\Database\Eloquent\Builder<static>|WorkTask whereTeamId($value)

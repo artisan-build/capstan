@@ -60,7 +60,7 @@ final readonly class WorkOrchestrationCapability
             $child = WorkTask::query()->create([
                 ...array_intersect_key($attributes, array_flip([
                     'title', 'user_actor_address', 'device_spoke_id', 'failover', 'required_capabilities',
-                    'timebox_minutes', 'workflow_ref', 'owner_actor', 'priority', 'expires_at', 'pr',
+                    'timebox_minutes', 'repository', 'workflow_ref', 'owner_actor', 'priority', 'expires_at', 'pr',
                 ])),
                 'team_id' => $parent->team_id,
                 'parent_task_id' => $under->id,
@@ -108,6 +108,28 @@ final readonly class WorkOrchestrationCapability
                 'pr-change:'.Str::uuid7(),
                 'task_pr_changed',
                 ['task_id' => $target->id, 'old_pr' => $old, 'new_pr' => $pr],
+                inheritAuthor: false,
+            );
+
+            return $target->refresh();
+        });
+    }
+
+    public function setRepository(WorkOrchestrationContext $context, string $taskId, string $repository, CarbonImmutable $now): WorkTask
+    {
+        return $this->authorised($context, $now, function (WorkTask $parent) use ($taskId, $repository): WorkTask {
+            $target = $this->target($parent, $taskId, allowParent: true);
+            $old = $target->repository;
+            if ($old === $repository) {
+                return $target;
+            }
+            $target->repository = $repository;
+            $target->save();
+            $this->orchestration->event(
+                $parent,
+                'repository-change:'.Str::uuid7(),
+                'task_repository_changed',
+                ['task_id' => $target->id, 'old_repository' => $old, 'new_repository' => $repository],
                 inheritAuthor: false,
             );
 
@@ -183,6 +205,7 @@ final readonly class WorkOrchestrationCapability
             return array_filter([
                 'task' => array_filter([
                     'id' => $parent->id, 'team_id' => $parent->team_id, 'title' => $parent->title,
+                    'repository' => $parent->repository,
                     'workflow_ref' => $parent->workflow_ref, 'owner_actor' => $parent->owner_actor,
                     'workflow_sha' => $parent->workflow_sha,
                     'brief_page_id' => $parent->brief_page_id,

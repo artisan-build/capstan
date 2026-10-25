@@ -4,7 +4,9 @@ namespace App\Models;
 
 use App\Casts\WorkPullRequest;
 use App\Enums\WorkPriority;
+use App\Work\GitHubRepository;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
@@ -33,6 +35,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property array{repo: string, number: int, url: string}|null $pr
  * @property CarbonImmutable|null $cancelled_at
  * @property string|null $parent_task_id
+ * @property string|null $repository
  * @property string|null $workflow_ref
  * @property string|null $workflow_sha
  * @property string|null $brief_page_id
@@ -84,6 +87,7 @@ class WorkTask extends Model
         'pr',
         'cancelled_at',
         'parent_task_id',
+        'repository',
         'workflow_ref',
         'workflow_sha',
         'brief_page_id',
@@ -120,7 +124,12 @@ class WorkTask extends Model
                 return;
             }
 
-            $root = self::query()->findOrFail($task->parent_task_id);
+            $directParent = self::query()->findOrFail($task->parent_task_id);
+            if (! $task->isDirty('repository')) {
+                $task->repository = $directParent->repository;
+            }
+
+            $root = $directParent;
             while ($root->parent_task_id !== null) {
                 $root = self::query()->findOrFail($root->parent_task_id);
             }
@@ -135,6 +144,14 @@ class WorkTask extends Model
                 throw new \LogicException('A child workflow SHA requires a workflow reference.');
             }
         });
+    }
+
+    /** @return Attribute<string|null, string|null> */
+    protected function repository(): Attribute
+    {
+        return Attribute::make(
+            set: fn (?string $value): ?string => $value === null ? null : GitHubRepository::normalize($value),
+        );
     }
 
     public function effectiveEscalationActor(): string
