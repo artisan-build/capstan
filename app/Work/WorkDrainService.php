@@ -138,6 +138,14 @@ final readonly class WorkDrainService
         ?string $sessionRef = null,
         ?Closure $afterIdentified = null,
     ): WorkItem {
+        if ($sessionRef !== null && str_starts_with($sessionRef, AmpSessionReference::PREFIX)) {
+            try {
+                AmpSessionReference::parse($sessionRef);
+            } catch (\InvalidArgumentException) {
+                throw new ApiErrorException(422, 'invalid_session_ref', 'The session reference is invalid.');
+            }
+        }
+
         return $this->retrySqliteBusy(
             fn (): WorkItem => DB::transaction(function () use ($teamId, $actorId, $credentialId, $itemId, $fence, $target, $now, $launchNonce, $sessionRef, $afterIdentified): WorkItem {
                 $spoke = $this->spokes->resolve($actorId, $credentialId, $now);

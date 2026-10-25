@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\AuthenticateAmpOrb;
 use App\Http\Middleware\AuthenticateBoundCredential;
 use App\Http\Middleware\NoIndexArtifactPaths;
 use App\Http\Middleware\RenderOriginIsolation;
@@ -34,6 +35,7 @@ return Application::configure(basePath: dirname(__DIR__))
         );
 
         $middleware->alias([
+            'capstan.amp_orb' => AuthenticateAmpOrb::class,
             'capstan.bound_credential' => AuthenticateBoundCredential::class,
             'capstan.noindex_artifacts' => NoIndexArtifactPaths::class,
         ]);
