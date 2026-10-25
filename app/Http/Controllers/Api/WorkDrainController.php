@@ -10,6 +10,7 @@ use App\Http\Middleware\AuthenticateBoundCredential;
 use App\Models\Team;
 use App\Models\WorkItem;
 use App\Work\AmpSessionReference;
+use App\Work\WorkDrainItemShape;
 use App\Work\WorkDrainService;
 use App\Work\WorkWorkerLinks;
 use Carbon\CarbonImmutable;
@@ -43,6 +44,7 @@ final class WorkDrainController extends Controller
             'held_items.*.directive_outcome' => ['required_with:held_items.*.directive_id', Rule::in(['succeeded', 'failed'])],
             'held_items.*.launch_nonce' => ['sometimes', 'required', 'uuid'],
             'held_items.*.session_ref' => ['sometimes', 'required', 'string', 'max:2048'],
+            ...WorkDrainItemShape::rules(),
         ]);
 
         if ($validator->fails()) {
@@ -73,7 +75,10 @@ final class WorkDrainController extends Controller
 
         return new JsonResponse([
             'spoke_id' => $tick['spoke_id'],
-            'items' => array_map($this->claimItem(...), $tick['items']),
+            'items' => array_map(
+                fn (WorkItem $item): array => $this->claimItem($item, WorkDrainItemShape::includesRepository($validated)),
+                $tick['items'],
+            ),
             'directives' => $tick['directives'],
         ]);
     }
@@ -132,6 +137,7 @@ final class WorkDrainController extends Controller
             'items.*' => ['required', 'array'],
             'items.*.item_id' => ['required', 'uuid', 'distinct'],
             'items.*.fence' => ['required', 'integer', 'min:1'],
+            ...WorkDrainItemShape::rules(),
         ]);
 
         if ($validator->fails()) {
@@ -150,14 +156,17 @@ final class WorkDrainController extends Controller
         );
 
         return new JsonResponse([
-            'results' => array_map(function (array $result): array {
+            'results' => array_map(function (array $result) use ($validated): array {
                 $wire = [
                     'item_id' => $result['item_id'],
                     'status' => $result['status'],
                 ];
 
                 if (isset($result['item'])) {
-                    $wire['item'] = [...$this->currentItem($result['item']), 'links' => resolve(WorkWorkerLinks::class)->forItem($result['item'])];
+                    $wire['item'] = [
+                        ...$this->currentItem($result['item'], WorkDrainItemShape::includesRepository($validated)),
+                        'links' => resolve(WorkWorkerLinks::class)->forItem($result['item']),
+                    ];
                 }
 
                 return $wire;
@@ -166,7 +175,7 @@ final class WorkDrainController extends Controller
     }
 
     /** @return array<string, mixed> */
-    private function claimItem(WorkItem $item): array
+    private function claimItem(WorkItem $item, bool $includeRepository): array
     {
         return array_filter([
             'id' => $item->id,
@@ -178,11 +187,12 @@ final class WorkDrainController extends Controller
             'session_ref' => $item->session_ref,
             'seat_fence' => $item->seat_fence,
             'launch_nonce' => $item->launch_nonce,
+            'repository' => $includeRepository ? $item->workTask->repository : null,
         ], fn ($value): bool => $value !== null);
     }
 
     /** @return array<string, int|string> */
-    private function currentItem(WorkItem $item): array
+    private function currentItem(WorkItem $item, bool $includeRepository = false): array
     {
         $wire = [
             'id' => $item->id,
@@ -194,6 +204,9 @@ final class WorkDrainController extends Controller
 
         if ($item->lease_until !== null) {
             $wire['lease_until'] = $item->lease_until->toISOString();
+        }
+        if ($includeRepository && $item->workTask->repository !== null) {
+            $wire['repository'] = $item->workTask->repository;
         }
 
         return $wire;

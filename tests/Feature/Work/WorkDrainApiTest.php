@@ -174,6 +174,92 @@ test('claim and renewed records carry fresh signed links through the current lea
     $this->getJson($renew->json('results.0.item.links.brief'))->assertOk();
 });
 
+test('repository item shape is negotiated on claim and renew while legacy and transition shapes stay unchanged', function (): void {
+    Date::setTestNow('2026-10-25 20:00:00');
+    $team = workDrainTeam();
+    $issued = workDrainCredential(capstanUser());
+
+    $legacyItem = workDrainItem(workDrainTask($team, ['repository' => 'artisan-build/capstan']));
+    $legacyClaim = $this->withHeaders($issued['headers'])
+        ->postJson(route('api.work.claim', $team), workDrainClaimPayload())
+        ->assertOk();
+    expect(array_keys($legacyClaim->json('items.0')))->toBe([
+        'id', 'task_id', 'role', 'fence', 'lease_until', 'links', 'launch_nonce',
+    ])->and($legacyClaim->json('items.0'))->not->toHaveKey('repository');
+
+    $legacyRenew = $this->withHeaders($issued['headers'])->postJson(route('api.work.renew', $team), [
+        'items' => [['item_id' => $legacyItem->id, 'fence' => 1]],
+    ])->assertOk();
+    expect(array_keys($legacyRenew->json('results.0.item')))->toBe([
+        'id', 'task_id', 'role', 'state', 'fence', 'lease_until', 'links',
+    ])->and($legacyRenew->json('results.0.item'))->not->toHaveKey('repository');
+
+    Date::setTestNow(now()->addSecond());
+    $repositoryItem = workDrainItem(workDrainTask($team, ['repository' => 'Artisan-Build/Capstan-CLI']));
+    $negotiatedClaim = $this->withHeaders($issued['headers'])->postJson(route('api.work.claim', $team), [
+        ...workDrainClaimPayload(),
+        'item_shape' => 'repository-v1',
+    ])->assertOk();
+    expect($negotiatedClaim->json('items.0.id'))->toBe($repositoryItem->id)
+        ->and($negotiatedClaim->json('items.0.repository'))->toBe('artisan-build/capstan-cli')
+        ->and($repositoryItem->fresh()->first_fetched_at)->toBeNull();
+
+    $negotiatedRenew = $this->withHeaders($issued['headers'])->postJson(route('api.work.renew', $team), [
+        'items' => [['item_id' => $repositoryItem->id, 'fence' => 1]],
+        'item_shape' => 'repository-v1',
+    ])->assertOk();
+    expect($negotiatedRenew->json('results.0.item.repository'))->toBe('artisan-build/capstan-cli')
+        ->and($repositoryItem->fresh()->first_fetched_at)->toBeNull();
+
+    $transition = $this->withHeaders($issued['headers'])->postJson(route('api.work.transition', $team), [
+        'item_id' => $repositoryItem->id,
+        'fence' => 1,
+        'state' => 'delivered',
+    ])->assertOk();
+    expect(array_keys($transition->json('item')))->toBe([
+        'id', 'task_id', 'role', 'state', 'fence', 'lease_until',
+    ])->and($transition->json('item'))->not->toHaveKey('repository');
+
+    $this->getJson($negotiatedClaim->json('items.0.links.brief'))->assertOk()
+        ->assertJsonPath('task.repository', 'artisan-build/capstan-cli');
+
+    Date::setTestNow(now()->addSecond());
+    $nullItem = workDrainItem(workDrainTask($team));
+    $nullClaim = $this->withHeaders($issued['headers'])->postJson(route('api.work.claim', $team), [
+        ...workDrainClaimPayload(),
+        'item_shape' => 'repository-v1',
+    ])->assertOk();
+    expect($nullClaim->json('items.0.id'))->toBe($nullItem->id)
+        ->and($nullClaim->json('items.0'))->not->toHaveKey('repository');
+    $nullRenew = $this->withHeaders($issued['headers'])->postJson(route('api.work.renew', $team), [
+        'items' => [['item_id' => $nullItem->id, 'fence' => 1]],
+        'item_shape' => 'repository-v1',
+    ])->assertOk();
+    expect($nullRenew->json('results.0.item'))->not->toHaveKey('repository');
+});
+
+test('claim refuses a malformed repository item-shape negotiation marker', function (): void {
+    $team = workDrainTeam();
+    $issued = workDrainCredential(capstanUser());
+
+    $this->withHeaders($issued['headers'])->postJson(route('api.work.claim', $team), [
+        ...workDrainClaimPayload(0),
+        'item_shape' => ['repository-v1'],
+    ])->assertUnprocessable()->assertJsonPath('error.code', 'validation_failed');
+});
+
+test('renew refuses an unknown repository item-shape negotiation value', function (): void {
+    $team = workDrainTeam();
+    $item = workDrainItem(workDrainTask($team));
+    $issued = workDrainCredential(capstanUser());
+    $this->withHeaders($issued['headers'])->postJson(route('api.work.claim', $team), workDrainClaimPayload())->assertOk();
+
+    $this->withHeaders($issued['headers'])->postJson(route('api.work.renew', $team), [
+        'items' => [['item_id' => $item->id, 'fence' => 1]],
+        'item_shape' => 'repository-v2',
+    ])->assertUnprocessable()->assertJsonPath('error.code', 'validation_failed');
+});
+
 test('nonce receipt records the exact served brief and model while rejecting another signed nonce', function (): void {
     Date::setTestNow('2026-10-23 10:00:00');
     $team = workDrainTeam();

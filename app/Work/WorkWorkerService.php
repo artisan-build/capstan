@@ -119,6 +119,7 @@ final readonly class WorkWorkerService
                 'task' => array_filter([
                     'id' => $item->work_task_id,
                     'title' => $item->workTask->title,
+                    'repository' => $item->workTask->repository,
                     'workflow_ref' => $item->workTask->workflow_ref,
                     'workflow_sha' => $item->workTask->workflow_sha,
                     'brief_page_id' => $item->workTask->brief_page_id,

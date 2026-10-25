@@ -146,7 +146,7 @@ final class WorkRepresentation
                 'timebox_minutes' => 'integer', 'creator_actor' => 'string', 'owner_actor' => 'string',
                 'escalation_actor' => 'string',
                 'priority' => 'string', 'expires_at' => 'string?', 'pr' => 'pr?',
-                'cancelled_at' => 'string?', 'parent_task_id' => 'string?',
+                'cancelled_at' => 'string?', 'parent_task_id' => 'string?', 'repository' => 'string?',
                 'workflow_ref' => 'string?', 'workflow_sha' => 'string?',
                 'brief_page_id' => 'string?', 'brief_page_version_id' => 'string?',
                 'created_at' => 'string',

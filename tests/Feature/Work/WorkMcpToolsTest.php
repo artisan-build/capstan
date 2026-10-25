@@ -163,6 +163,15 @@ function assertWorkSchema(mixed $value, array $schema): void
     }
 }
 
+test('product MCP keeps its orchestration action vocabulary without repository editing', function (): void {
+    $definition = resolve(OrchestrateTool::class)->toArray();
+
+    expect($definition['inputSchema']['properties']['action']['enum'])->toBe([
+        'create_child', 'set_priority', 'set_pr', 'repin_workflow', 'revise_brief', 'queue_item',
+        'cancel_item', 'steer', 'review_finish', 'decide', 'request_wake', 'escalate', 'finish',
+    ])->not->toContain('set_repository');
+});
+
 test('owner routing pool defaults and explicit addresses persist with UUIDv7 revisions', function (): void {
     $user = capstanUser(['role' => 'owner']);
     $token = workMcpToken($user);
@@ -261,6 +270,38 @@ test('create_task accepts numeric PR strings and returns integers on accepted an
         ->and(WorkTask::query()->findOrFail($first['task']['id'])->pr['number'])->toBeInt()->toBe(124);
 });
 
+test('create_task normalizes and replays a repository slug', function (): void {
+    $user = capstanUser(['role' => 'owner']);
+    $token = workMcpToken($user);
+    $team = workMcpTeam();
+    $arguments = ['idempotency_key' => 'repository-create', 'repository' => 'Artisan-Build/Capstan-CLI'];
+
+    $first = workMcpCreate($team, $token, $arguments);
+    $replay = workMcpCreate($team, $token, $arguments);
+
+    expect($first['task']['repository'])->toBe('artisan-build/capstan-cli')
+        ->and($replay['task']['repository'])->toBe('artisan-build/capstan-cli')
+        ->and($replay['outcome'])->toBe('already_accepted')
+        ->and(WorkTask::query()->findOrFail($first['task']['id'])->repository)->toBe('artisan-build/capstan-cli');
+});
+
+test('create_task refuses a repository URL without creating a task', function (): void {
+    $user = capstanUser(['role' => 'owner']);
+    $token = workMcpToken($user);
+    $team = workMcpTeam();
+    $before = WorkTask::query()->count();
+
+    workMcpCall('create_task', [
+        'team_id' => $team->id,
+        'idempotency_key' => 'repository-url-create',
+        'title' => 'Invalid repository URL',
+        'brief' => 'Invalid repository URL brief',
+        'repository' => 'https://github.com/artisan-build/capstan',
+    ], $token)->assertOk()->assertJsonPath('result.isError', true);
+
+    expect(WorkTask::query()->count())->toBe($before);
+});
+
 test('create_task preserves explicit child pins only when the root is unpinned', function (): void {
     $user = capstanUser(['role' => 'owner']);
     $token = workMcpToken($user);
@@ -336,6 +377,7 @@ test('kickoff pins the latest Page version and atomically queues one orchestrato
     $result = workMcpResult('kickoff', [
         'team_id' => $team->id, 'idempotency_key' => 'page-kickoff',
         'page_id' => $page->id, 'title' => 'Build the PRD', 'priority' => 'P1',
+        'repository' => 'Artisan-Build/Capstan',
         'workflow_ref' => 'artisan-build/workflows:.solo/workflow.md', 'workflow_sha' => $sha,
     ], $token);
     $task = WorkTask::query()->findOrFail($result['task']['id']);
@@ -344,6 +386,7 @@ test('kickoff pins the latest Page version and atomically queues one orchestrato
         ->and($result['item']['role'])->toBe(WorkItem::ROLE_ORCHESTRATOR)
         ->and($task->brief_page_id)->toBe($page->id)
         ->and($task->brief_page_version_id)->toBe($version->id)
+        ->and($result['task']['repository'])->toBe('artisan-build/capstan')
         ->and($task->workflow_sha)->toBe($sha)
         ->and($task->briefRevisions()->sole()->content)->toBe($content)
         ->and($task->items()->where('role', WorkItem::ROLE_ORCHESTRATOR)->count())->toBe(1);
@@ -361,6 +404,23 @@ test('kickoff pins the latest Page version and atomically queues one orchestrato
 
     expect($task->fresh()->brief_page_version_id)->toBe($version->id)
         ->and($task->briefRevisions()->sole()->content)->toBe($content);
+
+    $replay = workMcpResult('kickoff', [
+        'team_id' => $team->id, 'idempotency_key' => 'page-kickoff',
+        'page_id' => $page->id, 'title' => 'Build the PRD', 'priority' => 'P1',
+        'repository' => 'Artisan-Build/Capstan',
+        'workflow_ref' => 'artisan-build/workflows:.solo/workflow.md', 'workflow_sha' => $sha,
+    ], $token);
+    expect($replay['outcome'])->toBe('already_accepted')
+        ->and($replay['task']['repository'])->toBe('artisan-build/capstan');
+
+    $beforeInvalidRepository = WorkTask::query()->count();
+    workMcpCall('kickoff', [
+        'team_id' => $team->id, 'idempotency_key' => 'page-kickoff-extra-segment',
+        'page_id' => $page->id, 'title' => 'Invalid repository kickoff',
+        'repository' => 'artisan-build/capstan/extra',
+    ], $token)->assertOk()->assertJsonPath('result.isError', true);
+    expect(WorkTask::query()->count())->toBe($beforeInvalidRepository);
 
     $child = workMcpCreate($team, $token, [
         'idempotency_key' => 'pinned-child', 'parent_task_id' => $task->id,

@@ -174,6 +174,157 @@ test('an orchestrator repins one workflow across the tree and records one old-ne
         ->and(WorkOrchestrationEvent::query()->where('kind', 'workflow_repinned')->count())->toBe(1);
 });
 
+test('create_child inherits the direct parent repository without changing the root workflow pin', function (): void {
+    $sha = str_repeat('a', 40);
+    $parent = orchestrationTask();
+    $parent->update([
+        'repository' => 'artisan-build/capstan',
+        'workflow_ref' => 'artisan-build/how-we-work:.solo/workflow.md',
+        'workflow_sha' => $sha,
+    ]);
+    $direct = orchestrationTask($parent);
+    $direct->update(['repository' => 'artisan-build/capstan-cli']);
+    orchestrationEvent($parent, 'repository-inheritance');
+    $turn = orchestrationClaims($parent, orchestrationHost('repository-inheritance-host'))[0];
+    $surface = resolve(WorkOrchestrationSurface::class);
+
+    $result = $surface->act($surface->claimed($turn->id, $turn->fence), 'create_child', [
+        'under_task_id' => $direct->id,
+        'title' => 'Inherited repository child',
+        'brief' => 'Inherited repository brief',
+    ], CarbonImmutable::now());
+    $child = WorkTask::query()->findOrFail($result['task_id']);
+
+    expect($child->repository)->toBe('artisan-build/capstan-cli')
+        ->and($child->workflow_ref)->toBe($parent->workflow_ref)
+        ->and($child->workflow_sha)->toBe($sha)
+        ->and($parent->fresh()->repository)->toBe('artisan-build/capstan');
+});
+
+test('create_child accepts an explicit cross-repository override without changing the workflow pin', function (): void {
+    $sha = str_repeat('b', 40);
+    $parent = orchestrationTask();
+    $parent->update([
+        'repository' => 'artisan-build/capstan',
+        'workflow_ref' => 'artisan-build/how-we-work:.solo/workflow.md',
+        'workflow_sha' => $sha,
+    ]);
+    orchestrationEvent($parent, 'repository-override');
+    $turn = orchestrationClaims($parent, orchestrationHost('repository-override-host'))[0];
+    $surface = resolve(WorkOrchestrationSurface::class);
+
+    $result = $surface->act($surface->claimed($turn->id, $turn->fence), 'create_child', [
+        'under_task_id' => $parent->id,
+        'title' => 'Override repository child',
+        'brief' => 'Override repository brief',
+        'repository' => 'Artisan-Build/Capstan-CLI',
+    ], CarbonImmutable::now());
+    $child = WorkTask::query()->findOrFail($result['task_id']);
+
+    expect($child->repository)->toBe('artisan-build/capstan-cli')
+        ->and($child->workflow_ref)->toBe($parent->workflow_ref)
+        ->and($child->workflow_sha)->toBe($sha);
+});
+
+test('create_child refuses a malformed repository before creating a task', function (): void {
+    $parent = orchestrationTask();
+    orchestrationEvent($parent, 'repository-malformed');
+    $turn = orchestrationClaims($parent, orchestrationHost('repository-malformed-host'))[0];
+    $surface = resolve(WorkOrchestrationSurface::class);
+    $before = WorkTask::query()->count();
+
+    expect(fn () => $surface->act($surface->claimed($turn->id, $turn->fence), 'create_child', [
+        'under_task_id' => $parent->id,
+        'title' => 'Malformed repository child',
+        'brief' => 'Malformed repository brief',
+        'repository' => 'artisan--build/capstan',
+    ], CarbonImmutable::now()))->toThrow(ApiErrorException::class);
+    expect(WorkTask::query()->count())->toBe($before);
+});
+
+test('a current fenced orchestrator edits a repository once while stale and foreign authorities have no effect', function (): void {
+    $parent = orchestrationTask();
+    $parent->update([
+        'workflow_ref' => 'artisan-build/how-we-work:.solo/workflow.md',
+        'workflow_sha' => str_repeat('c', 40),
+    ]);
+    $child = orchestrationTask($parent);
+    $foreign = orchestrationTask();
+    orchestrationEvent($parent, 'repository-edit');
+    $turn = orchestrationClaims($parent, orchestrationHost('repository-edit-host'))[0];
+    $surface = resolve(WorkOrchestrationSurface::class);
+    $context = $surface->claimed($turn->id, $turn->fence);
+
+    $result = $surface->act($context, 'set_repository', [
+        'task_id' => $child->id,
+        'repository' => 'Artisan-Build/Capstan-CLI',
+    ], CarbonImmutable::now());
+    $surface->act($context, 'set_repository', [
+        'task_id' => $child->id,
+        'repository' => 'ARTISAN-BUILD/CAPSTAN-CLI',
+    ], CarbonImmutable::now());
+
+    expect($result['task_id'])->toBe($child->id)
+        ->and($child->fresh()->repository)->toBe('artisan-build/capstan-cli')
+        ->and($child->fresh()->workflow_ref)->toBe('artisan-build/how-we-work:.solo/workflow.md')
+        ->and($child->fresh()->workflow_sha)->toBe(str_repeat('c', 40))
+        ->and(WorkOrchestrationEvent::query()->where('kind', 'task_repository_changed')->count())->toBe(1)
+        ->and(WorkOrchestrationEvent::query()->where('kind', 'task_repository_changed')->sole()->evidence)->toBe([
+            'task_id' => $child->id,
+            'new_repository' => 'artisan-build/capstan-cli',
+        ]);
+
+    $snapshot = fn (): array => [
+        $child->fresh()->repository,
+        $child->fresh()->workflow_ref,
+        $child->fresh()->workflow_sha,
+        $foreign->fresh()->repository,
+        WorkOrchestrationEvent::query()->where('kind', 'task_repository_changed')->count(),
+    ];
+    $before = $snapshot();
+
+    expect(fn () => $surface->act($surface->claimed($turn->id, $turn->fence + 1), 'set_repository', [
+        'task_id' => $child->id, 'repository' => 'artisan-build/other',
+    ], CarbonImmutable::now()))->toThrow(ApiErrorException::class);
+    expect($snapshot())->toBe($before);
+
+    $staleSeat = new WorkOrchestrationContext(
+        $parent->id,
+        (string) $turn->claimant_actor,
+        (int) $turn->claimant_spoke_id,
+        (int) $turn->seat_fence + 1,
+        null,
+        $turn->id,
+        $turn->fence,
+    );
+    expect(fn () => $surface->act($staleSeat, 'set_repository', [
+        'task_id' => $child->id, 'repository' => 'artisan-build/other',
+    ], CarbonImmutable::now()))->toThrow(ApiErrorException::class);
+    expect($snapshot())->toBe($before);
+
+    expect(fn () => $surface->act($context, 'set_repository', [
+        'task_id' => $foreign->id, 'repository' => 'artisan-build/other',
+    ], CarbonImmutable::now()))->toThrow(ApiErrorException::class);
+    expect($snapshot())->toBe($before);
+});
+
+test('the repository edit refuses an oversized slug without row or event mutation', function (): void {
+    $parent = orchestrationTask();
+    $child = orchestrationTask($parent);
+    orchestrationEvent($parent, 'repository-overlength');
+    $turn = orchestrationClaims($parent, orchestrationHost('repository-overlength-host'))[0];
+    $link = resolve(WorkWorkerLinks::class)->forItem($turn)['orchestrate'];
+    $before = WorkOrchestrationEvent::query()->count();
+
+    $this->postJson($link, [
+        'action' => 'set_repository',
+        'input' => ['task_id' => $child->id, 'repository' => 'artisan-build/'.str_repeat('r', 101)],
+        'idempotency_key' => 'repository-overlength',
+    ])->assertUnprocessable()->assertJsonPath('error.code', 'invalid_orchestration_action');
+    expect($child->fresh()->repository)->toBeNull()
+        ->and(WorkOrchestrationEvent::query()->count())->toBe($before);
+});
+
 test('orchestrator PR updates normalize numeric strings before event storage and replay', function (): void {
     $parent = orchestrationTask();
     orchestrationEvent($parent, 'numeric-pr-turn');
@@ -610,6 +761,7 @@ test('child budget counts only orchestrator created children and cancels automat
 test('signed claimed-turn links expose fixed context and all scoped actions', function (): void {
     $addressed = capstanUser();
     $parent = orchestrationTask();
+    $parent->update(['repository' => 'artisan-build/capstan']);
     $parent->briefRevisions()->create(['sequence' => 1, 'content' => 'Canonical brief', 'author_actor' => 'supervisor']);
     $child = orchestrationTask($parent);
     $event = orchestrationEvent($parent, 'signed-fixed');
@@ -630,6 +782,7 @@ test('signed claimed-turn links expose fixed context and all scoped actions', fu
     expect($links)->toHaveKeys(['orchestration', 'orchestrate']);
     $this->getJson($links['orchestration'])->assertOk()
         ->assertJsonPath('context.task.id', $parent->id)
+        ->assertJsonPath('context.task.repository', 'artisan-build/capstan')
         ->assertJsonPath('context.brief.content', 'Canonical brief')
         ->assertJsonPath('context.state.content', 'Latest state')
         ->assertJsonPath('context.decisions.0.decision', 'Prior choice')
@@ -637,7 +790,13 @@ test('signed claimed-turn links expose fixed context and all scoped actions', fu
         ->assertJsonPath('context.events.0.id', $event->id);
     $post = (fn (string $action, array $input, string $key): array => $this->postJson($links['orchestrate'], ['action' => $action, 'input' => $input, 'idempotency_key' => $key])
         ->assertOk()->assertJsonPath('outcome', 'accepted')->json());
-    $created = $post('create_child', ['under_task_id' => $parent->id, 'title' => 'Signed child', 'brief' => 'Signed brief'], 'signed-create');
+    $created = $post('create_child', [
+        'under_task_id' => $parent->id,
+        'title' => 'Signed child',
+        'brief' => 'Signed brief',
+        'repository' => 'Artisan-Build/Capstan-CLI',
+    ], 'signed-create');
+    $post('set_repository', ['task_id' => $child->id, 'repository' => 'Artisan-Build/Capstan-CLI'], 'signed-repository');
     $post('revise_brief', ['task_id' => $child->id, 'brief' => 'Signed revision'], 'signed-revise');
     $queued = $post('queue_item', ['task_id' => $child->id, 'role' => 'builder'], 'signed-queue');
     $replay = $this->postJson($links['orchestrate'], ['action' => 'queue_item', 'input' => ['task_id' => $child->id, 'role' => 'builder'], 'idempotency_key' => 'signed-queue'])
@@ -650,10 +809,13 @@ test('signed claimed-turn links expose fixed context and all scoped actions', fu
     $finished = $post('finish', ['state' => 'acted', 'content' => 'Signed state'], 'signed-finish');
 
     expect($created['task_id'])->not->toBe($parent->id)
+        ->and(WorkTask::query()->findOrFail($created['task_id'])->repository)->toBe('artisan-build/capstan-cli')
         ->and($replay['item_id'])->toBe($queued['item_id'])
+        ->and($child->fresh()->repository)->toBe('artisan-build/capstan-cli')
         ->and($finished['status'])->toBe('completed')
         ->and(orchestrationSeat($parent)->children_created)->toBe(1)
-        ->and(WorkStateRevision::query()->where('work_task_id', $parent->id)->count())->toBe(2);
+        ->and(WorkStateRevision::query()->where('work_task_id', $parent->id)->count())->toBe(2)
+        ->and($turn->fresh()->first_fetched_at)->toBeNull();
 });
 
 test('signed child creation enforces canonical intent and team failover defaults before durable effects', function (): void {
@@ -695,6 +857,7 @@ test('signed child creation enforces canonical intent and team failover defaults
     $refuse(['required_capabilities' => ['duplicate', 'duplicate']], 'signed-capabilities-duplicate');
     $refuse(['required_capabilities' => [str_repeat('c', 65)]], 'signed-capability-length');
     $refuse(['required_capabilities' => array_map(fn (int $i): string => 'cap-'.$i, range(1, 26))], 'signed-capabilities-overrun');
+    $refuse(['repository' => 'artisan--build/capstan'], 'signed-repository-malformed');
 
     foreach ([false, true] as $default) {
         $team->update(['default_failover' => $default]);

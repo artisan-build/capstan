@@ -11,6 +11,7 @@ use App\Mcp\OwnerSubjectResolver;
 use App\Mcp\ToolResponse;
 use App\Models\Spoke;
 use App\Models\Team;
+use App\Work\GitHubRepository;
 use App\Work\TeamWorkPolicy;
 use App\Work\WorkPriorityService;
 use App\Work\WorkReassignmentService;
@@ -24,6 +25,7 @@ use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\JsonSchemaTypeFactory;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use InvalidArgumentException;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
@@ -52,6 +54,7 @@ abstract class WorkTool extends CapstanTool
                 'priority' => $schema->string()->enum(WorkPriority::class),
                 'depends_on' => $schema->array()->items($schema->string())->max(25)->unique(),
                 'expires_at' => $schema->string(),
+                'repository' => $schema->string()->min(1)->max(GitHubRepository::MAX_LENGTH),
                 'workflow_ref' => $schema->string()->min(1)->max(2048),
                 'workflow_sha' => $schema->string()->min(40)->max(40),
                 'pr' => $schema->object([
@@ -64,6 +67,7 @@ abstract class WorkTool extends CapstanTool
                 'title' => $schema->string()->min(1)->max(255)->required(),
                 'page_id' => $schema->string()->required(),
                 'priority' => $schema->string()->enum(WorkPriority::class),
+                'repository' => $schema->string()->min(1)->max(GitHubRepository::MAX_LENGTH),
                 'workflow_ref' => $schema->string()->min(1)->max(2048),
                 'workflow_sha' => $schema->string()->min(40)->max(40),
             ],
@@ -186,6 +190,7 @@ abstract class WorkTool extends CapstanTool
                 'depends_on' => ['sometimes', 'array', 'list', 'max:25'],
                 'priority' => [$this->name() === 'set_task_priority' ? 'required' : 'sometimes', 'required', Rule::enum(WorkPriority::class)],
                 'expires_at' => ['sometimes', 'required', 'date'],
+                'repository' => ['sometimes', 'required', 'string', 'max:'.GitHubRepository::MAX_LENGTH],
                 'workflow_ref' => ['sometimes', 'required', 'string', 'min:1', 'max:2048'],
                 'workflow_sha' => ['sometimes', 'required', 'string', 'regex:/\A[a-f0-9]{40}\z/D'],
                 'pr' => ['sometimes', 'required', 'array'],
@@ -213,6 +218,13 @@ abstract class WorkTool extends CapstanTool
             }
         }
         $input = $request->validate($rules);
+        if (isset($input['repository'])) {
+            try {
+                $input['repository'] = GitHubRepository::normalize($input['repository']);
+            } catch (InvalidArgumentException) {
+                throw ValidationException::withMessages(['repository' => ['Use a GitHub owner/repository slug.']]);
+            }
+        }
         if ($this->name() === 'create_task' && (isset($input['brief']) === isset($input['page_id']))) {
             throw ValidationException::withMessages(['brief' => ['Provide exactly one of brief or page_id.']]);
         }
