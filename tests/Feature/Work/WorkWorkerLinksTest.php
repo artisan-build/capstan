@@ -375,3 +375,46 @@ test('steers scope unread recent order and first read time', function (): void {
     expect($itemUnread->fresh()->read_at->equalTo($first))->toBeTrue()
         ->and($recent->fresh()->read_at->equalTo(now()->subMinute()->subHour()))->toBeTrue();
 });
+
+test('a drain steer poll does not record orb responsiveness or reset its deadline', function (): void {
+    $deadline = now()->subMinutes(2);
+    $firstMiss = now()->subMinute();
+    $stalledAt = now()->subSeconds(30);
+    $item = workerLinkItem([
+        'work_deadline_at' => $deadline,
+        'first_deadline_missed_at' => $firstMiss,
+        'stalled_at' => $stalledAt,
+    ]);
+    foreach (['deadline', 'stall'] as $sequence => $reason) {
+        WorkDirective::query()->create([
+            'work_item_id' => $item->id,
+            'claimant_spoke_id' => $item->claimant_spoke_id,
+            'fence' => $item->fence,
+            'sequence' => $sequence + 1,
+            'kind' => 'nudge',
+            'reason' => $reason,
+            'payload' => [],
+            'status' => 'pending',
+            'issued_at' => now()->subMinute(),
+        ]);
+    }
+    $steer = $item->workTask->steers()->create([
+        'work_item_id' => $item->id,
+        'text' => 'Continue the same orb thread',
+        'author_actor' => 'orchestrator',
+    ]);
+
+    $this->getJson(resolve(WorkWorkerLinks::class)->forItem($item)['steers'])
+        ->assertOk()
+        ->assertJsonPath('steers.0.id', $steer->id);
+
+    $polled = $item->refresh();
+    expect($steer->fresh()->read_at)->not->toBeNull()
+        ->and($polled->work_deadline_at?->equalTo($deadline))->toBeTrue()
+        ->and($polled->first_deadline_missed_at?->equalTo($firstMiss))->toBeTrue()
+        ->and($polled->stalled_at?->equalTo($stalledAt))->toBeTrue()
+        ->and($polled->first_fetched_at)->toBeNull()
+        ->and($polled->milestones()->count())->toBe(0)
+        ->and($polled->directives()->where('status', 'pending')->count())->toBe(2)
+        ->and($polled->directives()->pluck('outcome')->all())->toBe([null, null]);
+});
