@@ -100,6 +100,8 @@ final readonly class AmpClaimBinder
     {
         $query = WorkItem::query()
             ->with(['workTask', 'claimantSpoke'])
+            ->where('amp_project_id', $identity->projectId)
+            ->where('amp_thread_id', $identity->threadId)
             ->whereIn('state', [WorkItemState::Claimed, WorkItemState::Delivered, WorkItemState::Routed])
             ->whereNotNull('handed_off_at')
             ->whereNotNull('handed_off_session_ref')

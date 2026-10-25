@@ -15,6 +15,8 @@ final class AmpTokenVerifier
 
     private const string ALGORITHM = 'RS256';
 
+    private const int JWKS_REFRESH_COOLDOWN_SECONDS = 10;
+
     public function verify(#[\SensitiveParameter] string $token): AmpWorkloadIdentity
     {
         try {
@@ -120,6 +122,11 @@ final class AmpTokenVerifier
             return $match;
         }
 
+        $cooldownKey = 'capstan:amp-oidc:jwks-refresh:'.hash('sha256', $uri);
+        if (! Cache::add($cooldownKey, true, now()->addSeconds(self::JWKS_REFRESH_COOLDOWN_SECONDS))) {
+            $this->deny();
+        }
+
         $keys = $this->keys($uri, true);
         $match = $this->findKey($keys, $kid);
         if ($match === null) {
@@ -166,8 +173,11 @@ final class AmpTokenVerifier
     private function findKey(array $keys, string $kid): ?array
     {
         $matches = array_values(array_filter($keys, fn (array $key): bool => ($key['kid'] ?? null) === $kid));
-        if (count($matches) !== 1) {
+        if ($matches === []) {
             return null;
+        }
+        if (count($matches) !== 1) {
+            $this->deny();
         }
 
         $key = $matches[0];

@@ -19,6 +19,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
 
@@ -163,6 +164,8 @@ function orbClaim(array $itemAttributes = []): array
         'lease_until' => now()->addMinutes(5),
         'handed_off_at' => now()->subSeconds(30),
         'handed_off_session_ref' => $reference->encode(),
+        'amp_project_id' => $reference->projectId,
+        'amp_thread_id' => $reference->threadId,
         'launch_nonce' => (string) Str::uuid7(),
     ], $itemAttributes));
 
@@ -236,19 +239,8 @@ test('a valid exact claim can list and call only the three orb tools', function 
 });
 
 test('started is idempotent and progress extends the deadline with frozen stall semantics', function (): void {
-    $claim = orbClaim(['stalled_at' => now()->subMinute()]);
+    $claim = orbClaim();
     $token = orbToken();
-    $directive = WorkDirective::query()->create([
-        'work_item_id' => $claim['item']->id,
-        'claimant_spoke_id' => $claim['spoke']->id,
-        'fence' => $claim['item']->fence,
-        'sequence' => 1,
-        'kind' => 'nudge',
-        'reason' => 'stall',
-        'payload' => [],
-        'status' => 'pending',
-        'issued_at' => now()->subMinute(),
-    ]);
 
     $started = orbCall('work_started', (object) [], $token)->assertOk();
     expect($claim['item']->milestones()->where('kind', WorkMilestoneKind::Started)->count())->toBe(1)
@@ -258,6 +250,18 @@ test('started is idempotent and progress extends the deadline with frozen stall 
         ->assertJsonPath('result.structuredContent.milestone_id', $started->json('result.structuredContent.milestone_id'));
     expect($claim['item']->milestones()->where('kind', WorkMilestoneKind::Started)->count())->toBe(1);
 
+    $claim['item']->forceFill(['stalled_at' => now()->subSecond()])->save();
+    $directive = WorkDirective::query()->create([
+        'work_item_id' => $claim['item']->id,
+        'claimant_spoke_id' => $claim['spoke']->id,
+        'fence' => $claim['item']->fence,
+        'sequence' => 1,
+        'kind' => 'nudge',
+        'reason' => 'stall',
+        'payload' => [],
+        'status' => 'pending',
+        'issued_at' => now()->subSecond(),
+    ]);
     $summary = 'Test-created progress '.Str::random(12);
     orbCall('work_progress', ['summary' => $summary], $token)->assertOk();
     $item = $claim['item']->fresh();
@@ -333,6 +337,34 @@ test('discovery and JWKS failures are closed', function (string $failure): void 
     orbList(orbToken())->assertUnauthorized();
 })->with(['discovery', 'jwks']);
 
+test('foreign or redirecting discovery and JWKS responses are refused without following them', function (string $failure): void {
+    orbClaim();
+    Http::swap(new HttpFactory);
+    Http::preventStrayRequests();
+    Http::fake(match ($failure) {
+        'foreign jwks' => [ORB_DISCOVERY => Http::response([
+            'issuer' => ORB_ISSUER,
+            'jwks_uri' => 'https://keys.example.test/jwks.json',
+            'id_token_signing_alg_values_supported' => ['RS256'],
+        ])],
+        'discovery redirect' => [
+            ORB_DISCOVERY => Http::response('', 302, ['Location' => 'https://keys.example.test/discovery']),
+        ],
+        'jwks redirect' => [
+            ORB_DISCOVERY => Http::response([
+                'issuer' => ORB_ISSUER,
+                'jwks_uri' => ORB_JWKS,
+                'id_token_signing_alg_values_supported' => ['RS256'],
+            ]),
+            ORB_JWKS => Http::response('', 302, ['Location' => 'https://keys.example.test/jwks.json']),
+        ],
+    });
+
+    orbList(orbToken())->assertUnauthorized();
+
+    Http::assertSentCount($failure === 'jwks redirect' ? 2 : 1);
+})->with(['foreign jwks', 'discovery redirect', 'jwks redirect']);
+
 test('an unknown key refreshes JWKS once and still requires a valid signature', function (): void {
     $claim = orbClaim();
     $rotated = orbKeyPair('rotated');
@@ -351,6 +383,82 @@ test('an unknown key refreshes JWKS once and still requires a valid signature', 
     Http::assertSentCount(3);
     expect(AmpIdentity::query()->where('user_id', $claim['user']->id)->exists())->toBeTrue();
 });
+
+test('repeated unknown keys share one JWKS refresh cooldown', function (): void {
+    orbClaim();
+
+    orbList(orbToken([], 'unknown-one'))->assertUnauthorized();
+    orbList(orbToken([], 'unknown-two'))->assertUnauthorized();
+
+    Http::assertSentCount(3);
+});
+
+test('duplicate matching keys and malformed RSA keys are refused', function (string $failure): void {
+    orbClaim();
+    $key = orbKeyPair()['jwk'];
+    orbFakeIdentityProvider($failure === 'duplicate'
+        ? [$key, $key]
+        : [[...$key, 'n' => 'not-valid-base64url+']]);
+
+    orbList(orbToken())->assertUnauthorized();
+    Http::assertSentCount(2);
+})->with(['duplicate', 'malformed']);
+
+test('future and incorrectly typed token times are refused', function (array $overrides): void {
+    orbClaim();
+    orbList(orbToken())->assertOk();
+    orbList(orbToken($overrides))->assertUnauthorized()->assertExactJson(['message' => 'Unauthenticated.']);
+})->with([
+    'future issued at' => [['iat' => now()->addSeconds(61)->timestamp]],
+    'future not before' => [['nbf' => now()->addSeconds(61)->timestamp]],
+    'string expiry' => [['exp' => (string) now()->addMinutes(10)->timestamp]],
+    'array issued at' => [['iat' => [now()->timestamp]]],
+    'string not before' => [['nbf' => (string) now()->timestamp]],
+]);
+
+test('unknown and non-object tool arguments are refused without changing work', function (): void {
+    $claim = orbClaim(['stalled_at' => now()->subMinute()]);
+    $lease = $claim['item']->lease_until;
+
+    $unknown = orbCall('work_started', ['item_id' => $claim['item']->id], orbToken());
+    $list = orbCall('work_progress', ['not-an-object'], orbToken());
+
+    expect($unknown->json('result.structuredContent'))->toBeNull()
+        ->and($list->json('result.structuredContent'))->toBeNull()
+        ->and($claim['item']->milestones()->count())->toBe(0)
+        ->and($claim['item']->fresh()->lease_until?->equalTo($lease))->toBeTrue()
+        ->and($claim['item']->fresh()->stalled_at)->not->toBeNull();
+});
+
+test('invalid progress summaries do not change claim state', function (mixed $summary): void {
+    $claim = orbClaim(['stalled_at' => now()->subMinute(), 'last_progress' => 'Existing progress']);
+    $lease = $claim['item']->lease_until;
+    $directive = WorkDirective::query()->create([
+        'work_item_id' => $claim['item']->id,
+        'claimant_spoke_id' => $claim['spoke']->id,
+        'fence' => $claim['item']->fence,
+        'sequence' => 1,
+        'kind' => 'nudge',
+        'reason' => 'stall',
+        'payload' => [],
+        'status' => 'pending',
+        'issued_at' => now()->subMinute(),
+    ]);
+
+    $response = orbCall('work_progress', ['summary' => $summary], orbToken());
+
+    expect($response->json('result.structuredContent'))->toBeNull()
+        ->and($claim['item']->milestones()->count())->toBe(0)
+        ->and($claim['item']->fresh()->last_progress)->toBe('Existing progress')
+        ->and($claim['item']->fresh()->lease_until?->equalTo($lease))->toBeTrue()
+        ->and($claim['item']->fresh()->stalled_at)->not->toBeNull()
+        ->and($directive->fresh()->status)->toBe('pending');
+})->with([
+    'empty' => [''],
+    'whitespace' => ['   '],
+    'oversized' => [str_repeat('x', WorkItem::LAST_PROGRESS_MAX_LENGTH + 1)],
+    'non-string' => [123],
+]);
 
 test('claim user team and spoke authority are checked on every request', function (Closure $change): void {
     $claim = orbClaim();
@@ -406,12 +514,35 @@ test('more than one live claim for the same Amp project and thread is refused', 
         'claimed_at' => now()->subMinute(),
         'lease_until' => now()->addMinutes(5),
         'handed_off_at' => now()->subSeconds(10),
+        'amp_project_id' => $first['reference']->projectId,
+        'amp_thread_id' => $first['reference']->threadId,
         'launch_nonce' => (string) Str::uuid7(),
     ]);
     expect($second->id)->not->toBe($first['item']->id);
 
     orbList(orbToken())->assertUnauthorized();
     expect(AmpIdentity::query()->count())->toBe(0);
+});
+
+test('claim lookup executes against the indexed exact Amp project and thread', function (): void {
+    orbClaim();
+    $queries = [];
+    DB::listen(function ($query) use (&$queries): void {
+        $queries[] = ['sql' => $query->sql, 'bindings' => $query->bindings];
+    });
+
+    orbList(orbToken())->assertOk();
+
+    $lookup = collect($queries)->first(fn (array $query): bool => str_contains($query['sql'], 'amp_project_id')
+        && str_contains($query['sql'], 'amp_thread_id') && str_contains($query['sql'], 'work_items'));
+    expect($lookup)->not->toBeNull()
+        ->and($lookup['bindings'])->toContain('amp-project-1')
+        ->and($lookup['bindings'])->toContain('T-orb-thread-1');
+
+    $index = collect(Schema::getIndexes('work_items'))->firstWhere('name', 'work_items_amp_claim_lookup_index');
+    expect($index)->not->toBeNull()
+        ->and($index['columns'])->toBe(['amp_project_id', 'amp_thread_id'])
+        ->and($index['unique'])->toBeFalse();
 });
 
 test('first use linking is conflict safe authoritative and cannot rebind', function (): void {
