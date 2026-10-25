@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\WorkItemState;
+use App\Enums\WorkMilestoneKind;
 use App\Http\ApiErrorException;
 use App\Models\Spoke;
 use App\Models\Team;
@@ -12,10 +13,12 @@ use App\Models\WorkSteer;
 use App\Models\WorkTask;
 use App\Work\AmpSessionReference;
 use App\Work\WorkClaimService;
+use App\Work\WorkDirectiveService;
 use App\Work\WorkFinishService;
 use App\Work\WorkItemStateService;
 use App\Work\WorkOrchestrationContext;
 use App\Work\WorkOrchestrationSurface;
+use App\Work\WorkSweepService;
 use App\Work\WorkWorkerLinks;
 use App\Work\WorkWorkerService;
 use Carbon\CarbonImmutable;
@@ -29,7 +32,7 @@ beforeEach(function (): void {
 });
 
 /** @return array{root: WorkTask, child: WorkTask, item: WorkItem, finish: WorkFinish, worker: Spoke, turn: WorkItem, context: WorkOrchestrationContext} */
-function finishVerificationFixture(): array
+function finishVerificationFixture(?array $pr = null): array
 {
     $root = WorkTask::query()->create([
         'team_id' => Team::default()->id,
@@ -72,7 +75,7 @@ function finishVerificationFixture(): array
         $item->fence,
         (string) $item->launch_nonce,
         'Finished test work '.Str::random(10),
-        [
+        $pr ?? [
             'repo' => 'artisan-build/capstan',
             'number' => 314,
             'url' => 'https://github.com/artisan-build/capstan/pull/314',
@@ -229,6 +232,172 @@ test('corrections preserve the claim and Amp thread while creating one steer and
         ->and($refinished->handed_off_session_ref)->toBe($itemBefore->handed_off_session_ref)
         ->and($refinished->work_deadline_at)->toBeNull()
         ->and(WorkSteer::query()->where('work_item_id', $item->id)->count())->toBe(1);
+});
+
+test('finish PR key order stays canonical across replay corrections and a second finish', function (): void {
+    $reordered = [
+        'number' => 314,
+        'url' => 'https://github.com/artisan-build/capstan/pull/314',
+        'repo' => 'artisan-build/capstan',
+    ];
+    $canonical = [
+        'repo' => 'artisan-build/capstan',
+        'number' => 314,
+        'url' => 'https://github.com/artisan-build/capstan/pull/314',
+    ];
+    $fixture = finishVerificationFixture($reordered);
+    $service = resolve(WorkFinishService::class);
+
+    $replay = $service->declare(
+        $fixture['item']->id,
+        $fixture['item']->fence,
+        (string) $fixture['item']->launch_nonce,
+        $fixture['finish']->writeup,
+        $reordered,
+    );
+    resolve(WorkOrchestrationSurface::class)->act($fixture['context'], 'review_finish', [
+        'finish_id' => $fixture['finish']->id,
+        'item_id' => $fixture['item']->id,
+        'verdict' => 'corrections',
+        'corrections' => 'Apply the ordered replay correction.',
+    ], now());
+    $second = $service->declare(
+        $fixture['item']->id,
+        $fixture['item']->fence,
+        (string) $fixture['item']->launch_nonce,
+        'Second reordered finish',
+        $reordered,
+    );
+
+    expect($replay->id)->toBe($fixture['finish']->id)
+        ->and($fixture['finish']->fresh()->pr)->toBe($canonical)
+        ->and($fixture['child']->fresh()->pr)->toBe($canonical)
+        ->and(WorkOrchestrationEvent::query()->findOrFail($fixture['finish']->orchestration_event_id)->evidence['pr'])->toBe($canonical)
+        ->and($second->id)->not->toBe($fixture['finish']->id)
+        ->and($second->pr)->toBe($canonical)
+        ->and(WorkFinish::query()->where('work_item_id', $fixture['item']->id)->count())->toBe(2);
+});
+
+test('worker callbacks cannot cross a concurrent finish into awaiting verification', function (string $operation): void {
+    $root = WorkTask::query()->create([
+        'team_id' => Team::default()->id,
+        'title' => 'Finish race root '.Str::random(8),
+        'required_capabilities' => [],
+        'timebox_minutes' => 10,
+        'creator_actor' => 'root-owner',
+    ]);
+    $child = WorkTask::query()->create([
+        'team_id' => $root->team_id,
+        'parent_task_id' => $root->id,
+        'title' => 'Finish race child '.Str::random(8),
+        'required_capabilities' => [],
+        'timebox_minutes' => 10,
+        'creator_actor' => 'root-owner',
+    ]);
+    $workerSpoke = Spoke::query()->create([
+        'actor_id' => 'finish-race-worker',
+        'credential_id' => (string) Str::uuid7(),
+        'last_polled_at' => now(),
+    ]);
+    $reference = AmpSessionReference::make('finish-race-project', 'T-finish-race', 'https://ampcode.com/threads/T-finish-race');
+    $item = $child->items()->create([
+        'role' => 'builder',
+        'state' => WorkItemState::Routed,
+        'fence' => 3,
+        'claimant_actor' => $workerSpoke->actor_id,
+        'claimant_spoke_id' => $workerSpoke->id,
+        'claimed_at' => now()->subMinute(),
+        'lease_until' => now()->addMinutes(5),
+        'work_deadline_at' => now()->addMinutes(10),
+        'handed_off_at' => now()->subMinute(),
+        'handed_off_session_ref' => $reference->encode(),
+        'amp_project_id' => $reference->projectId,
+        'amp_thread_id' => $reference->threadId,
+        'launch_nonce' => (string) Str::uuid7(),
+    ]);
+    $waiting = null;
+    $finish = null;
+    $afterIdentified = function () use ($item, &$waiting, &$finish): void {
+        $finish = resolve(WorkFinishService::class)->declare(
+            $item->id,
+            $item->fence,
+            (string) $item->launch_nonce,
+            'Finish won the worker callback race.',
+            [
+                'repo' => 'artisan-build/capstan',
+                'number' => 315,
+                'url' => 'https://github.com/artisan-build/capstan/pull/315',
+            ],
+        );
+        $waiting = [
+            'item' => $item->fresh()->getRawOriginal(),
+            'finish' => $finish->fresh()->getRawOriginal(),
+            'milestones' => $item->milestones()->count(),
+            'events' => WorkOrchestrationEvent::query()->count(),
+        ];
+    };
+    $worker = resolve(WorkWorkerService::class);
+
+    $attempt = fn () => $operation === 'progress'
+        ? $worker->progress($item->id, $item->fence, (string) $item->launch_nonce, 'Must not cross finish', $afterIdentified)
+        : $worker->milestone($item->id, $item->fence, WorkMilestoneKind::Released, ['summary' => 'Must not release'], $afterIdentified, (string) $item->launch_nonce);
+
+    expect($attempt)->toThrow(HttpException::class);
+    expect($waiting)->not->toBeNull()
+        ->and([
+            'item' => $item->fresh()->getRawOriginal(),
+            'finish' => $finish?->fresh()->getRawOriginal(),
+            'milestones' => $item->milestones()->count(),
+            'events' => WorkOrchestrationEvent::query()->count(),
+        ])->toBe($waiting)
+        ->and($item->fresh()->state)->toBe(WorkItemState::AwaitingVerification)
+        ->and($item->fresh()->work_deadline_at)->toBeNull();
+})->with(['progress', 'released']);
+
+test('a finish-woken orchestrator turn renews its lease and reaches stall repair after both deadlines', function (): void {
+    $fixture = finishVerificationFixture();
+    $turn = $fixture['turn'];
+    $links = resolve(WorkWorkerLinks::class)->forItem($turn);
+
+    resolve(WorkItemStateService::class)->transition($turn, WorkItemState::Delivered, 'spoke', (string) $turn->claimant_actor);
+    resolve(WorkItemStateService::class)->transition($turn->fresh(), WorkItemState::Routed, 'spoke', (string) $turn->claimant_actor);
+    $this->getJson($links['brief'])->assertOk();
+    $this->postJson($links['milestone'], ['kind' => 'started', 'payload' => (object) []])->assertCreated();
+    expect($turn->fresh()->work_deadline_at?->equalTo(now()->addMinutes(10)))->toBeTrue();
+
+    Date::setTestNow(now()->addMinutes(4));
+    resolve(WorkItemStateService::class)->renewClaim(
+        $turn, $fixture['root']->team_id, (int) $turn->claimant_spoke_id, (string) $turn->claimant_actor,
+        $turn->fence, now(), now()->addMinutes(10),
+    );
+    Date::setTestNow(now()->addMinutes(6));
+    resolve(WorkSweepService::class)->liveness(now());
+    expect($turn->fresh()->first_deadline_missed_at?->equalTo(now()))->toBeTrue()
+        ->and($turn->fresh()->stalled_at)->toBeNull();
+
+    Date::setTestNow(now()->addMinutes(3));
+    resolve(WorkItemStateService::class)->renewClaim(
+        $turn->fresh(), $fixture['root']->team_id, (int) $turn->claimant_spoke_id, (string) $turn->claimant_actor,
+        $turn->fence, now(), now()->addMinutes(12),
+    );
+    Date::setTestNow(now()->addMinutes(7));
+    resolve(WorkSweepService::class)->liveness(now());
+    $turn = $turn->fresh();
+    Date::setTestNow(now()->addSeconds(61));
+    $directives = resolve(WorkDirectiveService::class)->poll(
+        $fixture['root']->team_id,
+        (string) $turn->claimant_actor,
+        (int) $turn->claimant_spoke_id,
+        [['item_id' => $turn->id, 'fence' => $turn->fence]],
+        now(),
+    );
+
+    expect($turn->state)->toBe(WorkItemState::Routed)
+        ->and($turn->lease_until?->isAfter(now()))->toBeTrue()
+        ->and($turn->stalled_at?->equalTo(now()->subSeconds(61)))->toBeTrue()
+        ->and($directives)->toHaveCount(1)
+        ->and($directives[0]['reason'])->toBe('stall')
+        ->and($directives[0]['kind'])->toBe('send_enter');
 });
 
 test('review finish refuses stale turn and seat fences wrong targets and invalid verdict payloads without effects', function (): void {

@@ -4,6 +4,7 @@ use App\Enums\WorkItemState;
 use App\Enums\WorkMilestoneKind;
 use App\Models\Spoke;
 use App\Models\Team;
+use App\Models\WorkDirective;
 use App\Models\WorkItem;
 use App\Models\WorkTask;
 use App\Postmaster\RetireSpoke;
@@ -198,6 +199,75 @@ test('each milestone appends UUIDv7 and applies legal transitions and progress',
             ->and($item->fresh()->claimant_spoke_id)->toBeNull()->and($item->fresh()->lease_until)->toBeNull();
     }
 })->with([['started', 'routed'], ['blocked', 'routed'], ['pr_opened', 'routed'], ['note', 'routed'], ['done', 'acted'], ['failed', 'failed'], ['released', 'queued']]);
+
+test('signed started opens one deadline idempotently without clearing a pre-existing stall', function (): void {
+    $item = workerLinkItem([
+        'work_deadline_at' => null,
+        'first_deadline_missed_at' => now()->subMinute(),
+        'stalled_at' => now()->subMinute(),
+    ]);
+    $url = resolve(WorkWorkerLinks::class)->forItem($item)['milestone'];
+
+    $first = $this->postJson($url, ['kind' => 'started', 'payload' => (object) []])->assertCreated();
+    $deadline = now()->addMinutes(10);
+    Date::setTestNow(now()->addMinute());
+    $this->postJson($url, ['kind' => 'started', 'payload' => (object) []])
+        ->assertCreated()
+        ->assertJsonPath('id', $first->json('id'));
+
+    expect($item->milestones()->where('kind', WorkMilestoneKind::Started)->count())->toBe(1)
+        ->and($item->fresh()->work_deadline_at?->equalTo($deadline))->toBeTrue()
+        ->and($item->fresh()->first_deadline_missed_at)->toBeNull()
+        ->and($item->fresh()->stalled_at)->not->toBeNull();
+});
+
+test('signed real progress resets the deadline and settles the current repair episode', function (): void {
+    $item = workerLinkItem([
+        'work_deadline_at' => now()->subMinute(),
+        'first_deadline_missed_at' => now()->subMinute(),
+        'stalled_at' => now()->subMinute(),
+    ]);
+    $lease = $item->lease_until;
+    foreach (['deadline', 'stall'] as $sequence => $reason) {
+        WorkDirective::query()->create([
+            'work_item_id' => $item->id,
+            'claimant_spoke_id' => $item->claimant_spoke_id,
+            'fence' => $item->fence,
+            'sequence' => $sequence + 1,
+            'kind' => 'nudge',
+            'reason' => $reason,
+            'payload' => [],
+            'status' => 'pending',
+            'issued_at' => now()->subMinute(),
+        ]);
+    }
+
+    $this->postJson(resolve(WorkWorkerLinks::class)->forItem($item)['milestone'], [
+        'kind' => 'note',
+        'payload' => ['summary' => 'Signed progress moved the deadline'],
+    ])->assertCreated();
+
+    expect($item->fresh()->work_deadline_at?->equalTo(now()->addMinutes(10)))->toBeTrue()
+        ->and($item->fresh()->first_deadline_missed_at)->toBeNull()
+        ->and($item->fresh()->stalled_at)->toBeNull()
+        ->and($item->fresh()->lease_until?->equalTo($lease))->toBeTrue()
+        ->and($item->directives()->where('status', 'pending')->count())->toBe(0)
+        ->and($item->directives()->pluck('outcome')->all())->toBe([
+            ['result' => 'resolved_by_progress'],
+            ['result' => 'resolved_by_progress'],
+        ]);
+});
+
+test('signed terminal and released milestones do not open a new deadline', function (string $kind): void {
+    $item = workerLinkItem(['work_deadline_at' => null]);
+
+    $this->postJson(resolve(WorkWorkerLinks::class)->forItem($item)['milestone'], [
+        'kind' => $kind,
+        'payload' => (object) [],
+    ])->assertCreated();
+
+    expect($item->fresh()->work_deadline_at)->toBeNull();
+})->with(['done', 'failed', 'released']);
 
 test('signed pr_opened sets PR metadata once and safely replays only the same value', function (): void {
     $item = workerLinkItem();

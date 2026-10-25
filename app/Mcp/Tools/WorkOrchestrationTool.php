@@ -208,7 +208,7 @@ abstract class WorkOrchestrationTool extends CapstanTool
                 'seat_fence' => ['required', 'integer', 'min:1'],
                 'limit' => ['sometimes', 'required', 'integer', 'min:1', 'max:25'],
                 'answer' => ['required', 'string', 'min:1', 'max:10000'],
-                'action' => ['required', 'string', Rule::in(['create_child', 'set_priority', 'set_pr', 'repin_workflow', 'revise_brief', 'queue_item', 'cancel_item', 'steer', 'review_finish', 'decide', 'request_wake', 'escalate', 'finish'])],
+                'action' => ['required', 'string', Rule::in(['create_child', 'set_priority', 'set_pr', 'revise_brief', 'queue_item', 'cancel_item', 'steer', 'review_finish', 'decide', 'request_wake', 'escalate', 'finish'])],
                 'input' => ['required', 'array'],
                 'idempotency_key' => ['required', 'string', 'min:1', 'max:255'],
                 default => throw new \LogicException('Unknown Work orchestration input.'),

@@ -87,7 +87,10 @@ final class WorkWorkerController extends Controller
             if (($data['kind'] === WorkMilestoneKind::PullRequestOpened->value) !== isset($data['payload']['pr'])) {
                 abort(422, 'PR metadata is allowed and required only for pr_opened.');
             }
-            $milestone = $workers->milestone($item, $fence, WorkMilestoneKind::from($data['kind']), $data['payload'], nonce: $nonce);
+            $kind = WorkMilestoneKind::from($data['kind']);
+            $milestone = $kind === WorkMilestoneKind::Started
+                ? $workers->started($item, $fence, $nonce, payload: $data['payload'])['milestone']
+                : $workers->milestone($item, $fence, $kind, $data['payload'], nonce: $nonce);
 
             return response()->json(['id' => $milestone->id], 201);
         } catch (HttpException $exception) {

@@ -2,6 +2,7 @@
 
 namespace App\Work;
 
+use App\Casts\WorkPullRequest;
 use App\Enums\WorkItemState;
 use App\Enums\WorkMilestoneKind;
 use App\Http\ApiErrorException;
@@ -41,6 +42,7 @@ final readonly class WorkFinishService
         $writeup = trim($writeup);
         $this->assertWriteup($writeup);
         $this->assertPullRequest($pr);
+        $pr = WorkPullRequest::normalize($pr);
 
         return DB::transaction(function () use ($itemId, $fence, $launchNonce, $writeup, $pr, $afterIdentified): WorkFinish {
             $item = WorkItem::query()->with('workTask')->find($itemId);

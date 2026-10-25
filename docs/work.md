@@ -385,12 +385,17 @@ requeue the claim. If no real progress arrives for one more full task timebox, t
 stalled once and hands it to the existing stall repair ladder. Lease expiry still recovers an abandoned claim,
 but a deadline sweep does not use lease expiry as a substitute for either work-deadline stage.
 
+The signed milestone link follows the same clock. Its idempotent `started` milestone opens the first deadline
+without clearing an existing stall. Each later non-terminal progress milestone moves the deadline by a full
+timebox, clears the first-miss marker and stall, and settles the current deadline or stall repair. Terminal and
+`released` milestones clear deadline state without opening another deadline.
+
 A matching brief fetch settles each pending directive according to its reason. A receipt repair records a
 successful receipt. A stall repair records `resolved_by_fetch` without a receipt marker. Fetching the brief
 does not clear `stalled_at`; without a later milestone, the next stall repair may be issued after its deadline.
 
-A newly accepted milestone from the current claim holder clears `stalled_at` and settles a pending stall
-directive as `resolved_by_progress`. The milestone, item update, and directive settlement commit together. An
+A newly accepted real-progress milestone from the current claim holder clears `stalled_at` and settles a
+pending stall directive as `resolved_by_progress`. The milestone, item update, and directive settlement commit together. An
 idempotent replay that returns an existing milestone does not clear a later stall. If the same claim holder
 stalls again after making progress, the repair order starts again at `send_enter`. Directive sequence numbers
 remain unique and continue across episodes so the earlier history is not replaced.
