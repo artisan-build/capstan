@@ -287,6 +287,49 @@ orchestrator can use `set_pr` when the task needs a corrected or replacement PR;
 and wakes the next turn. Numeric strings are accepted for compatibility at each PR metadata ingress, but
 Capstan stores and returns `number` as an integer.
 
+### Amp orb workers
+
+Amp orbs connect to the dedicated MCP endpoint at `/mcp/orb`. It has three tools: `work_brief`,
+`work_started`, and `work_progress`. It does not expose the product MCP tools, orchestration actions,
+evidence uploads, steers, finish actions, or machine APIs. The existing `/mcp` and `/mcp/write` endpoints
+keep their Built for Cloud authentication and tool lists.
+
+The orb sends Amp's workload identity token as a bearer. Capstan verifies the token's signature using the
+issuer's discovered OpenID metadata and JWKS, then checks the issuer, the exact `/mcp/orb` audience for the
+installation, expiry and other time claims, token use, verified email, Amp user, project, thread, and subject.
+Discovery and signing keys are cached briefly. A new key id causes one refresh before the request is refused.
+
+The token is only the first half of authorization. At each tool call, Capstan finds exactly one live claim
+whose delivered Amp session reference has the same signed project and thread. It also checks the current
+claim fence and launch nonce, the claimant spoke and actor, the local user, and team membership. Tool arguments
+cannot select an item, fence, nonce, team, or user. Claim rotation, cancellation, lease expiry, spoke retirement,
+account deactivation, or removal from the team stops later calls.
+
+An Amp session reference has this wire form:
+
+```text
+amp:v1:<base64url-without-padding of UTF-8 JSON>
+```
+
+The JSON object contains exactly `project_id`, `thread_id`, and `thread_url`. The URL must use HTTPS on
+`ampcode.com` and name the same thread in its path. Capstan keeps the encoded value opaque in the claim; public
+Work representations return only the validated `thread_url` for an Amp claim.
+
+On first use, a verified Amp email may link the stable Amp `user_id` to one active, verified Capstan account
+with the same normalized email. The link is one-to-one and remains authoritative. A later token cannot move an
+Amp id to another local account, and another Amp id cannot take an account that is already linked. The account
+must still belong to the claim's team on every call.
+
+`work_brief` uses the guarded worker brief path and records the existing fetch fields. A stall directive may
+be settled as `resolved_by_fetch`, but the fetch does not clear `stalled_at` or record progress. `work_started`
+adds one idempotent `started` milestone and sets the first deadline from the task's `timebox_minutes`.
+`work_progress` requires a short non-empty summary, records the existing progress milestone, extends the
+deadline from the call time, clears the current stall, and settles its pending directive as
+`resolved_by_progress`.
+
+Capstan stores the stable Amp user id, its local user link, and the opaque session reference. It does not store
+the workload identity token, an Amp secret, or a GitHub credential.
+
 ### Launch receipts and repair directives
 
 Each claim has one `launch_nonce`. Every signed worker link for that claim carries the same nonce. A Solo-aware
@@ -371,9 +414,9 @@ reference script records returned session metadata but always starts a fresh pro
 a session adapter.
 
 For Solo, an adapter can store the Solo process id as `session_ref` and wake it through the Solo MCP. It
-still needs a liveness check and a turn timeout before deciding the session is frozen. For Amp, route the
-coordination turn through Amp's Puck agent and keep Puck's reference opaque to Capstan. These are wiring
-notes only. Capstan does not depend on Solo or Amp, and this repository ships neither launcher.
+still needs a liveness check and a turn timeout before deciding the session is frozen. Amp claims use the
+session reference and workload identity contract above. Capstan does not store a credential for either
+launcher.
 
 An interactive MCP session can take the parent seat. While it holds and renews that seat, drain claims for
 the parent's orchestrator turns are excluded and events accumulate. Releasing the seat hands the next

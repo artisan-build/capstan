@@ -736,7 +736,7 @@ class ContractTests(DrainTestCase):
         docs = (ROOT / "docs/work.md").read_text()
         skill = (ROOT / "drain/SKILL.md").read_text()
         workflow = (ROOT / ".github/workflows/tests.yml").read_text()
-        for phrase in ("session_ref", "Solo MCP", "Puck", "capstan.machine", "Pooled Work is off", "cold"):
+        for phrase in ("session_ref", "Solo MCP", "/mcp/orb", "capstan.machine", "Pooled Work is off", "cold"):
             self.assertIn(phrase, docs)
         for phrase in ("--dry-claim", "cron", "launchd", "Do not install", "~/.config/capstan/<server-id>/token", "actor-id"):
             self.assertIn(phrase, skill)

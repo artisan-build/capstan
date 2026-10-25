@@ -13,6 +13,20 @@
 
 namespace App\Models{
 /**
+ * @property int $id
+ * @property string $amp_user_id
+ * @property int $user_id
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|AmpIdentity newModelQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|AmpIdentity newQuery()
+ * @method static \Illuminate\Database\Eloquent\Builder<static>|AmpIdentity query()
+ * @mixin \Eloquent
+ */
+	#[\AllowDynamicProperties]
+	final class IdeHelperAmpIdentity {}
+}
+
+namespace App\Models{
+/**
  * @property string $id
  * @property string $actor_id
  * @property ArtifactVisibility $visibility
@@ -858,6 +872,8 @@ namespace App\Models{
  * @property CarbonImmutable|null $claimed_at
  * @property CarbonImmutable|null $handed_off_at
  * @property string|null $handed_off_session_ref
+ * @property string|null $amp_project_id
+ * @property string|null $amp_thread_id
  * @property string|null $launch_nonce
  * @property CarbonImmutable|null $first_fetched_at
  * @property string|null $agent_model

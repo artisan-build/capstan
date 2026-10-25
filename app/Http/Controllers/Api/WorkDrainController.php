@@ -9,6 +9,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Middleware\AuthenticateBoundCredential;
 use App\Models\Team;
 use App\Models\WorkItem;
+use App\Work\AmpSessionReference;
 use App\Work\WorkDrainService;
 use App\Work\WorkWorkerLinks;
 use Carbon\CarbonImmutable;
@@ -89,7 +90,7 @@ final class WorkDrainController extends Controller
                 WorkItemState::Failed->value,
             ])],
             'launch_nonce' => ['sometimes', 'required', 'uuid'],
-            'session_ref' => ['sometimes', 'required', 'string', 'max:2048'],
+            'session_ref' => ['sometimes', 'required', 'string', 'max:'.AmpSessionReference::MAX_LENGTH],
         ]);
 
         if ($validator->fails()) {

@@ -486,6 +486,8 @@ final readonly class WorkClaimService
                         'claimed_at' => $now,
                         'handed_off_at' => null,
                         'handed_off_session_ref' => null,
+                        'amp_project_id' => null,
+                        'amp_thread_id' => null,
                         'launch_nonce' => (string) Str::uuid7(),
                         'first_fetched_at' => null,
                         'agent_model' => null,

@@ -138,8 +138,17 @@ final readonly class WorkDrainService
         ?string $sessionRef = null,
         ?Closure $afterIdentified = null,
     ): WorkItem {
+        $ampReference = null;
+        if ($sessionRef !== null && str_starts_with($sessionRef, AmpSessionReference::PREFIX)) {
+            try {
+                $ampReference = AmpSessionReference::parse($sessionRef);
+            } catch (\InvalidArgumentException) {
+                throw new ApiErrorException(422, 'invalid_session_ref', 'The session reference is invalid.');
+            }
+        }
+
         return $this->retrySqliteBusy(
-            fn (): WorkItem => DB::transaction(function () use ($teamId, $actorId, $credentialId, $itemId, $fence, $target, $now, $launchNonce, $sessionRef, $afterIdentified): WorkItem {
+            fn (): WorkItem => DB::transaction(function () use ($teamId, $actorId, $credentialId, $itemId, $fence, $target, $now, $launchNonce, $sessionRef, $afterIdentified, $ampReference): WorkItem {
                 $spoke = $this->spokes->resolve($actorId, $credentialId, $now);
                 $item = $this->scopedItem($teamId, $itemId);
                 $this->assertOwnedLiveClaim($item, $actorId, $spoke->id, $fence, $now);
@@ -163,6 +172,8 @@ final readonly class WorkDrainService
                     $transitioned->forceFill([
                         'handed_off_at' => $now,
                         'handed_off_session_ref' => $sessionRef,
+                        'amp_project_id' => $ampReference?->projectId,
+                        'amp_thread_id' => $ampReference?->threadId,
                         'launch_nonce' => $launchNonce,
                     ])->save();
                     $this->seats->adoptVerifiedSession($transitioned, $now);

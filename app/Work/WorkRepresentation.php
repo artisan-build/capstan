@@ -31,6 +31,15 @@ final class WorkRepresentation
     public function item(WorkItem $item): array
     {
         $result = $this->present($item, 'item');
+        if (isset($result['handed_off_session_ref'])
+            && str_starts_with((string) $result['handed_off_session_ref'], AmpSessionReference::PREFIX)) {
+            try {
+                $result['thread_url'] = AmpSessionReference::parse((string) $result['handed_off_session_ref'])->threadUrl;
+            } catch (\InvalidArgumentException) {
+                // Never publish an Amp-shaped opaque reference, including a malformed one.
+            }
+            unset($result['handed_off_session_ref']);
+        }
         $result['stalled'] = $item->stalled_at !== null;
         $result['waiting_on_host'] = $item->waiting_on_host_at !== null;
         $latest = $item->milestones->sortByDesc('id')->first();
@@ -147,6 +156,7 @@ final class WorkRepresentation
                 'claimant_spoke_id' => 'integer?', 'claimant_actor' => 'string?', 'lease_until' => 'string?',
                 'fence' => 'integer', 'attempts' => 'integer', 'last_progress' => 'string?',
                 'handed_off_at' => 'string?', 'handed_off_session_ref' => 'string?',
+                'thread_url' => 'string?',
                 'launch_nonce' => 'string?', 'first_fetched_at' => 'string?', 'agent_model' => 'string?',
                 'fetched_brief_revision_id' => 'string?', 'fetched_page_version_id' => 'string?',
                 'stalled_at' => 'string?', 'waiting_on_host_at' => 'string?', 'created_at' => 'string',

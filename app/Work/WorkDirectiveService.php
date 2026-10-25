@@ -171,6 +171,8 @@ final readonly class WorkDirectiveService
                     'launch_nonce' => $nonce,
                     'handed_off_at' => null,
                     'handed_off_session_ref' => null,
+                    'amp_project_id' => null,
+                    'amp_thread_id' => null,
                     'first_fetched_at' => null,
                     'agent_model' => null,
                     'fetched_brief_revision_id' => null,

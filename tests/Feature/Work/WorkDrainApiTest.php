@@ -15,6 +15,7 @@ use App\Models\WorkEscalation;
 use App\Models\WorkItem;
 use App\Models\WorkOrchestratorSeat;
 use App\Models\WorkTask;
+use App\Work\AmpSessionReference;
 use App\Work\WorkDirectiveService;
 use App\Work\WorkItemStateService;
 use App\Work\WorkNotifier;
@@ -201,7 +202,33 @@ test('nonce receipt records the exact served brief and model while rejecting ano
     expect($receipt->first_fetched_at?->toJSON())->toBe(now()->toJSON())
         ->and($receipt->agent_model)->toBe('gpt-5.6-sol')
         ->and($receipt->fetched_brief_revision_id)->toBe($revision->id)
-        ->and($receipt->handed_off_session_ref)->toBe('solo:receipt-session');
+        ->and($receipt->handed_off_session_ref)->toBe('solo:receipt-session')
+        ->and($receipt->amp_project_id)->toBeNull()
+        ->and($receipt->amp_thread_id)->toBeNull();
+});
+
+test('delivering an Amp session persists its exact lookup key', function (): void {
+    Date::setTestNow('2026-10-25 12:00:00');
+    $team = workDrainTeam();
+    $item = workDrainItem(workDrainTask($team));
+    $issued = workDrainCredential(capstanUser());
+    $claim = $this->withHeaders($issued['headers'])->postJson(route('api.work.claim', $team), workDrainClaimPayload())->assertOk();
+    $reference = AmpSessionReference::make(
+        'amp-project-indexed',
+        'T-indexed-thread',
+        'https://ampcode.com/threads/T-indexed-thread',
+    );
+
+    $this->withHeaders($issued['headers'])->postJson(route('api.work.transition', $team), [
+        'item_id' => $item->id,
+        'fence' => 1,
+        'state' => 'delivered',
+        'launch_nonce' => $claim->json('items.0.launch_nonce'),
+        'session_ref' => $reference->encode(),
+    ])->assertOk();
+
+    expect($item->fresh()->amp_project_id)->toBe('amp-project-indexed')
+        ->and($item->fresh()->amp_thread_id)->toBe('T-indexed-thread');
 });
 
 test('a pre-handoff Page brief receipt survives delivery and prevents receipt repair', function (): void {

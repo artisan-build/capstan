@@ -122,75 +122,122 @@ final readonly class WorkWorkerService
     /** @param array{url?: string, summary?: string, pr?: array{repo: string, number: int, url: string}} $payload */
     public function milestone(string $id, int $fence, WorkMilestoneKind $kind, array $payload, ?Closure $afterIdentified = null, ?string $nonce = null): WorkMilestone
     {
-        return $this->guarded($id, $fence, function (WorkItem $item) use ($kind, $payload): WorkMilestone {
-            if ($kind === WorkMilestoneKind::PullRequestOpened) {
-                $pr = $payload['pr'] ?? null;
-                abort_unless(is_array($pr), 422, 'PR metadata is required.');
-                $task = $item->workTask;
-                if ($task->pr !== null && $task->pr !== $pr) {
-                    throw new HttpException(409, 'PR metadata is already set.');
-                }
-                $existing = $item->milestones()->where('kind', $kind->value)->get()
-                    ->first(fn (WorkMilestone $milestone): bool => ($milestone->payload['pr'] ?? null) === $pr);
-                if ($existing instanceof WorkMilestone) {
-                    return $existing;
-                }
-                if ($task->pr === null) {
-                    $task->forceFill(['pr' => $pr])->save();
-                }
+        return $this->guarded(
+            $id,
+            $fence,
+            fn (WorkItem $item): WorkMilestone => $this->recordMilestone($item, $kind, $payload, CarbonImmutable::now()),
+            $afterIdentified,
+            $nonce,
+        );
+    }
+
+    /** @return array{milestone: WorkMilestone, lease_until: CarbonImmutable} */
+    public function started(string $id, int $fence, string $nonce, ?Closure $afterIdentified = null): array
+    {
+        return $this->guarded($id, $fence, function (WorkItem $item): array {
+            $existing = $item->milestones()->where('fence', $item->fence)
+                ->where('kind', WorkMilestoneKind::Started->value)->oldest()->first();
+            if ($existing instanceof WorkMilestone) {
+                return ['milestone' => $existing, 'lease_until' => $item->lease_until ?? $existing->created_at];
             }
+
             $now = CarbonImmutable::now();
-            if ($item->milestones()->where('created_at', '>', $now->subMinutes(10))->count() >= 30) {
-                throw new HttpException(429, 'Too many milestones.');
-            }
+            $deadline = $now->addMinutes($item->workTask->timebox_minutes);
+            $item->lease_until = $deadline;
 
-            $target = match ($kind) {
-                WorkMilestoneKind::Done => WorkItemState::Acted,
-                WorkMilestoneKind::Failed => WorkItemState::Failed,
-                WorkMilestoneKind::Released => WorkItemState::Queued,
-                default => null,
-            };
-            if (in_array($target, [WorkItemState::Acted, WorkItemState::Failed], true)) {
-                abort_if($item->role === WorkItem::ROLE_ORCHESTRATOR && $target === WorkItemState::Acted, 422, 'Orchestrator turns require turn_done.');
-                abort_unless($item->state === WorkItemState::Routed, 422, 'Illegal transition.');
-            }
-
-            $from = $item->state;
-            if (isset($payload['summary']) && trim($payload['summary']) !== '') {
-                $item->last_progress = $payload['summary'];
-            }
-            if ($target !== null) {
-                $item->state = $target;
-                $item->fill(WorkPreemptionService::cleared());
-                if ($target === WorkItemState::Queued) {
-                    $item->attempts++;
-                    $item->claimant_actor = null;
-                    $item->claimant_spoke_id = null;
-                    $item->lease_until = null;
-                    $item->claimed_at = null;
-                    $item->stalled_at = null;
-                }
-                $item->transitions()->create([
-                    'from_state' => $from, 'to_state' => $target,
-                    'actor_kind' => 'link', 'actor_id' => $item->id,
-                    'fence' => $item->fence, 'occurred_at' => $now,
-                ]);
-            }
-            $item->stalled_at = null;
-            $item->save();
-
-            $milestone = $item->milestones()->create(['fence' => $item->fence, 'kind' => $kind, 'payload' => $payload]);
-            WorkDirective::query()->where('work_item_id', $item->id)->where('fence', $item->fence)
-                ->where('reason', 'stall')->where('status', 'pending')->update([
-                    'status' => 'succeeded',
-                    'outcome' => ['result' => 'resolved_by_progress'],
-                    'completed_at' => $now,
-                ]);
-            resolve(WorkEventProjector::class)->terminal($item);
-            resolve(WorkEventProjector::class)->blocked($item, $milestone);
-
-            return $milestone;
+            return [
+                'milestone' => $this->recordMilestone($item, WorkMilestoneKind::Started, [], $now),
+                'lease_until' => $deadline,
+            ];
         }, $afterIdentified, $nonce);
+    }
+
+    /** @return array{milestone: WorkMilestone, lease_until: CarbonImmutable} */
+    public function progress(string $id, int $fence, string $nonce, string $summary, ?Closure $afterIdentified = null): array
+    {
+        abort_if(trim($summary) === '' || mb_strlen($summary) > WorkItem::LAST_PROGRESS_MAX_LENGTH, 422, 'Invalid progress summary.');
+
+        return $this->guarded($id, $fence, function (WorkItem $item) use ($summary): array {
+            $now = CarbonImmutable::now();
+            $deadline = $now->addMinutes($item->workTask->timebox_minutes);
+            $item->lease_until = $deadline;
+
+            return [
+                'milestone' => $this->recordMilestone($item, WorkMilestoneKind::Note, ['summary' => $summary], $now),
+                'lease_until' => $deadline,
+            ];
+        }, $afterIdentified, $nonce);
+    }
+
+    /** @param array{url?: string, summary?: string, pr?: array{repo: string, number: int, url: string}} $payload */
+    private function recordMilestone(WorkItem $item, WorkMilestoneKind $kind, array $payload, CarbonImmutable $now): WorkMilestone
+    {
+        if ($kind === WorkMilestoneKind::PullRequestOpened) {
+            $pr = $payload['pr'] ?? null;
+            abort_unless(is_array($pr), 422, 'PR metadata is required.');
+            $task = $item->workTask;
+            if ($task->pr !== null && $task->pr !== $pr) {
+                throw new HttpException(409, 'PR metadata is already set.');
+            }
+            $existing = $item->milestones()->where('kind', $kind->value)->get()
+                ->first(fn (WorkMilestone $milestone): bool => ($milestone->payload['pr'] ?? null) === $pr);
+            if ($existing instanceof WorkMilestone) {
+                return $existing;
+            }
+            if ($task->pr === null) {
+                $task->forceFill(['pr' => $pr])->save();
+            }
+        }
+        if ($item->milestones()->where('created_at', '>', $now->subMinutes(10))->count() >= 30) {
+            throw new HttpException(429, 'Too many milestones.');
+        }
+
+        $target = match ($kind) {
+            WorkMilestoneKind::Done => WorkItemState::Acted,
+            WorkMilestoneKind::Failed => WorkItemState::Failed,
+            WorkMilestoneKind::Released => WorkItemState::Queued,
+            default => null,
+        };
+        if (in_array($target, [WorkItemState::Acted, WorkItemState::Failed], true)) {
+            abort_if($item->role === WorkItem::ROLE_ORCHESTRATOR && $target === WorkItemState::Acted, 422, 'Orchestrator turns require turn_done.');
+            abort_unless($item->state === WorkItemState::Routed, 422, 'Illegal transition.');
+        }
+
+        $from = $item->state;
+        if (isset($payload['summary']) && trim($payload['summary']) !== '') {
+            $item->last_progress = $payload['summary'];
+        }
+        if ($target !== null) {
+            $item->state = $target;
+            $item->fill(WorkPreemptionService::cleared());
+            if ($target === WorkItemState::Queued) {
+                $item->attempts++;
+                $item->claimant_actor = null;
+                $item->claimant_spoke_id = null;
+                $item->lease_until = null;
+                $item->claimed_at = null;
+                $item->stalled_at = null;
+            }
+            $item->transitions()->create([
+                'from_state' => $from, 'to_state' => $target,
+                'actor_kind' => 'link', 'actor_id' => $item->id,
+                'fence' => $item->fence, 'occurred_at' => $now,
+            ]);
+        }
+        $item->stalled_at = null;
+        $item->save();
+
+        $milestone = $item->milestones()->create(['fence' => $item->fence, 'kind' => $kind, 'payload' => $payload]);
+        WorkDirective::query()->where('work_item_id', $item->id)->where('fence', $item->fence)
+            ->where('reason', 'stall')->where('status', 'pending')->update([
+                'status' => 'succeeded',
+                'outcome' => ['result' => 'resolved_by_progress'],
+                'completed_at' => $now,
+            ]);
+        resolve(WorkEventProjector::class)->terminal($item);
+        resolve(WorkEventProjector::class)->blocked($item, $milestone);
+
+        return $milestone;
     }
 
     public function evidence(string $id, int $fence, string $filename, string $bytes, ?string $nonce = null): WorkEvidence

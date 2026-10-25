@@ -22,6 +22,8 @@ use InvalidArgumentException;
  * @property CarbonImmutable|null $claimed_at
  * @property CarbonImmutable|null $handed_off_at
  * @property string|null $handed_off_session_ref
+ * @property string|null $amp_project_id
+ * @property string|null $amp_thread_id
  * @property string|null $launch_nonce
  * @property CarbonImmutable|null $first_fetched_at
  * @property string|null $agent_model
@@ -83,6 +85,8 @@ class WorkItem extends Model
         'claimed_at',
         'handed_off_at',
         'handed_off_session_ref',
+        'amp_project_id',
+        'amp_thread_id',
         'launch_nonce',
         'first_fetched_at',
         'agent_model',
