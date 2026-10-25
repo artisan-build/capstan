@@ -835,6 +835,109 @@ test('receipt and stall repairs coexist on one item fence and stall escalation i
         ->and(WorkEscalation::query()->where('request_key', 'like', 'directive-exhausted:'.$item->id.':1:stall:%')->count())->toBe(1);
 });
 
+test('a held-item claim heartbeat renews no orb responsiveness state', function (): void {
+    Date::setTestNow('2026-10-25 22:00:00');
+    config(['capstan.work.lease_seconds' => 300]);
+    $team = workDrainTeam();
+    $task = workDrainTask($team, ['timebox_minutes' => 5]);
+    $item = workDrainItem($task);
+    $issued = workDrainCredential(capstanUser());
+    $claim = $this->withHeaders($issued['headers'])
+        ->postJson(route('api.work.claim', $team), workDrainClaimPayload())
+        ->assertOk()
+        ->assertJsonPath('items.0.id', $item->id);
+    foreach (['delivered', 'routed'] as $state) {
+        $this->withHeaders($issued['headers'])->postJson(route('api.work.transition', $team), [
+            'item_id' => $item->id,
+            'fence' => 1,
+            'state' => $state,
+        ])->assertOk();
+    }
+    $initialLease = $item->fresh()->lease_until;
+    $deadline = now()->subMinutes(2);
+    $firstMiss = now()->subMinute();
+    $stalledAt = now()->subSeconds(30);
+    $item->forceFill([
+        'work_deadline_at' => $deadline,
+        'first_deadline_missed_at' => $firstMiss,
+        'stalled_at' => $stalledAt,
+        'last_progress' => 'Progress recorded before ambiguous recovery',
+    ])->save();
+    $milestone = $item->milestones()->create([
+        'fence' => 1,
+        'kind' => WorkMilestoneKind::Note,
+        'payload' => ['summary' => 'Existing progress milestone'],
+    ]);
+    $directive = $item->directives()->create([
+        'claimant_spoke_id' => $issued['spoke']->id,
+        'fence' => 1,
+        'sequence' => 1,
+        'kind' => 'send_enter',
+        'reason' => 'stall',
+        'payload' => [],
+        'status' => 'pending',
+        'issued_at' => now()->subSeconds(10),
+    ]);
+
+    Date::setTestNow(now()->addMinute());
+    $this->withHeaders($issued['headers'])->postJson(route('api.work.renew', $team), [
+        'items' => [['item_id' => $item->id, 'fence' => 1]],
+    ])->assertOk()->assertJsonPath('results.0.status', 'renewed');
+    $renewedLease = $item->fresh()->lease_until;
+    expect($renewedLease?->equalTo(now()->addSeconds(300)))->toBeTrue()
+        ->and($renewedLease?->greaterThan($initialLease))->toBeTrue();
+
+    Date::setTestNow(now()->addSeconds(10));
+    $heartbeat = $this->withHeaders($issued['headers'])->postJson(route('api.work.claim', $team), [
+        ...workDrainClaimPayload(0),
+        'orchestrator_capacity' => 0,
+        'held_items' => [['item_id' => $item->id, 'fence' => 1]],
+    ])->assertOk()
+        ->assertJsonPath('spoke_id', $issued['spoke']->id)
+        ->assertJsonCount(0, 'items')
+        ->assertJsonPath('directives.0.id', $directive->id)
+        ->assertJsonPath('directives.0.item_id', $item->id)
+        ->assertJsonPath('directives.0.fence', 1);
+
+    $afterHeartbeat = $item->fresh();
+    expect($afterHeartbeat->lease_until?->equalTo($renewedLease))->toBeTrue()
+        ->and($afterHeartbeat->work_deadline_at?->equalTo($deadline))->toBeTrue()
+        ->and($afterHeartbeat->first_deadline_missed_at?->equalTo($firstMiss))->toBeTrue()
+        ->and($afterHeartbeat->stalled_at?->equalTo($stalledAt))->toBeTrue()
+        ->and($afterHeartbeat->first_fetched_at)->toBeNull()
+        ->and($afterHeartbeat->agent_model)->toBeNull()
+        ->and($afterHeartbeat->fetched_brief_revision_id)->toBeNull()
+        ->and($afterHeartbeat->fetched_page_version_id)->toBeNull()
+        ->and($afterHeartbeat->last_progress)->toBe('Progress recorded before ambiguous recovery')
+        ->and($afterHeartbeat->milestones()->pluck('id')->all())->toBe([$milestone->id])
+        ->and($afterHeartbeat->directives()->count())->toBe(1)
+        ->and($directive->fresh()->status)->toBe('pending')
+        ->and($directive->fresh()->outcome)->toBeNull()
+        ->and($directive->fresh()->completed_at)->toBeNull();
+
+    $this->withHeaders($issued['headers'])->postJson(route('api.work.claim', $team), [
+        ...workDrainClaimPayload(0),
+        'orchestrator_capacity' => 0,
+        'held_items' => [['item_id' => $item->id, 'fence' => 2]],
+    ])->assertOk()->assertJsonCount(0, 'directives');
+
+    $this->postJson($claim->json('items.0.links.milestone'), [
+        'kind' => 'note',
+        'payload' => ['summary' => 'Actual signed worker progress'],
+    ])->assertCreated();
+    $progressed = $item->fresh();
+    expect($progressed->lease_until?->equalTo($renewedLease))->toBeTrue()
+        ->and($progressed->work_deadline_at?->equalTo(now()->addMinutes(5)))->toBeTrue()
+        ->and($progressed->first_deadline_missed_at)->toBeNull()
+        ->and($progressed->stalled_at)->toBeNull()
+        ->and($progressed->first_fetched_at)->toBeNull()
+        ->and($progressed->last_progress)->toBe('Actual signed worker progress')
+        ->and($progressed->milestones()->count())->toBe(2)
+        ->and($directive->fresh()->status)->toBe('succeeded')
+        ->and($directive->fresh()->outcome)->toBe(['result' => 'resolved_by_progress']);
+    expect($heartbeat->json('directives.0.reason'))->toBe('stall');
+});
+
 test('current-holder progress ends one stall episode and a later stall starts a complete new ladder', function (): void {
     Date::setTestNow('2026-10-23 14:00:00');
     config(['capstan.work.receipt_deadline_seconds' => 60]);
