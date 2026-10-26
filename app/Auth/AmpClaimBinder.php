@@ -13,7 +13,9 @@ use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
+use Throwable;
 
 final readonly class AmpClaimBinder
 {
@@ -30,23 +32,43 @@ final readonly class AmpClaimBinder
 
     public function assertCurrent(AmpClaimContext $context, WorkItem $item): void
     {
-        if ($item->id !== $context->itemId || $item->fence !== $context->fence
-            || $item->launch_nonce === null || ! hash_equals($item->launch_nonce, $context->launchNonce)) {
-            $this->deny();
+        if ($item->id !== $context->itemId) {
+            $this->deny('current_item');
+        }
+        if ($item->fence !== $context->fence) {
+            $this->deny('current_fence');
+        }
+        if ($item->launch_nonce === null || ! hash_equals($item->launch_nonce, $context->launchNonce)) {
+            $this->deny('launch_nonce');
         }
 
         $matches = $this->matchingItems($context->identity);
-        if ($matches->count() !== 1 || $matches->sole()->id !== $item->id) {
-            $this->deny();
+        if ($matches->count() !== 1) {
+            $this->deny('item_match_count');
+        }
+        if ($matches->sole()->id !== $item->id) {
+            $this->deny('current_item_match');
         }
 
         $link = AmpIdentity::query()->where('amp_user_id', $context->identity->userId)->first();
         $user = User::query()->find($context->userId);
-        if (! $link instanceof AmpIdentity || $link->user_id !== $context->userId
-            || ! $user instanceof User || ! $this->admitted($user)
-            || (string) $user->getKey() !== $item->claimant_actor
-            || ! $this->memberships->belongsTo($user, $item->workTask->team_id)) {
-            $this->deny();
+        if (! $link instanceof AmpIdentity) {
+            $this->deny('identity_link_missing');
+        }
+        if ($link->user_id !== $context->userId) {
+            $this->deny('identity_link_mismatch');
+        }
+        if (! $user instanceof User) {
+            $this->deny('user_missing');
+        }
+        if (! $this->admitted($user)) {
+            $this->deny('user_admission');
+        }
+        if ((string) $user->getKey() !== $item->claimant_actor) {
+            $this->deny('claimant_actor');
+        }
+        if (! $this->memberships->belongsTo($user, $item->workTask->team_id)) {
+            $this->deny('team_membership');
         }
     }
 
@@ -54,7 +76,7 @@ final readonly class AmpClaimBinder
     {
         $matches = $this->matchingItems($identity, true);
         if ($matches->count() !== 1) {
-            $this->deny();
+            $this->deny('item_match_count');
         }
         $item = $matches->sole();
 
@@ -63,7 +85,7 @@ final readonly class AmpClaimBinder
             $user = User::query()->whereKey($link->user_id)->lockForUpdate()->first();
         } else {
             if (! $mayCreate) {
-                $this->deny();
+                $this->deny('identity_creation_race');
             }
             $users = User::query()
                 ->where('normalized_email', mb_strtolower(trim($identity->email)))
@@ -73,11 +95,11 @@ final readonly class AmpClaimBinder
                 ->limit(2)
                 ->get();
             if ($users->count() !== 1) {
-                $this->deny();
+                $this->deny('eligible_user_count');
             }
             $user = $users->sole();
             if ((string) $user->getKey() !== $item->claimant_actor) {
-                $this->deny();
+                $this->deny('claimant_actor');
             }
             $link = AmpIdentity::query()->create([
                 'amp_user_id' => $identity->userId,
@@ -85,11 +107,20 @@ final readonly class AmpClaimBinder
             ]);
         }
 
-        if (! $user instanceof User || ! $this->admitted($user)
-            || (string) $user->getKey() !== $item->claimant_actor
-            || ! $this->memberships->belongsTo($user, $item->workTask->team_id)
-            || $item->launch_nonce === null) {
-            $this->deny();
+        if (! $user instanceof User) {
+            $this->deny('user_missing');
+        }
+        if (! $this->admitted($user)) {
+            $this->deny('user_admission');
+        }
+        if ((string) $user->getKey() !== $item->claimant_actor) {
+            $this->deny('claimant_actor');
+        }
+        if (! $this->memberships->belongsTo($user, $item->workTask->team_id)) {
+            $this->deny('team_membership');
+        }
+        if ($item->launch_nonce === null) {
+            $this->deny('launch_nonce');
         }
 
         return new AmpClaimContext($identity, $item->id, $item->fence, $item->launch_nonce, (int) $link->user_id);
@@ -136,8 +167,14 @@ final readonly class AmpClaimBinder
             && ! OffboardedSubject::userIsOffboarded((string) $user->getKey());
     }
 
-    private function deny(): never
+    private function deny(string $reason): never
     {
+        try {
+            Log::warning('Orb authentication denied.', ['component' => 'binder', 'reason_code' => $reason]);
+        } catch (Throwable) {
+            // Diagnostics must never replace the authentication denial.
+        }
+
         throw new AuthorizationException('Unauthenticated.');
     }
 }

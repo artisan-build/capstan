@@ -1,5 +1,7 @@
 <?php
 
+use App\Auth\AmpClaimBinder;
+use App\Auth\AmpTokenVerifier;
 use App\Enums\WorkMilestoneKind;
 use App\Models\AmpIdentity;
 use App\Models\Spoke;
@@ -18,11 +20,13 @@ use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\User;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
@@ -209,6 +213,208 @@ test('canonical Amp session references round trip and representations publish on
     expect($wire['thread_url'])->toBe($parsed->threadUrl)
         ->and($wire)->not->toHaveKey('handed_off_session_ref');
 });
+
+test('audience mismatch logs only exact configured public URL shapes and preserves the denial response', function (mixed $audience, bool $safe): void {
+    $context = ['component' => 'verifier', 'reason_code' => 'aud_mismatch'];
+    if ($safe) {
+        $context['received_aud'] = $audience;
+    }
+    Log::shouldReceive('warning')->once()->with('Orb authentication denied.', $context);
+
+    orbList(orbToken(['aud' => $audience]))->assertUnauthorized()->assertExactJson(['message' => 'Unauthenticated.']);
+})->with([
+    'application URL' => ['https://capstan.example.test', true],
+    'application slash' => ['https://capstan.example.test/', true],
+    'MCP URL' => ['https://capstan.example.test/mcp', true],
+    'MCP slash' => ['https://capstan.example.test/mcp/', true],
+    'Orb slash' => [ORB_AUDIENCE.'/', true],
+    'foreign' => ['https://private.example.test/secret-identity', false],
+    'arbitrary same origin' => ['https://capstan.example.test/private/secret-identity', false],
+    'query' => ['https://capstan.example.test/mcp?token=secret-identity', false],
+    'fragment' => ['https://capstan.example.test/mcp#secret-identity', false],
+    'credentials' => ['https://secret-identity@capstan.example.test/mcp', false],
+    'port' => ['https://capstan.example.test:443/mcp', false],
+    'scheme' => ['http://capstan.example.test/mcp', false],
+    'host' => ['https://capstan.example.test.evil.test/mcp', false],
+    'array' => [[ORB_AUDIENCE], false],
+    'integer' => [42, false],
+    'null' => [null, false],
+]);
+
+test('audience allowlist follows the trusted configured base including trailing slash and port', function (string $suffix): void {
+    config(['app.url' => 'https://capstan.example.test:8443/base/']);
+    $audience = 'https://capstan.example.test:8443/base'.$suffix;
+    Log::shouldReceive('warning')->once()->with('Orb authentication denied.', [
+        'component' => 'verifier', 'reason_code' => 'aud_mismatch', 'received_aud' => $audience,
+    ]);
+
+    orbList(orbToken(['aud' => $audience]))->assertUnauthorized()->assertExactJson(['message' => 'Unauthenticated.']);
+})->with(['', '/', '/mcp', '/mcp/', '/mcp/orb/']);
+
+test('invalid configured URLs fail closed without logging audience values', function (mixed $url): void {
+    config(['app.url' => $url]);
+    Log::shouldReceive('warning')->once()->with('Orb authentication denied.', [
+        'component' => 'verifier', 'reason_code' => 'application_url',
+    ]);
+
+    orbList(orbToken(['aud' => 'https://capstan.example.test/private-secret']))->assertUnauthorized()
+        ->assertExactJson(['message' => 'Unauthenticated.']);
+})->with([null, 'not-a-url', 'https://secret@capstan.example.test', 'https://capstan.example.test?secret', 'https://capstan.example.test#secret']);
+
+test('verifier claim predicates log bounded distinct reasons without identity context', function (array $claims, string $reason): void {
+    Log::shouldReceive('warning')->once()->with('Orb authentication denied.', ['component' => 'verifier', 'reason_code' => $reason]);
+
+    orbList(orbToken($claims))->assertUnauthorized()->assertExactJson(['message' => 'Unauthenticated.']);
+})->with([
+    'issuer' => [['iss' => 'secret-issuer'], 'issuer_mismatch'],
+    'expiry type' => [['exp' => 'secret-expiry'], 'expiry_type'],
+    'expired' => [['exp' => 1], 'token_expired'],
+    'issued type' => [['iat' => []], 'issued_at_type'],
+    'future issued' => [['iat' => PHP_INT_MAX], 'issued_at_future'],
+    'lifetime' => [fn (): array => ['iat' => now()->addSeconds(30)->timestamp, 'exp' => now()->addSeconds(30)->timestamp], 'lifetime_invalid'],
+    'not before type' => [['nbf' => 'secret-time'], 'not_before_type'],
+    'not before future' => [['nbf' => PHP_INT_MAX], 'not_before_future'],
+    'use' => [['token_use' => 'secret-use'], 'token_use'],
+    'verified' => [['email_verified' => false], 'email_unverified'],
+    'user string' => [['user_id' => ' secret-user'], 'claim_user_id'],
+    'project string' => [['project_id' => ''], 'claim_project_id'],
+    'thread string' => [['thread_id' => str_repeat('s', 256)], 'claim_thread_id'],
+    'email string' => [['email' => "secret\nemail"], 'claim_email'],
+    'email shape' => [['email' => 'secret-email'], 'email_shape'],
+    'subject' => [['sub' => 'secret-subject'], 'subject_binding'],
+]);
+
+test('verifier malformed inputs log only their bounded category', function (Closure $token, string $reason): void {
+    Log::shouldReceive('warning')->once()->with('Orb authentication denied.', ['component' => 'verifier', 'reason_code' => $reason]);
+
+    expect(fn () => resolve(AmpTokenVerifier::class)->verify($token()))
+        ->toThrow(AuthorizationException::class, 'Unauthenticated.');
+})->with([
+    'segments' => [fn (): string => 'secret-token', 'token_segments'],
+    'header encoding' => [fn (): string => 'secret+.e30.eA', 'header_encoding'],
+    'header JSON' => [fn (): string => 'eA.e30.eA', 'header_json'],
+    'payload encoding' => [fn (): string => 'eyJ4IjoxfQ.secret+.eA', 'payload_encoding'],
+    'payload JSON' => [fn (): string => 'eyJ4IjoxfQ.eA.eA', 'payload_json'],
+    'algorithm' => [fn (): string => orbToken([], 'primary', 'HS256'), 'header_algorithm'],
+    'key ID' => [fn (): string => 'eyJhbGciOiJSUzI1NiJ9.eyJ4IjoxfQ.eA', 'header_key_id'],
+    'signature encoding' => [fn (): string => substr(orbToken(), 0, strrpos(orbToken(), '.') + 1).'secret+', 'signature_encoding'],
+    'signature' => [fn (): string => substr(orbToken(), 0, strrpos(orbToken(), '.') + 1).'c2VjcmV0', 'signature_invalid'],
+]);
+
+test('unexpected verifier exceptions are bounded and fail closed', function (): void {
+    Cache::shouldReceive('get')->once()->andThrow(new RuntimeException('secret-exception-identity'));
+    Log::shouldReceive('warning')->once()->with('Orb authentication denied.', ['component' => 'verifier', 'reason_code' => 'unexpected_failure']);
+
+    orbList(orbToken())->assertUnauthorized()->assertExactJson(['message' => 'Unauthenticated.']);
+});
+
+test('metadata failures identify the denied predicate without fetched values', function (mixed $metadata, int $status, string $reason): void {
+    Http::swap(new HttpFactory);
+    Http::preventStrayRequests();
+    Http::fake([ORB_DISCOVERY => Http::response($metadata, $status)]);
+    Log::shouldReceive('warning')->once()->with('Orb authentication denied.', ['component' => 'verifier', 'reason_code' => $reason]);
+
+    orbList(orbToken())->assertUnauthorized()->assertExactJson(['message' => 'Unauthenticated.']);
+})->with(function (): array {
+    $metadata = ['issuer' => ORB_ISSUER, 'jwks_uri' => ORB_JWKS, 'id_token_signing_alg_values_supported' => ['RS256']];
+
+    return [
+        [[], 503, 'metadata_http'],
+        ['secret-document', 200, 'metadata_document'],
+        [[...$metadata, 'issuer' => 'secret-issuer'], 200, 'metadata_issuer'],
+        [[...$metadata, 'jwks_uri' => 'https://secret.example.test/private'], 200, 'metadata_jwks_uri'],
+        [[...$metadata, 'id_token_signing_alg_values_supported' => [42]], 200, 'metadata_algorithms'],
+        [[...$metadata, 'id_token_signing_alg_values_supported' => ['secret-algorithm']], 200, 'metadata_algorithm'],
+    ];
+});
+
+test('JWK failures identify the denied predicate without key context', function (string $failure, string $reason): void {
+    $key = orbKeyPair()['jwk'];
+    $keys = match ($failure) {
+        'missing' => [],
+        'duplicate' => [$key, $key],
+        'type' => [[...$key, 'kty' => 'secret-type']],
+        'use' => [[...$key, 'use' => 'secret-use']],
+        'algorithm' => [[...$key, 'alg' => 'secret-algorithm']],
+        'parameters' => [[...$key, 'n' => []]],
+        'modulus' => [[...$key, 'n' => 'secret+modulus']],
+        'exponent' => [[...$key, 'e' => 'secret+exponent']],
+    };
+    orbFakeIdentityProvider($keys);
+    Log::shouldReceive('warning')->once()->with('Orb authentication denied.', ['component' => 'verifier', 'reason_code' => $reason]);
+
+    orbList(orbToken())->assertUnauthorized()->assertExactJson(['message' => 'Unauthenticated.']);
+})->with([
+    ['missing', 'jwk_not_found'], ['duplicate', 'jwk_duplicate'], ['type', 'jwk_type'],
+    ['use', 'jwk_use'], ['algorithm', 'jwk_algorithm'], ['parameters', 'jwk_parameters'],
+    ['modulus', 'jwk_modulus_encoding'], ['exponent', 'jwk_exponent_encoding'],
+]);
+
+test('logging failures do not replace verifier or binder denials', function (bool $binder): void {
+    Log::shouldReceive('warning')->once()->andThrow(new RuntimeException('Logging unavailable.'));
+
+    orbList(orbToken($binder ? [] : ['aud' => 'secret-audience']))->assertUnauthorized()
+        ->assertExactJson(['message' => 'Unauthenticated.']);
+})->with([false, true]);
+
+test('successful authentication binding and current-context checks emit no denial', function (): void {
+    orbClaim();
+    Log::shouldReceive('warning')->never();
+
+    orbList(orbToken())->assertOk();
+    orbCall('work_started', (object) [], orbToken())->assertOk()->assertJsonMissing(['isError' => true]);
+});
+
+test('binder denials log their category without identity context and roll back links', function (string $failure, string $reason): void {
+    $claim = orbClaim();
+    if ($failure === 'admission') {
+        orbList(orbToken())->assertOk();
+    }
+    match ($failure) {
+        'item' => $claim['item']->forceFill(['lease_until' => now()->subSecond()])->save(),
+        'eligible' => $claim['user']->forceFill(['email_verified_at' => null])->save(),
+        'actor' => null,
+        'admission' => $claim['user']->forceFill(['status' => 'inactive'])->save(),
+        'membership' => DB::table('team_user')->where('team_id', $claim['team']->id)->delete(),
+    };
+    $claims = [];
+    if ($failure === 'actor') {
+        $other = capstanUser(['email' => 'secret-other@example.test', 'email_verified_at' => now()]);
+        $claims['email'] = $other->email;
+    }
+    Log::shouldReceive('warning')->once()->with('Orb authentication denied.', ['component' => 'binder', 'reason_code' => $reason]);
+
+    orbList(orbToken($claims))->assertUnauthorized()->assertExactJson(['message' => 'Unauthenticated.']);
+    expect(AmpIdentity::query()->count())->toBe($failure === 'admission' ? 1 : 0);
+})->with([
+    ['item', 'item_match_count'],
+    ['eligible', 'eligible_user_count'],
+    ['actor', 'claimant_actor'],
+    ['admission', 'user_admission'],
+    ['membership', 'team_membership'],
+]);
+
+test('current binder context reports the first changed predicate without identity context', function (string $field, string $reason): void {
+    $claim = orbClaim();
+    $identity = resolve(AmpTokenVerifier::class)->verify(orbToken());
+    $binder = resolve(AmpClaimBinder::class);
+    $context = $binder->bind($identity);
+    $item = $claim['item'];
+    match ($field) {
+        'id' => $item->id = 'secret-item',
+        'fence' => $item->fence++,
+        'nonce' => $item->launch_nonce = 'secret-nonce',
+        'link' => AmpIdentity::query()->delete(),
+        'membership' => DB::table('team_user')->where('team_id', $claim['team']->id)->delete(),
+    };
+    Log::shouldReceive('warning')->once()->with('Orb authentication denied.', ['component' => 'binder', 'reason_code' => $reason]);
+
+    expect(fn () => $binder->assertCurrent($context, $item))
+        ->toThrow(AuthorizationException::class, 'Unauthenticated.');
+})->with([
+    ['id', 'current_item'], ['fence', 'current_fence'], ['nonce', 'launch_nonce'],
+    ['link', 'identity_link_missing'], ['membership', 'team_membership'],
+]);
 
 test('session references reject malformed noncanonical duplicate and mismatched values', function (string $reference): void {
     expect(fn () => AmpSessionReference::parse($reference))->toThrow(InvalidArgumentException::class);
