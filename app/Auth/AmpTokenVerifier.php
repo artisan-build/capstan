@@ -5,6 +5,7 @@ namespace App\Auth;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use JsonException;
 use OpenSSLAsymmetricKey;
 use Throwable;
@@ -21,31 +22,35 @@ final class AmpTokenVerifier
     {
         try {
             [$encodedHeader, $encodedPayload, $encodedSignature] = $this->segments($token);
-            $header = $this->jsonObject($this->decode($encodedHeader));
-            $claims = $this->jsonObject($this->decode($encodedPayload));
+            $header = $this->jsonObject($this->decode($encodedHeader, 'header_encoding'), 'header_json');
+            $claims = $this->jsonObject($this->decode($encodedPayload, 'payload_encoding'), 'payload_json');
 
-            if (($header['alg'] ?? null) !== self::ALGORITHM
-                || ! is_string($header['kid'] ?? null) || trim($header['kid']) === '') {
-                $this->deny();
+            if (($header['alg'] ?? null) !== self::ALGORITHM) {
+                $this->deny('header_algorithm');
+            }
+            if (! is_string($header['kid'] ?? null) || trim($header['kid']) === '') {
+                $this->deny('header_key_id');
             }
 
             $metadata = $this->metadata();
             if (! in_array(self::ALGORITHM, $metadata['id_token_signing_alg_values_supported'], true)) {
-                $this->deny();
+                $this->deny('metadata_algorithm');
             }
 
             $jwk = $this->key($metadata['jwks_uri'], $header['kid']);
             $key = openssl_pkey_get_public($this->rsaPem($jwk));
-            if (! $key instanceof OpenSSLAsymmetricKey
-                || openssl_verify($encodedHeader.'.'.$encodedPayload, $this->decode($encodedSignature), $key, OPENSSL_ALGO_SHA256) !== 1) {
-                $this->deny();
+            if (! $key instanceof OpenSSLAsymmetricKey) {
+                $this->deny('jwk_public_key');
+            }
+            if (openssl_verify($encodedHeader.'.'.$encodedPayload, $this->decode($encodedSignature, 'signature_encoding'), $key, OPENSSL_ALGO_SHA256) !== 1) {
+                $this->deny('signature_invalid');
             }
 
             return $this->identity($claims);
         } catch (AuthorizationException $exception) {
             throw $exception;
         } catch (Throwable) {
-            $this->deny();
+            $this->deny('unexpected_failure');
         }
     }
 
@@ -54,23 +59,23 @@ final class AmpTokenVerifier
     {
         $segments = explode('.', $token);
         if (count($segments) !== 3 || in_array('', $segments, true)) {
-            $this->deny();
+            $this->deny('token_segments');
         }
 
         return [$segments[0], $segments[1], $segments[2]];
     }
 
     /** @return array<string, mixed> */
-    private function jsonObject(string $json): array
+    private function jsonObject(string $json, string $reason): array
     {
         try {
             $value = json_decode($json, true, flags: JSON_THROW_ON_ERROR);
         } catch (JsonException) {
-            $this->deny();
+            $this->deny($reason);
         }
 
         if (! is_array($value) || array_is_list($value)) {
-            $this->deny();
+            $this->deny($reason);
         }
 
         return $value;
@@ -89,15 +94,22 @@ final class AmpTokenVerifier
         $response = Http::acceptJson()->timeout(5)->withOptions(['allow_redirects' => false])
             ->get(self::ISSUER.'/.well-known/openid-configuration');
         if (! $response->successful()) {
-            $this->deny();
+            $this->deny('metadata_http');
         }
         $metadata = $response->json();
         $algorithms = is_array($metadata) ? ($metadata['id_token_signing_alg_values_supported'] ?? null) : null;
         $jwksUri = is_array($metadata) ? ($metadata['jwks_uri'] ?? null) : null;
-        if (! is_array($metadata) || ($metadata['issuer'] ?? null) !== self::ISSUER
-            || ! is_string($jwksUri) || ! $this->trustedAmpUrl($jwksUri)
-            || ! is_array($algorithms) || array_filter($algorithms, is_string(...)) !== $algorithms) {
-            $this->deny();
+        if (! is_array($metadata)) {
+            $this->deny('metadata_document');
+        }
+        if (($metadata['issuer'] ?? null) !== self::ISSUER) {
+            $this->deny('metadata_issuer');
+        }
+        if (! is_string($jwksUri) || ! $this->trustedAmpUrl($jwksUri)) {
+            $this->deny('metadata_jwks_uri');
+        }
+        if (! is_array($algorithms) || array_filter($algorithms, is_string(...)) !== $algorithms) {
+            $this->deny('metadata_algorithms');
         }
 
         $validated = $this->validatedMetadata([
@@ -106,7 +118,7 @@ final class AmpTokenVerifier
             'id_token_signing_alg_values_supported' => array_values($algorithms),
         ]);
         if ($validated === null) {
-            $this->deny();
+            $this->deny('metadata_invalid');
         }
         Cache::put($key, $validated, now()->addSeconds($this->cacheSeconds()));
 
@@ -124,13 +136,13 @@ final class AmpTokenVerifier
 
         $cooldownKey = 'capstan:amp-oidc:jwks-refresh:'.hash('sha256', $uri);
         if (! Cache::add($cooldownKey, true, now()->addSeconds(self::JWKS_REFRESH_COOLDOWN_SECONDS))) {
-            $this->deny();
+            $this->deny('jwk_refresh_cooldown');
         }
 
         $keys = $this->keys($uri, true);
         $match = $this->findKey($keys, $kid);
         if ($match === null) {
-            $this->deny();
+            $this->deny('jwk_not_found');
         }
 
         return $match;
@@ -150,16 +162,16 @@ final class AmpTokenVerifier
 
         $response = Http::acceptJson()->timeout(5)->withOptions(['allow_redirects' => false])->get($uri);
         if (! $response->successful()) {
-            $this->deny();
+            $this->deny('jwks_http');
         }
         $document = $response->json();
         $keys = is_array($document) ? ($document['keys'] ?? null) : null;
         if (! is_array($keys) || ! array_is_list($keys) || count($keys) > 100) {
-            $this->deny();
+            $this->deny('jwks_document');
         }
         $validated = $this->validatedKeys($keys);
         if ($validated === null) {
-            $this->deny();
+            $this->deny('jwks_keys');
         }
 
         Cache::put($cacheKey, $validated, now()->addSeconds($this->cacheSeconds()));
@@ -177,15 +189,21 @@ final class AmpTokenVerifier
             return null;
         }
         if (count($matches) !== 1) {
-            $this->deny();
+            $this->deny('jwk_duplicate');
         }
 
         $key = $matches[0];
-        if (($key['kty'] ?? null) !== 'RSA'
-            || (isset($key['use']) && $key['use'] !== 'sig')
-            || (isset($key['alg']) && $key['alg'] !== self::ALGORITHM)
-            || ! is_string($key['n'] ?? null) || ! is_string($key['e'] ?? null)) {
-            $this->deny();
+        if (($key['kty'] ?? null) !== 'RSA') {
+            $this->deny('jwk_type');
+        }
+        if (isset($key['use']) && $key['use'] !== 'sig') {
+            $this->deny('jwk_use');
+        }
+        if (isset($key['alg']) && $key['alg'] !== self::ALGORITHM) {
+            $this->deny('jwk_algorithm');
+        }
+        if (! is_string($key['n'] ?? null) || ! is_string($key['e'] ?? null)) {
+            $this->deny('jwk_parameters');
         }
 
         return $key;
@@ -205,15 +223,44 @@ final class AmpTokenVerifier
         $threadId = $this->claimString($claims, 'thread_id');
         $email = $this->claimString($claims, 'email');
 
-        if ($issuer !== self::ISSUER || $audience !== $this->audience()
-            || ! is_int($expires) || $expires <= $now
-            || ! is_int($issued) || $issued > $now + 60 || $issued >= $expires
-            || ($notBefore !== null && (! is_int($notBefore) || $notBefore > $now + 60))
-            || ($claims['token_use'] ?? null) !== 'exchanged'
-            || ($claims['email_verified'] ?? null) !== true
-            || filter_var($email, FILTER_VALIDATE_EMAIL) === false
-            || ($claims['sub'] ?? null) !== "project:{$projectId}:user:{$userId}:thread:{$threadId}") {
-            $this->deny();
+        if ($issuer !== self::ISSUER) {
+            $this->deny('issuer_mismatch');
+        }
+        if ($audience !== $this->audience()) {
+            $this->deny('aud_mismatch', $audience);
+        }
+        if (! is_int($expires)) {
+            $this->deny('expiry_type');
+        }
+        if ($expires <= $now) {
+            $this->deny('token_expired');
+        }
+        if (! is_int($issued)) {
+            $this->deny('issued_at_type');
+        }
+        if ($issued > $now + 60) {
+            $this->deny('issued_at_future');
+        }
+        if ($issued >= $expires) {
+            $this->deny('lifetime_invalid');
+        }
+        if ($notBefore !== null && ! is_int($notBefore)) {
+            $this->deny('not_before_type');
+        }
+        if ($notBefore !== null && $notBefore > $now + 60) {
+            $this->deny('not_before_future');
+        }
+        if (($claims['token_use'] ?? null) !== 'exchanged') {
+            $this->deny('token_use');
+        }
+        if (($claims['email_verified'] ?? null) !== true) {
+            $this->deny('email_unverified');
+        }
+        if (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+            $this->deny('email_shape');
+        }
+        if (($claims['sub'] ?? null) !== "project:{$projectId}:user:{$userId}:thread:{$threadId}") {
+            $this->deny('subject_binding');
         }
 
         return new AmpWorkloadIdentity($userId, $projectId, $threadId, $email);
@@ -225,7 +272,7 @@ final class AmpTokenVerifier
         $value = $claims[$key] ?? null;
         if (! is_string($value) || $value === '' || $value !== trim($value) || strlen($value) > 255
             || preg_match('/[\x00-\x1F\x7F]/', $value) === 1) {
-            $this->deny();
+            $this->deny('claim_'.$key);
         }
 
         return $value;
@@ -235,7 +282,7 @@ final class AmpTokenVerifier
     {
         $url = config('app.url');
         if (! is_string($url) || ! $this->trustedApplicationUrl($url)) {
-            $this->deny();
+            $this->deny('application_url');
         }
 
         return rtrim($url, '/').'/mcp/orb';
@@ -261,12 +308,12 @@ final class AmpTokenVerifier
     /** @param array<string, mixed> $jwk */
     private function rsaPem(array $jwk): string
     {
-        $modulus = $this->decode($jwk['n']);
-        $exponent = $this->decode($jwk['e']);
+        $modulus = $this->decode($jwk['n'], 'jwk_modulus_encoding');
+        $exponent = $this->decode($jwk['e'], 'jwk_exponent_encoding');
         $rsa = $this->derSequence($this->derInteger($modulus).$this->derInteger($exponent));
         $algorithm = hex2bin('300d06092a864886f70d0101010500');
         if (! is_string($algorithm)) {
-            $this->deny();
+            $this->deny('jwk_der_algorithm');
         }
         $subject = $this->derSequence($algorithm."\x03".$this->derLength(strlen($rsa) + 1)."\x00".$rsa);
 
@@ -293,7 +340,7 @@ final class AmpTokenVerifier
     private function derLength(int $length): string
     {
         if ($length < 0) {
-            $this->deny();
+            $this->deny('jwk_der_length');
         }
         if ($length < 128) {
             return chr($length);
@@ -350,14 +397,14 @@ final class AmpTokenVerifier
         return $validated;
     }
 
-    private function decode(string $encoded): string
+    private function decode(string $encoded, string $reason): string
     {
         if ($encoded === '' || preg_match('/\A[A-Za-z0-9_-]+\z/D', $encoded) !== 1) {
-            $this->deny();
+            $this->deny($reason);
         }
         $decoded = base64_decode(strtr($encoded, '-_', '+/').str_repeat('=', (4 - strlen($encoded) % 4) % 4), true);
         if (! is_string($decoded) || rtrim(strtr(base64_encode($decoded), '+/', '-_'), '=') !== $encoded) {
-            $this->deny();
+            $this->deny($reason);
         }
 
         return $decoded;
@@ -368,8 +415,25 @@ final class AmpTokenVerifier
         return max(60, min(3600, (int) config('capstan.orb.oidc_cache_seconds', 300)));
     }
 
-    private function deny(): never
+    private function deny(string $reason, mixed $audience = null): never
     {
+        try {
+            $context = ['component' => 'verifier', 'reason_code' => $reason];
+            if ($reason === 'aud_mismatch' && is_string($audience)) {
+                $url = config('app.url');
+                if (is_string($url) && filter_var($url, FILTER_VALIDATE_URL) !== false && $this->trustedApplicationUrl($url)) {
+                    $base = rtrim($url, '/');
+                    if (in_array($audience, [$base, $base.'/', $base.'/mcp', $base.'/mcp/', $base.'/mcp/orb', $base.'/mcp/orb/'], true)) {
+                        $context['received_aud'] = $audience;
+                    }
+                }
+            }
+
+            Log::warning('Orb authentication denied.', $context);
+        } catch (Throwable) {
+            // Diagnostics must never replace the authentication denial.
+        }
+
         throw new AuthorizationException('Unauthenticated.');
     }
 }
