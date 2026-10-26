@@ -214,6 +214,13 @@ test('canonical Amp session references round trip and representations publish on
         ->and($wire)->not->toHaveKey('handed_off_session_ref');
 });
 
+test('canonical origin and exact orb endpoint audiences are admitted without denial logs', function (string $audience): void {
+    orbClaim();
+    Log::shouldReceive('warning')->never();
+
+    orbList(orbToken(['aud' => $audience]))->assertOk()->assertJsonPath('result.tools.0.name', 'work_brief');
+})->with(['origin' => 'https://capstan.example.test', 'endpoint' => ORB_AUDIENCE]);
+
 test('audience mismatch logs only exact configured public URL shapes and preserves the denial response', function (mixed $audience, bool $safe): void {
     $context = ['component' => 'verifier', 'reason_code' => 'aud_mismatch'];
     if ($safe) {
@@ -223,7 +230,6 @@ test('audience mismatch logs only exact configured public URL shapes and preserv
 
     orbList(orbToken(['aud' => $audience]))->assertUnauthorized()->assertExactJson(['message' => 'Unauthenticated.']);
 })->with([
-    'application URL' => ['https://capstan.example.test', true],
     'application slash' => ['https://capstan.example.test/', true],
     'MCP URL' => ['https://capstan.example.test/mcp', true],
     'MCP slash' => ['https://capstan.example.test/mcp/', true],
@@ -236,20 +242,63 @@ test('audience mismatch logs only exact configured public URL shapes and preserv
     'port' => ['https://capstan.example.test:443/mcp', false],
     'scheme' => ['http://capstan.example.test/mcp', false],
     'host' => ['https://capstan.example.test.evil.test/mcp', false],
+    'other host origin' => ['https://other.example.test', false],
+    'different scheme origin' => ['http://capstan.example.test', false],
+    'added default port origin' => ['https://capstan.example.test:443', false],
+    'added non-default port origin' => ['https://capstan.example.test:8443', false],
+    'sibling subdomain' => ['https://orb.capstan.example.test', false],
+    'host case' => ['https://CAPSTAN.example.test', false],
+    'scheme case' => ['HTTPS://capstan.example.test', false],
+    'endpoint prefix' => ['https://capstan.example.test/mcp/orb/extra', false],
+    'endpoint suffix' => ['https://capstan.example.test/mcp/orb-extra', false],
     'array' => [[ORB_AUDIENCE], false],
     'integer' => [42, false],
     'null' => [null, false],
 ]);
 
-test('audience allowlist follows the trusted configured base including trailing slash and port', function (string $suffix): void {
+test('audience diagnostics follow the canonical origin including non-default port', function (string $suffix): void {
     config(['app.url' => 'https://capstan.example.test:8443/base/']);
-    $audience = 'https://capstan.example.test:8443/base'.$suffix;
+    $audience = 'https://capstan.example.test:8443'.$suffix;
     Log::shouldReceive('warning')->once()->with('Orb authentication denied.', [
         'component' => 'verifier', 'reason_code' => 'aud_mismatch', 'received_aud' => $audience,
     ]);
 
     orbList(orbToken(['aud' => $audience]))->assertUnauthorized()->assertExactJson(['message' => 'Unauthenticated.']);
-})->with(['', '/', '/mcp', '/mcp/', '/mcp/orb/']);
+})->with(['/', '/mcp', '/mcp/', '/mcp/orb/']);
+
+test('configured URL canonicalization admits only the origin and its orb endpoint', function (string $url, string $origin): void {
+    config(['app.url' => $url]);
+    orbClaim();
+    Log::shouldReceive('warning')->never();
+
+    foreach ([$origin, $origin.'/mcp/orb'] as $audience) {
+        orbList(orbToken(['aud' => $audience]))->assertOk()->assertJsonPath('result.tools.0.name', 'work_brief');
+    }
+})->with([
+    'trailing slash' => ['https://capstan.example.test/', 'https://capstan.example.test'],
+    'configured path' => ['https://capstan.example.test/base/', 'https://capstan.example.test'],
+    'HTTPS default port' => ['https://capstan.example.test:443/base/', 'https://capstan.example.test'],
+    'HTTP default port' => ['http://capstan.example.test:80/base/', 'http://capstan.example.test'],
+    'non-default HTTPS port' => ['https://capstan.example.test:8443/base/', 'https://capstan.example.test:8443'],
+    'non-default HTTP port' => ['http://capstan.example.test:8080/', 'http://capstan.example.test:8080'],
+    'configured host case' => ['https://CAPSTAN.example.test/base', 'https://capstan.example.test'],
+]);
+
+test('configured paths and port variants do not add audience forms', function (string $url, string $audience): void {
+    config(['app.url' => $url]);
+    Log::shouldReceive('warning')->once()->with('Orb authentication denied.', [
+        'component' => 'verifier', 'reason_code' => 'aud_mismatch',
+    ]);
+
+    orbList(orbToken(['aud' => $audience]))->assertUnauthorized()->assertExactJson(['message' => 'Unauthenticated.']);
+})->with([
+    'configured path origin' => ['https://capstan.example.test/base/', 'https://capstan.example.test/base'],
+    'configured path endpoint' => ['https://capstan.example.test/base/', 'https://capstan.example.test/base/mcp/orb'],
+    'explicit HTTPS default port' => ['https://capstan.example.test:443/', 'https://capstan.example.test:443'],
+    'explicit HTTP default port' => ['http://capstan.example.test:80/', 'http://capstan.example.test:80/mcp/orb'],
+    'missing non-default port' => ['https://capstan.example.test:8443/base/', 'https://capstan.example.test'],
+    'changed non-default port' => ['https://capstan.example.test:8443/base/', 'https://capstan.example.test:8444/mcp/orb'],
+]);
 
 test('invalid configured URLs fail closed without logging audience values', function (mixed $url): void {
     config(['app.url' => $url]);
@@ -259,7 +308,7 @@ test('invalid configured URLs fail closed without logging audience values', func
 
     orbList(orbToken(['aud' => 'https://capstan.example.test/private-secret']))->assertUnauthorized()
         ->assertExactJson(['message' => 'Unauthenticated.']);
-})->with([null, 'not-a-url', 'https://secret@capstan.example.test', 'https://capstan.example.test?secret', 'https://capstan.example.test#secret']);
+})->with([null, 'not-a-url', 'https://secret@capstan.example.test', 'https://capstan.example.test?secret', 'https://capstan.example.test#secret', 'ftp://capstan.example.test', 'https://capstan.example.test:99999', 'https://capstan.example.test bad']);
 
 test('verifier claim predicates log bounded distinct reasons without identity context', function (array $claims, string $reason): void {
     Log::shouldReceive('warning')->once()->with('Orb authentication denied.', ['component' => 'verifier', 'reason_code' => $reason]);

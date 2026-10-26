@@ -301,8 +301,11 @@ orchestration actions, evidence uploads, steers, verdict actions, or machine API
 and `/mcp/write` endpoints keep their Built for Cloud authentication and tool lists.
 
 The orb sends Amp's workload identity token as a bearer. Capstan verifies the token's signature using the
-issuer's discovered OpenID metadata and JWKS, then checks the issuer, the exact `/mcp/orb` audience for the
-installation, expiry and other time claims, token use, verified email, Amp user, project, thread, and subject.
+issuer's discovered OpenID metadata and JWKS, then checks the issuer, audience, expiry and other time claims,
+token use, verified email, Amp user, project, thread, and subject. The audience must exactly match either the
+installation's canonical origin or that origin plus `/mcp/orb`. Capstan derives the origin from `APP_URL`,
+discarding its path and trailing slash, omitting default ports, and retaining non-default ports. Received
+audiences are never normalized: trailing slashes, other paths, hosts, schemes, ports, and arrays are refused.
 Discovery and signing keys are cached briefly. A new key id causes one refresh before the request is refused.
 
 The token is only the first half of authorization. At each tool call, Capstan finds exactly one live claim

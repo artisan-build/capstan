@@ -226,7 +226,8 @@ final class AmpTokenVerifier
         if ($issuer !== self::ISSUER) {
             $this->deny('issuer_mismatch');
         }
-        if ($audience !== $this->audience()) {
+        $origin = $this->audienceOrigin();
+        if (! in_array($audience, [$origin, $origin.'/mcp/orb'], true)) {
             $this->deny('aud_mismatch', $audience);
         }
         if (! is_int($expires)) {
@@ -278,21 +279,30 @@ final class AmpTokenVerifier
         return $value;
     }
 
-    private function audience(): string
+    private function audienceOrigin(): string
     {
         $url = config('app.url');
         if (! is_string($url) || ! $this->trustedApplicationUrl($url)) {
             $this->deny('application_url');
         }
 
-        return rtrim($url, '/').'/mcp/orb';
+        $parts = parse_url($url);
+        if (! is_array($parts) || ! isset($parts['scheme'], $parts['host'])) {
+            $this->deny('application_url');
+        }
+        $origin = $parts['scheme'].'://'.strtolower($parts['host']);
+        $port = $parts['port'] ?? null;
+        $defaultPort = $parts['scheme'] === 'https' ? 443 : 80;
+
+        return $port !== null && $port !== $defaultPort ? $origin.':'.$port : $origin;
     }
 
     private function trustedApplicationUrl(string $url): bool
     {
         $parts = parse_url($url);
 
-        return is_array($parts) && in_array($parts['scheme'] ?? null, ['http', 'https'], true)
+        return filter_var($url, FILTER_VALIDATE_URL) !== false
+            && is_array($parts) && in_array($parts['scheme'] ?? null, ['http', 'https'], true)
             && is_string($parts['host'] ?? null) && $parts['host'] !== ''
             && ! isset($parts['user']) && ! isset($parts['pass']) && ! isset($parts['query']) && ! isset($parts['fragment']);
     }
@@ -422,8 +432,8 @@ final class AmpTokenVerifier
             if ($reason === 'aud_mismatch' && is_string($audience)) {
                 $url = config('app.url');
                 if (is_string($url) && filter_var($url, FILTER_VALIDATE_URL) !== false && $this->trustedApplicationUrl($url)) {
-                    $base = rtrim($url, '/');
-                    if (in_array($audience, [$base, $base.'/', $base.'/mcp', $base.'/mcp/', $base.'/mcp/orb', $base.'/mcp/orb/'], true)) {
+                    $base = $this->audienceOrigin();
+                    if (in_array($audience, [$base.'/', $base.'/mcp', $base.'/mcp/', $base.'/mcp/orb/'], true)) {
                         $context['received_aud'] = $audience;
                     }
                 }
