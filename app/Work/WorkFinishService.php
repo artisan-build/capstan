@@ -222,8 +222,16 @@ final readonly class WorkFinishService
             'author_actor' => (string) $seat->holder_actor,
         ]);
         $from = $item->state;
+        $claimantEligible = Spoke::query()->workEligible()
+            ->whereKey($item->claimant_spoke_id)
+            ->where('actor_id', $item->claimant_actor)
+            ->lockForUpdate()
+            ->first() instanceof Spoke;
         $item->forceFill([
             'state' => WorkItemState::Routed,
+            'lease_until' => $claimantEligible
+                ? $now->addSeconds(max(1, (int) config('capstan.work.lease_seconds', 300)))
+                : $now,
             'work_deadline_at' => $now->addMinutes($item->workTask->timebox_minutes),
             'first_deadline_missed_at' => null,
             'stalled_at' => null,

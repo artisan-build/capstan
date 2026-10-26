@@ -172,7 +172,36 @@ test('the signed orchestrator action ingress applies a fenced finish verdict', f
         ->and($fixture['item']->milestones()->where('kind', 'done')->count())->toBe(1);
 });
 
+test('awaiting verification survives lease expiry and remains reviewable on the same fence', function (): void {
+    $fixture = finishVerificationFixture();
+    $waiting = $fixture['item']->fresh();
+    $waiting->update(['lease_until' => now()->addMinute()]);
+
+    Date::setTestNow(now()->addMinutes(2));
+    resolve(WorkSweepService::class)->liveness(CarbonImmutable::now());
+
+    $unchanged = $waiting->fresh();
+    expect($unchanged->state)->toBe(WorkItemState::AwaitingVerification)
+        ->and($unchanged->fence)->toBe($waiting->fence)
+        ->and($unchanged->claimant_spoke_id)->toBe($waiting->claimant_spoke_id)
+        ->and($unchanged->claimant_actor)->toBe($waiting->claimant_actor)
+        ->and($unchanged->lease_until?->equalTo($waiting->lease_until))->toBeTrue()
+        ->and($unchanged->attempts)->toBe(0)
+        ->and($unchanged->transitions()->where('actor_id', 'lease-expiry')->count())->toBe(0);
+
+    resolve(WorkOrchestrationSurface::class)->act($fixture['context'], 'review_finish', [
+        'finish_id' => $fixture['finish']->id,
+        'item_id' => $fixture['item']->id,
+        'verdict' => 'accept',
+    ], now());
+
+    expect($fixture['finish']->fresh()->status)->toBe('accept')
+        ->and($fixture['item']->fresh()->state)->toBe(WorkItemState::Acted)
+        ->and($fixture['item']->fresh()->fence)->toBe($waiting->fence);
+});
+
 test('corrections preserve the claim and Amp thread while creating one steer and fresh deadline', function (): void {
+    config(['capstan.work.lease_seconds' => 480]);
     $fixture = finishVerificationFixture();
     $itemBefore = $fixture['item']->fresh();
     $corrections = 'Correct the test-created edge case '.Str::random(8);
@@ -200,6 +229,7 @@ test('corrections preserve the claim and Amp thread while creating one steer and
         ->and($item->amp_project_id)->toBe($itemBefore->amp_project_id)
         ->and($item->amp_thread_id)->toBe($itemBefore->amp_thread_id)
         ->and($item->handed_off_session_ref)->toBe($itemBefore->handed_off_session_ref)
+        ->and($item->lease_until?->equalTo(now()->addMinutes(8)))->toBeTrue()
         ->and($item->work_deadline_at?->equalTo(now()->addMinutes(10)))->toBeTrue()
         ->and($item->first_deadline_missed_at)->toBeNull()
         ->and($item->stalled_at)->toBeNull();
@@ -232,6 +262,90 @@ test('corrections preserve the claim and Amp thread while creating one steer and
         ->and($refinished->handed_off_session_ref)->toBe($itemBefore->handed_off_session_ref)
         ->and($refinished->work_deadline_at)->toBeNull()
         ->and(WorkSteer::query()->where('work_item_id', $item->id)->count())->toBe(1);
+});
+
+test('a correction lease expires through ordinary recovery on the same fence', function (): void {
+    config(['capstan.work.lease_seconds' => 60]);
+    $fixture = finishVerificationFixture();
+    $fence = $fixture['item']->fence;
+
+    resolve(WorkOrchestrationSurface::class)->act($fixture['context'], 'review_finish', [
+        'finish_id' => $fixture['finish']->id,
+        'item_id' => $fixture['item']->id,
+        'verdict' => 'corrections',
+        'corrections' => 'Exercise normal machine lease recovery.',
+    ], now());
+
+    $corrected = $fixture['item']->fresh();
+    expect($corrected->state)->toBe(WorkItemState::Routed)
+        ->and($corrected->fence)->toBe($fence)
+        ->and($corrected->lease_until?->equalTo(now()->addMinute()))->toBeTrue();
+
+    Date::setTestNow(now()->addSeconds(61));
+    resolve(WorkSweepService::class)->liveness(CarbonImmutable::now());
+
+    $recovered = $fixture['item']->fresh();
+    expect($recovered->state)->toBe(WorkItemState::Queued)
+        ->and($recovered->fence)->toBe($fence)
+        ->and($recovered->attempts)->toBe(1)
+        ->and($recovered->claimant_spoke_id)->toBeNull()
+        ->and($recovered->claimant_actor)->toBeNull()
+        ->and($recovered->lease_until)->toBeNull()
+        ->and($recovered->transitions()->where('actor_id', 'lease-expiry')->count())->toBe(1);
+});
+
+test('corrections on a retired machine fall through normal recovery without restoring authority', function (): void {
+    $fixture = finishVerificationFixture();
+    $fence = $fixture['item']->fence;
+    $fixture['worker']->update(['retired_at' => now()]);
+
+    resolve(WorkOrchestrationSurface::class)->act($fixture['context'], 'review_finish', [
+        'finish_id' => $fixture['finish']->id,
+        'item_id' => $fixture['item']->id,
+        'verdict' => 'corrections',
+        'corrections' => 'Resume this work on an eligible machine.',
+    ], now());
+
+    $corrected = $fixture['item']->fresh();
+    expect($corrected->state)->toBe(WorkItemState::Routed)
+        ->and($corrected->fence)->toBe($fence)
+        ->and($corrected->claimant_spoke_id)->toBe($fixture['worker']->id)
+        ->and($corrected->lease_until?->equalTo(now()))->toBeTrue();
+    expect(fn () => resolve(WorkWorkerService::class)->progress(
+        $corrected->id,
+        $fence,
+        (string) $corrected->launch_nonce,
+        'A retired machine must not regain authority.',
+    ))->toThrow(HttpException::class);
+
+    resolve(WorkSweepService::class)->liveness(CarbonImmutable::now());
+    $recovered = $fixture['item']->fresh();
+    expect($recovered->state)->toBe(WorkItemState::Queued)
+        ->and($recovered->fence)->toBe($fence)
+        ->and($recovered->attempts)->toBe(1)
+        ->and($recovered->claimant_spoke_id)->toBeNull()
+        ->and($recovered->claimant_actor)->toBeNull()
+        ->and($recovered->lease_until)->toBeNull();
+
+    $replacement = Spoke::query()->create([
+        'actor_id' => 'replacement-worker',
+        'credential_id' => (string) Str::uuid7(),
+        'last_polled_at' => now(),
+    ]);
+    $claimed = resolve(WorkClaimService::class)->claim(
+        $fixture['root']->team_id,
+        $replacement->actor_id,
+        $replacement->id,
+        ['builder'],
+        [],
+        1,
+        CarbonImmutable::now(),
+        300,
+    );
+    expect($claimed)->toHaveCount(1)
+        ->and($claimed[0]->id)->toBe($fixture['item']->id)
+        ->and($claimed[0]->fence)->toBe($fence + 1)
+        ->and($claimed[0]->claimant_spoke_id)->toBe($replacement->id);
 });
 
 test('finish PR key order stays canonical across replay corrections and a second finish', function (): void {

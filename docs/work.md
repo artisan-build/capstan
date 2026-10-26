@@ -348,12 +348,16 @@ bounded writeup, PR, finish id, child task, item, and fence. The current fenced 
 it with `review_finish`. `accept` records the verdict, stores the writeup as the item's final progress and `done`
 milestone, moves the item to `acted`, and allows dependent work to be claimed. `corrections` requires bounded
 text, creates one item steer, returns the same claim to `routed`, and opens a fresh work deadline. The Amp thread
-stays attached so the drain can continue it rather than launch a replacement session.
+stays attached so the drain can continue it rather than launch a replacement session. A correction also starts
+a fresh machine lease on the existing fence. If that machine was retired while the finish waited, the correction
+uses an immediately expired lease. The normal liveness sweep then requeues the item for an eligible machine;
+retirement does not give the old machine any authority to resume work.
 
 Declaring a finish clears the orb's work deadline and pending deadline or stall nudge. Deadline responsibility
 then belongs to the orchestrator event, turn receipt, and renewable orchestrator lease. The waiting orb is not
-nudged. Only a current orchestrator authority can record a verdict; the Amp workload bearer is not accepted by
-the product MCP or signed orchestrator action ingress.
+nudged or recovered when its machine lease passes. Its claim and fence remain in place for the current
+orchestrator to review. Only a current orchestrator authority can record a verdict; the Amp workload bearer is
+not accepted by the product MCP or signed orchestrator action ingress.
 
 Capstan stores the stable Amp user id, its local user link, the opaque session reference, and the declared PR
 identity. It does not store the workload identity token, an Amp secret, or a GitHub credential. GitHub access
@@ -422,8 +426,8 @@ field.
 
 Leaf and orchestrator concurrency are separate when `orchestrator_capacity` is present. `capacity` admits only
 ordinary leaf roles, while `orchestrator_capacity` admits only the reserved orchestrator role. A full leaf pool
-therefore cannot block an orchestrator wake, and an unused orchestrator slot cannot admit a leaf. Requests that
-omit `orchestrator_capacity` keep the legacy combined-capacity behavior.
+therefore cannot block an orchestrator wake or require a leaf preemption victim, and an unused orchestrator slot
+cannot admit a leaf. Requests that omit `orchestrator_capacity` keep the legacy combined-capacity behavior.
 
 ### Evidence uploads
 

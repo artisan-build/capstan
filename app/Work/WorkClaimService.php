@@ -310,12 +310,13 @@ final readonly class WorkClaimService
                             $this->capabilities($candidate->required_capabilities),
                             $spokeId,
                             $now,
-                            $ignoreCeiling,
+                            false,
                             $candidate->user_actor_address,
                             $candidate->owner_actor,
                             (bool) $candidate->routing_pool_work,
                             $candidate->device_spoke_id === null ? null : (int) $candidate->device_spoke_id,
                             $taskIds ?? [],
+                            $ignoreCeiling,
                         ))) {
                     $eligible[] = $candidate;
                 }
@@ -407,6 +408,8 @@ final readonly class WorkClaimService
                             $task->owner_actor,
                             $task->routing_pool_work,
                             $task->device_spoke_id,
+                            [],
+                            $ignoreCapacityCeiling,
                         ))) {
                         return null;
                     }
