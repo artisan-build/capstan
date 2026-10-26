@@ -134,6 +134,7 @@ final readonly class WorkClaimService
                 $requireMachineProfile,
                 $ignoreCapacityCeiling,
                 combinedCapacity: $combinedCapacity,
+                ignoreArbiterCapacityCeiling: $ignoreCapacityCeiling,
             );
 
             if ($candidates === []) {
@@ -174,7 +175,11 @@ final readonly class WorkClaimService
             }
 
             if ($won === 0 && (! $this->activeSpokeExists($actorId, $spokeId, $teamId, $roles, $capabilities, $roleProviders, $now, $requireMachineProfile)
-                || $this->candidates($teamId, $actorId, $spokeId, $roles, $capabilities, 1, $now, $roleProviders, $requireMachineProfile, $ignoreCapacityCeiling, combinedCapacity: $combinedCapacity) === [])) {
+                || $this->candidates(
+                    $teamId, $actorId, $spokeId, $roles, $capabilities, 1, $now, $roleProviders,
+                    $requireMachineProfile, $ignoreCapacityCeiling, combinedCapacity: $combinedCapacity,
+                    ignoreArbiterCapacityCeiling: $ignoreCapacityCeiling,
+                ) === [])) {
                 break;
             }
         }
@@ -208,6 +213,7 @@ final readonly class WorkClaimService
         bool $ordinaryOnly = false,
         bool $arbitrateMachine = false,
         bool $combinedCapacity = false,
+        bool $ignoreArbiterCapacityCeiling = false,
     ): array {
         if ($requireMachineProfile) {
             $setting = $this->runtime->eligibleSetting($teamId, $actorId, $spokeId, $roles, $capabilities, $roleProviders, $now);
@@ -316,6 +322,7 @@ final readonly class WorkClaimService
                             (bool) $candidate->routing_pool_work,
                             $candidate->device_spoke_id === null ? null : (int) $candidate->device_spoke_id,
                             $taskIds ?? [],
+                            $ignoreArbiterCapacityCeiling,
                         ))) {
                     $eligible[] = $candidate;
                 }
@@ -407,6 +414,8 @@ final readonly class WorkClaimService
                             $task->owner_actor,
                             $task->routing_pool_work,
                             $task->device_spoke_id,
+                            [],
+                            $ignoreCapacityCeiling,
                         ))) {
                         return null;
                     }

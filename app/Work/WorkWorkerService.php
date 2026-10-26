@@ -23,7 +23,7 @@ final readonly class WorkWorkerService
     /** @return Builder<WorkItem> */
     public function recoveryQuery(): Builder
     {
-        return WorkItem::query()->whereIn('state', ['claimed', 'delivered', 'routed', 'awaiting_verification'])
+        return WorkItem::query()->whereIn('state', ['claimed', 'delivered', 'routed'])
             ->whereNotNull('claimant_spoke_id')->whereNotNull('claimant_actor')
             ->whereHas('workTask', fn ($query) => $query->whereNull('cancelled_at'));
     }

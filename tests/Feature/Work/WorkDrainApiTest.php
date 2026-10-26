@@ -719,21 +719,26 @@ test('a report-before-fetch respawn remains write-once and adopts on receipt', f
         ->toBe(['result' => 'succeeded']);
 });
 
-test('orchestrator capacity remains available when leaf capacity is full', function (): void {
+test('orchestrator capacity reaches an eligible parent when awaiting leaves fill the leaf ceiling', function (): void {
     Date::setTestNow('2026-10-23 12:00:00');
     $team = workDrainTeam();
     $user = capstanUser();
     $issued = workDrainCredential($user);
     MachineTeamWorkSetting::query()->where('spoke_id', $issued['spoke']->id)->where('team_id', $team->id)
-        ->update(['concurrency_ceiling' => 1]);
-    $leaf = workDrainItem(workDrainTask($team), ['role' => 'builder']);
-    $queuedLeaf = workDrainItem(workDrainTask($team), ['role' => 'builder']);
-    $orchestratorTask = workDrainTask($team);
-    resolve(WorkOrchestrationService::class)->event($orchestratorTask, 'capacity-wake', 'test_event');
-    $orchestrator = $orchestratorTask->items()->where('role', WorkItem::ROLE_ORCHESTRATOR)->sole();
+        ->update(['concurrency_ceiling' => 3]);
+    $parent = workDrainTask($team);
+    $leaves = collect(range(1, 3))->map(fn (): WorkItem => workDrainItem(workDrainTask($team, [
+        'parent_task_id' => $parent->id,
+    ]), ['role' => 'builder']));
 
-    $this->withHeaders($issued['headers'])->postJson(route('api.work.claim', $team), workDrainClaimPayload(1, ['builder', 'orchestrator']))
-        ->assertOk()->assertJsonPath('items.0.id', $leaf->id);
+    $claimed = $this->withHeaders($issued['headers'])
+        ->postJson(route('api.work.claim', $team), workDrainClaimPayload(3, ['builder', 'orchestrator']))
+        ->assertOk();
+    expect($claimed->json('items.*.id'))->toBe($leaves->pluck('id')->all());
+    WorkItem::query()->whereKey($leaves->pluck('id'))->update(['state' => WorkItemState::AwaitingVerification]);
+    resolve(WorkOrchestrationService::class)->event($parent, 'capacity-wake', 'test_event');
+    $orchestrator = $parent->items()->where('role', WorkItem::ROLE_ORCHESTRATOR)->sole();
+
     $response = $this->withHeaders($issued['headers'])->postJson(route('api.work.claim', $team), [
         ...workDrainClaimPayload(0, ['builder', 'orchestrator']),
         'orchestrator_capacity' => 1,
@@ -741,7 +746,8 @@ test('orchestrator capacity remains available when leaf capacity is full', funct
     ])->assertOk();
 
     expect($response->json('items.*.id'))->toBe([$orchestrator->id])
-        ->and($queuedLeaf->fresh()->state)->toBe(WorkItemState::Queued)
+        ->and($leaves->map(fn (WorkItem $leaf): WorkItemState => $leaf->fresh()->state)->all())
+        ->toBe([WorkItemState::AwaitingVerification, WorkItemState::AwaitingVerification, WorkItemState::AwaitingVerification])
         ->and($orchestrator->fresh()->state)->toBe(WorkItemState::Claimed);
 });
 

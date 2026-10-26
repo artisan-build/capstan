@@ -34,6 +34,7 @@ final readonly class MachineWorkArbiter
         bool $routingPoolWork = true,
         ?int $deviceSpokeId = null,
         array $excludedTaskIds = [],
+        bool $ignoreCapacityCeiling = false,
     ): bool {
         /** @var list<array{id: int, full: int, health: int, known: int, remaining: float|null, reset: int|null, count: int, ceiling: int}> $ranked */
         $ranked = [];
@@ -47,7 +48,7 @@ final readonly class MachineWorkArbiter
             $machine = $presence->spoke;
             if (! in_array($role, $presence->roles, true)
                 || array_diff($requiredCapabilities, $presence->capabilities) !== []
-                || (! $allowPreemption && $presence->available_capacity < 1)
+                || (! $allowPreemption && ! $ignoreCapacityCeiling && $presence->available_capacity < 1)
                 || ($userActorAddress !== null && $machine->actor_id !== $userActorAddress)
                 || ($userActorAddress === null && ! $routingPoolWork && $machine->actor_id !== $ownerActor)
                 || ($deviceSpokeId !== null && $machine->id !== $deviceSpokeId)) {
@@ -69,10 +70,11 @@ final readonly class MachineWorkArbiter
 
             $count = $this->runtime->authoritativeClaimedCount($machine->id);
             $full = $count >= $setting->concurrency_ceiling;
-            if ($full && (! $allowPreemption || resolve(WorkPreemptionService::class)->victim($machine->id, $now, $excludedTaskIds) === null)) {
+            if ($full && ! $ignoreCapacityCeiling
+                && (! $allowPreemption || resolve(WorkPreemptionService::class)->victim($machine->id, $now, $excludedTaskIds) === null)) {
                 continue;
             }
-            if (! $full && $presence->available_capacity < 1) {
+            if (! $ignoreCapacityCeiling && ! $full && $presence->available_capacity < 1) {
                 continue;
             }
 
