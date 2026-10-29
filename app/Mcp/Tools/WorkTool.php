@@ -26,6 +26,7 @@ use Illuminate\JsonSchema\JsonSchemaTypeFactory;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
+use Laravel\Mcp\Exceptions\JsonRpcException;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
@@ -285,43 +286,54 @@ abstract class WorkTool extends CapstanTool
             // Freeze only caller-specified intent in the durable claim; defaults may change on replay.
         }
         if ($this->isWrite()) {
-            $result = $writes->run(
-                owner: $owner, tool: $this->name(), idempotencyKey: $input['idempotency_key'],
-                intent: $input, targetType: 'work',
-                operation: function (string $targetId, string $claimId) use ($work, $policy, $reassignments, $priorities, $input, $team, $owner, $user): array {
-                    if ($this->name() === 'set_task_priority') {
-                        return $priorities->change($input, $owner->actorId, $claimId);
-                    }
-                    if ($this->name() === 'set_team_work_policy') {
-                        $changed = $policy->setPoolWork($team, $user, $input['pool_work'], TeamWorkPolicy::SURFACE_MCP);
+            try {
+                $result = $writes->run(
+                    owner: $owner, tool: $this->name(), idempotencyKey: $input['idempotency_key'],
+                    intent: $input, targetType: 'work',
+                    operation: function (string $targetId, string $claimId) use ($work, $policy, $reassignments, $priorities, $input, $team, $owner, $user): array {
+                        if ($this->name() === 'set_task_priority') {
+                            return $priorities->change($input, $owner->actorId, $claimId);
+                        }
+                        if ($this->name() === 'set_team_work_policy') {
+                            $changed = $policy->setPoolWork($team, $user, $input['pool_work'], TeamWorkPolicy::SURFACE_MCP);
 
-                        return ['policy' => $policy->present($team), 'changed' => $changed];
-                    }
-                    if (in_array($this->name(), ['create_task', 'kickoff'], true)) {
-                        $input += [
-                            'failover' => (bool) $team->default_failover,
-                            'required_capabilities' => [],
-                            'timebox_minutes' => 30,
-                            'owner_actor' => $owner->actorId,
-                            'priority' => WorkPriority::P2->value,
-                            'depends_on' => [],
-                        ];
-                    }
-                    if ($this->name() === 'reassign_task') {
-                        return $reassignments->reassign(
-                            $team->id,
-                            $input['task_id'],
-                            $owner->actorId,
-                            $input['to_actor'],
-                            $input['mode'],
-                            $input['note'] ?? null,
-                            $claimId,
-                        );
-                    }
+                            return ['policy' => $policy->present($team), 'changed' => $changed];
+                        }
+                        if (in_array($this->name(), ['create_task', 'kickoff'], true)) {
+                            $input += [
+                                'failover' => (bool) $team->default_failover,
+                                'required_capabilities' => [],
+                                'timebox_minutes' => 30,
+                                'owner_actor' => $owner->actorId,
+                                'priority' => WorkPriority::P2->value,
+                                'depends_on' => [],
+                            ];
+                        }
+                        if ($this->name() === 'reassign_task') {
+                            return $reassignments->reassign(
+                                $team->id,
+                                $input['task_id'],
+                                $owner->actorId,
+                                $input['to_actor'],
+                                $input['mode'],
+                                $input['note'] ?? null,
+                                $claimId,
+                            );
+                        }
 
-                    return $work->write($this->name(), $input, $owner->actorId);
-                },
-            );
+                        return $work->write($this->name(), $input, $owner->actorId);
+                    },
+                );
+            } catch (JsonRpcException $exception) {
+                if ($exception->getCode() !== -32003 || ! in_array($exception->getMessage(), [
+                    'The write service is unavailable.',
+                    'The write service is temporarily unavailable.',
+                ], true)) {
+                    throw $exception;
+                }
+
+                return Response::error($exception->getMessage());
+            }
         } elseif ($this->name() === 'get_team_work_policy') {
             $result = ['policy' => $policy->present($team)];
         } else {

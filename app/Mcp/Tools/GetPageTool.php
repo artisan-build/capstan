@@ -18,7 +18,6 @@ use ArtisanBuild\BuiltForCloud\Mcp\Effect;
 use ArtisanBuild\BuiltForCloud\Mcp\ToolClassification;
 use ArtisanBuild\BuiltForCloud\Mcp\ToolEffect;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
-use Laravel\Mcp\Exceptions\JsonRpcException;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
@@ -93,7 +92,7 @@ final class GetPageTool extends CapstanTool
         $lastVersionNumber = $after['last_version_number'] ?? null;
 
         if ($after !== null && (! is_int($lastVersionNumber) || $lastVersionNumber < 1)) {
-            throw new JsonRpcException('The cursor is invalid for this request.', -32602);
+            throw $cursors->invalid();
         }
 
         $candidates = PageVersion::query()

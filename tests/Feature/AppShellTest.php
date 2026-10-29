@@ -7,6 +7,7 @@ use ArtisanBuild\BuiltForCloud\ManagedTransition;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionDirection;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionStatus;
 use ArtisanBuild\BuiltForCloud\UserRole;
+use ArtisanBuild\BuiltForCloud\View\Layout;
 use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Http\Request;
 use Illuminate\Session\TokenMismatchException;
@@ -29,10 +30,11 @@ beforeEach(function (): void {
 function expectAuthenticatedShell(string $html, string $proof): void
 {
     expect(substr_count($html, 'data-testid="app-shell"'))->toBe(1)
+        ->and(substr_count($html, '<!DOCTYPE html>'))->toBe(1)
         ->and(substr_count($html, 'data-testid="app-shell-brand"'))->toBe(1)
         ->and(substr_count($html, 'data-testid="app-shell-content"'))->toBe(1)
         ->and(substr_count($html, 'data-testid="app-shell-sidebar"'))->toBe(1)
-        ->and(substr_count($html, 'data-testid="app-shell-mobile-trigger"'))->toBe(1)
+        ->and(substr_count($html, 'data-testid="bfc-mobile-drawer-open"'))->toBe(1)
         ->and($html)->toContain($proof, 'img/scalpels-wordmark.webp');
 }
 
@@ -42,7 +44,7 @@ function expectGuestShell(string $html): void
         ->and(substr_count($html, 'data-testid="app-shell-brand"'))->toBe(1)
         ->and(substr_count($html, 'data-testid="app-shell-content"'))->toBe(1)
         ->and($html)->not->toContain('data-testid="app-shell-sidebar"')
-        ->not->toContain('data-testid="app-shell-mobile-trigger"');
+        ->not->toContain('data-testid="bfc-mobile-drawer-open"');
 }
 
 function currentShellSection(string $html): ?string
@@ -54,7 +56,7 @@ function currentShellSection(string $html): ?string
 
     expect($current->length)->toBeLessThanOrEqual(1);
 
-    return $current->length === 1 ? trim($current->item(0)?->textContent ?? '') : null;
+    return $current->length === 1 ? $current->item(0)?->getAttribute('href') : null;
 }
 
 test('ordinary and Built for Cloud layouts render the same authenticated shell around test-created slots', function (): void {
@@ -75,14 +77,65 @@ test('ordinary and Built for Cloud layouts render the same authenticated shell a
     expectAuthenticatedShell($ordinary, $ordinaryProof);
     expectAuthenticatedShell($builtForCloud, $builtForCloudProof);
 
-    $document = new DOMDocument;
-    @$document->loadHTML($ordinary);
-    $xpath = new DOMXPath($document);
-    expect($xpath->query('//details[@data-app-shell-navigation and @open]')->length)->toBe(1)
-        ->and($xpath->query('//*[@data-testid="app-shell-mobile-trigger"]//*[@data-testid="app-shell-brand"]')->length)->toBe(1)
-        ->and($xpath->query('//*[@data-testid="app-shell-mobile-trigger"]//*[@data-testid="app-shell-brand"]//img[@alt="Scalpels dashboard"]')->length)->toBe(1)
-        ->and(trim($xpath->query('//*[@data-testid="app-shell-mobile-trigger"]')->item(0)?->textContent ?? ''))->toContain('Menu');
+    foreach ([$ordinary => $ordinaryProof, $builtForCloud => $builtForCloudProof] as $html => $proof) {
+        $document = new DOMDocument;
+        @$document->loadHTML($html);
+        $xpath = new DOMXPath($document);
+        expect($xpath->query('//aside[@data-testid="bfc-sidebar" and @popover="auto"]')->length)->toBe(1)
+            ->and($xpath->query('//*[@data-testid="bfc-sidebar"]//*[@data-testid="bfc-sidebar-slot"]/nav[@data-testid="app-shell-sidebar"]')->length)->toBe(1)
+            ->and($xpath->query('//*[@data-testid="bfc-main"]//*[@data-testid="fixture-slot"]')->item(0)?->textContent)->toBe($proof)
+            ->and($xpath->query('//*[@data-testid="bfc-header-scalpels"]/img[@data-testid="app-shell-brand"]')->length)->toBe(1)
+            ->and($xpath->query('//*[@data-testid="bfc-sidebar-user"]//*[@data-testid="bfc-user-menu-button"]')->item(0)?->textContent)->toContain($owner->name);
+    }
 });
+
+test('the consumer shell retains page head and script stacks around its main slot', function (): void {
+    $this->actingAsVersioned(capstanUser());
+    $proof = 'stack-proof-'.Str::random(16);
+    $html = Blade::render(<<<'BLADE'
+        <x-layouts::app>
+            @push('head')<meta data-testid="fixture-head" content="{{ $proof }}">@endpush
+            @push('scripts')<script data-testid="fixture-scripts" type="application/json">@json($proof)</script>@endpush
+            <p data-testid="fixture-slot">{{ $proof }}</p>
+        </x-layouts::app>
+        BLADE, ['proof' => $proof]);
+    $document = new DOMDocument;
+    @$document->loadHTML($html);
+    $xpath = new DOMXPath($document);
+
+    expect($xpath->query('//head/meta[@data-testid="fixture-head"]')->item(0)?->getAttribute('content'))->toBe($proof)
+        ->and($xpath->query('//body/script[@data-testid="fixture-scripts"]')->item(0)?->textContent)->toContain($proof)
+        ->and($xpath->query('//*[@data-testid="bfc-main"]//*[@data-testid="fixture-slot"]')->item(0)?->textContent)->toBe($proof);
+});
+
+test('the sidebar slot preserves exactly the authorized app destinations and one account and logout entry', function (UserRole $role, bool $artifacts): void {
+    config(['capstan.artifacts.render_origin' => $artifacts ? 'https://render.shell.test' : null]);
+    Feature::flushCache();
+    $user = capstanUser(['role' => $role->value]);
+    $html = $this->actingAsVersioned($user)->get(route('work.index'))->assertOk()->content();
+    $document = new DOMDocument;
+    @$document->loadHTML($html);
+    $xpath = new DOMXPath($document);
+    $targets = [];
+    foreach ($xpath->query('//*[@data-testid="bfc-sidebar-slot"]//a') as $link) {
+        $targets[] = $link->getAttribute('href');
+    }
+    $expected = [route('bfc.dashboard'), route('postmaster.map'), route('work.index')];
+    if ($artifacts) {
+        $expected[] = route('pages.index');
+        if ($role !== UserRole::Member) {
+            $expected[] = route('branding.show');
+        }
+    }
+    $expected[] = route('bfc.ui.home');
+
+    expect($targets)->toBe($expected)
+        ->and($xpath->query('//a[@href="'.route('bfc.ui.home').'"]')->length)->toBe(1)
+        ->and($xpath->query('//form[@action="'.route('bfc.ui.logout').'"]')->length)->toBe(1)
+        ->and($xpath->query('//*[@data-testid="bfc-user-menu"]/form[@method="POST"][@action="'.route('bfc.ui.logout').'"]/input[@name="_token"]')->length)->toBe(1)
+        ->and($xpath->query('//*[@data-testid="bfc-header-scalpels"]')->item(0)?->getAttribute('href'))->toBe(Layout::SCALPELS_URL)
+        ->and($xpath->query('//*[@data-testid="bfc-header-docs"]')->item(0)?->getAttribute('href'))->toBe(Layout::SCALPELS_DOCS_URL);
+})->with([UserRole::Owner, UserRole::Admin, UserRole::Member])->with([false, true]);
 
 test('authenticated HTML routes keep the brand sidebar and current section', function (): void {
     $owner = capstanUser(['role' => UserRole::Owner->value]);
@@ -120,23 +173,23 @@ test('authenticated HTML routes keep the brand sidebar and current section', fun
         'landing' => [route('bfc.landing'), null],
         'sign in' => [route('bfc.login'), null],
         'password recovery' => [route('bfc.password.request'), null],
-        'dashboard' => [route('bfc.dashboard'), 'Dashboard'],
-        'postmaster' => [route('postmaster.map'), 'Postmaster'],
-        'work' => [route('work.index'), 'Work'],
-        'pages' => [route('pages.index'), 'Pages'],
-        'page viewer' => [route('pages.show', $page), 'Pages'],
-        'page version' => [route('pages.versions.show', [$page, $page->latestVersion]), 'Pages'],
-        'branding' => [route('branding.show'), 'Branding'],
-        'account' => [route('bfc.ui.home'), 'Account'],
-        'personal credentials' => [route('bfc.ui.personal-credentials.index'), 'Account'],
-        'installation credentials' => [route('bfc.ui.installation-credentials.index'), 'Account'],
-        'members' => [route('bfc.members.index'), 'Account'],
-        'sessions' => [route('bfc.sessions.index'), 'Account'],
-        'adopt authority' => [route('bfc.transitions.index', 'adopt'), 'Account'],
-        'exit authority' => [route('bfc.transitions.index', 'exit'), 'Account'],
-        'authority proposal' => [route('bfc.transitions.edit', $transition), 'Account'],
-        'device authorization' => [route('bfc.device.show'), 'Account'],
-        'loopback authorization' => [route('bfc.loopback.authorize'), 'Account'],
+        'dashboard' => [route('bfc.dashboard'), route('bfc.dashboard')],
+        'postmaster' => [route('postmaster.map'), route('postmaster.map')],
+        'work' => [route('work.index'), route('work.index')],
+        'pages' => [route('pages.index'), route('pages.index')],
+        'page viewer' => [route('pages.show', $page), route('pages.index')],
+        'page version' => [route('pages.versions.show', [$page, $page->latestVersion]), route('pages.index')],
+        'branding' => [route('branding.show'), route('branding.show')],
+        'account' => [route('bfc.ui.home'), route('bfc.ui.home')],
+        'personal credentials' => [route('bfc.ui.personal-credentials.index'), route('bfc.ui.home')],
+        'installation credentials' => [route('bfc.ui.installation-credentials.index'), route('bfc.ui.home')],
+        'members' => [route('bfc.members.index'), route('bfc.ui.home')],
+        'sessions' => [route('bfc.sessions.index'), route('bfc.ui.home')],
+        'adopt authority' => [route('bfc.transitions.index', 'adopt'), route('bfc.ui.home')],
+        'exit authority' => [route('bfc.transitions.index', 'exit'), route('bfc.ui.home')],
+        'authority proposal' => [route('bfc.transitions.edit', $transition), route('bfc.ui.home')],
+        'device authorization' => [route('bfc.device.show'), route('bfc.ui.home')],
+        'loopback authorization' => [route('bfc.loopback.authorize'), route('bfc.ui.home')],
     ];
 
     $this->actingAsVersioned($owner);

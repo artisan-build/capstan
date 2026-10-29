@@ -17,7 +17,6 @@ use ArtisanBuild\BuiltForCloud\Mcp\ToolClassification;
 use ArtisanBuild\BuiltForCloud\Mcp\ToolEffect;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\Support\Str;
-use Laravel\Mcp\Exceptions\JsonRpcException;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
@@ -72,7 +71,7 @@ final class ListPagesTool extends CapstanTool
         $lastId = $after['last_id'] ?? null;
 
         if ($after !== null && (! is_string($lastId) || ! Str::isUuid($lastId))) {
-            throw new JsonRpcException('The cursor is invalid for this request.', -32602);
+            throw $cursors->invalid();
         }
 
         $candidates = Page::query()

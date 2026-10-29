@@ -23,7 +23,6 @@ use Carbon\CarbonInterface;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\Rule;
-use Laravel\Mcp\Exceptions\JsonRpcException;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\ResponseFactory;
 use Laravel\Mcp\Server\Attributes\Description;
@@ -81,7 +80,7 @@ final class PostmasterSpokesTool extends CapstanTool
         $lastId = $after['last_id'] ?? null;
 
         if ($after !== null && (! is_int($lastId) || $lastId < 1)) {
-            throw new JsonRpcException('The cursor is invalid for this request.', -32602);
+            throw $cursors->invalid();
         }
 
         $staleBefore = now()->subSeconds($staleAfter);

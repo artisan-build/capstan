@@ -224,6 +224,16 @@ test('after apply the app chrome and Built for Cloud auth shell carry the applie
 
     $markUrl = 'https://render.chrome-brand.test/brand-assets/'.$assets['mark'];
     $chrome = appBrandChrome($this, $owner);
+    foreach ([$chrome['dashboard'], $chrome['header']] as $html) {
+        $document = new DOMDocument;
+        @$document->loadHTML($html);
+        $xpath = new DOMXPath($document);
+        foreach (['//*[@data-testid="bfc-header-app"]', '//*[@data-testid="bfc-mobile-header"]/a'] as $region) {
+            expect($xpath->query($region)->length)->toBe(1)
+                ->and($xpath->query($region.'//img[@data-testid="app-brand-icon"]')->item(0)?->getAttribute('src'))->toBe($markUrl)
+                ->and($xpath->query($region)->item(0)?->textContent)->toContain($markers['name']);
+        }
+    }
     foreach ([$chrome['dashboard'], $chrome['header'], ...$chrome['bfc']] as $html) {
         expect($html)->toContain(e($markers['name']), 'data-testid="app-brand-icon" src="'.$markUrl.'"');
         expectAbsent($html, 'viewBox="0 0 40 42"', e((string) config('app.name')), $assets['logo_light'], $assets['logo_dark'], $draftMarkers['name'], 'https://app.chrome-brand.test/brand-assets/');
@@ -300,6 +310,17 @@ test('switching or reverting the applied version switches app and mail branding 
 
     $chrome = appBrandChrome($this, $owner);
     $mail = appBrandMails($owner)['invite_html'];
+    $document = new DOMDocument;
+    @$document->loadHTML($chrome['dashboard']);
+    $xpath = new DOMXPath($document);
+    foreach (['//*[@data-testid="bfc-header-app"]', '//*[@data-testid="bfc-mobile-header"]/a'] as $region) {
+        $icons = $xpath->query($region.'//img[@data-testid="app-brand-icon"]');
+        expect($icons->length)->toBe(2)
+            ->and($icons->item(0)?->getAttribute('src'))->toBe('https://render.chrome-brand.test/brand-assets/'.$assets['logo_light'])
+            ->and($icons->item(0)?->getAttribute('class'))->toContain('dark:hidden')
+            ->and($icons->item(1)?->getAttribute('src'))->toBe('https://render.chrome-brand.test/brand-assets/'.$assets['logo_dark'])
+            ->and($icons->item(1)?->getAttribute('class'))->toContain('dark:block');
+    }
     foreach ([$chrome['dashboard'], ...$chrome['bfc']] as $html) {
         expect($html)->toContain(e($two['name']), $two['light'], $two['dark'],
             'src="https://render.chrome-brand.test/brand-assets/'.$assets['logo_light'].'"',

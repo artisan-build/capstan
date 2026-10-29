@@ -2,8 +2,8 @@
 
 namespace App\Mcp;
 
+use Illuminate\Validation\ValidationException;
 use JsonException;
-use Laravel\Mcp\Exceptions\JsonRpcException;
 
 final class SignedCursor
 {
@@ -71,8 +71,8 @@ final class SignedCursor
         return $decoded === false ? null : $decoded;
     }
 
-    private function invalid(): JsonRpcException
+    public function invalid(): ValidationException
     {
-        return new JsonRpcException('The cursor is invalid for this request.', -32602);
+        return ValidationException::withMessages(['cursor' => 'The cursor is invalid for this request.']);
     }
 }

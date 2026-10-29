@@ -16,8 +16,8 @@ use ArtisanBuild\BuiltForCloud\Mcp\Effect;
 use ArtisanBuild\BuiltForCloud\Mcp\ToolClassification;
 use ArtisanBuild\BuiltForCloud\Mcp\ToolEffect;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
-use Laravel\Mcp\Exceptions\JsonRpcException;
 use Laravel\Mcp\Request;
+use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
 use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Attributes\Name;
@@ -44,7 +44,7 @@ final class PostmasterMessagesTool extends CapstanTool
         ];
     }
 
-    public function handle(Request $request, OwnerSubjectResolver $owners, SignedCursor $cursors, ServerIdentity $identity): ResponseFactory
+    public function handle(Request $request, OwnerSubjectResolver $owners, SignedCursor $cursors, ServerIdentity $identity): Response|ResponseFactory
     {
         $this->requireExactArguments($request, ['inbox', 'limit', 'cursor']);
 
@@ -55,14 +55,14 @@ final class PostmasterMessagesTool extends CapstanTool
         ]);
 
         if (! Address::isValidLocalPart($validated['inbox'])) {
-            throw new JsonRpcException('The inbox is unavailable.', -32004);
+            return Response::error('The inbox is unavailable.');
         }
 
         $owner = $owners->resolve();
         $inbox = Inbox::query()->where('actor_id', $owner->actorId)->where('local_part', $validated['inbox'])->first();
 
         if (! $inbox instanceof Inbox) {
-            throw new JsonRpcException('The inbox is unavailable.', -32004);
+            return Response::error('The inbox is unavailable.');
         }
 
         $limit = (int) ($validated['limit'] ?? 20);
@@ -83,7 +83,7 @@ final class PostmasterMessagesTool extends CapstanTool
             $id = $after['id'] ?? null;
 
             if ((! is_string($receivedAt) && $receivedAt !== null) || ! is_string($id)) {
-                throw new JsonRpcException('The cursor is invalid for this request.', -32602);
+                throw $cursors->invalid();
             }
 
             if ($receivedAt === null) {
