@@ -40,6 +40,7 @@ const MCP_READ_SERVER_ID = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
 
 beforeEach(function (): void {
     config([
+        'app.debug' => false,
         'app.key' => 'base64:'.base64_encode(str_repeat('r', 32)),
         'capstan.features.postmaster' => true,
         'capstan.postmaster.server_id' => MCP_READ_SERVER_ID,

@@ -21,6 +21,7 @@ use Laravel\Pennant\Feature;
 
 beforeEach(function (): void {
     config([
+        'app.debug' => false,
         'app.key' => 'base64:'.base64_encode(str_repeat('g', 32)),
         'app.url' => 'https://app.pages.test',
         'capstan.artifacts.render_origin' => 'https://render.pages.test',

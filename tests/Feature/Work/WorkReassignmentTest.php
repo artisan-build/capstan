@@ -2,6 +2,7 @@
 
 use App\Enums\WorkItemState;
 use App\Enums\WorkPriority;
+use App\Mcp\WriteFaultInjector;
 use App\Models\Spoke;
 use App\Models\Team;
 use App\Models\WorkEscalation;
@@ -29,9 +30,11 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
+use Laravel\Mcp\Exceptions\JsonRpcException;
 
 beforeEach(function (): void {
     config([
+        'app.debug' => false,
         'app.key' => 'base64:'.base64_encode(str_repeat('r', 32)),
         'capstan.work.lease_seconds' => 300,
         'capstan.work.orchestration.turn_budget' => 20,
@@ -465,6 +468,45 @@ test('reassignment rejects unknown fields wrong scalar types invalid UUIDs modes
     'invalid mode' => [['mode' => 'all']],
     'long note' => [['note' => str_repeat('n', 2001)]],
 ]);
+
+test('write tools expose only the bounded service errors with the matching domain code', function (string $case): void {
+    $owner = capstanUser(['role' => 'member']);
+    $target = capstanUser(['role' => 'member']);
+    $root = reassignmentTask($owner);
+    $token = reassignmentToken($owner);
+    $proof = 'private-mcp-error-'.Str::random(20);
+    $message = match ($case) {
+        'temporary' => 'The write service is temporarily unavailable.',
+        'unknown' => $proof,
+        default => 'The write service is unavailable.',
+    };
+    $exception = new JsonRpcException($message, $case === 'wrong-code' ? -32603 : -32003);
+    $this->instance(WriteFaultInjector::class, new class($exception) extends WriteFaultInjector
+    {
+        public function __construct(private readonly JsonRpcException $exception) {}
+
+        public function beforeClaim(string $tool): void
+        {
+            throw $this->exception;
+        }
+    });
+
+    $response = reassignmentCall([
+        'team_id' => Team::default()->id,
+        'task_id' => $root->id,
+        'to_actor' => (string) $target->id,
+        'mode' => WorkReassignmentService::MODE_MOVE,
+        'idempotency_key' => 'bounded-error',
+    ], $token)->assertOk();
+
+    expect($response->json('result.isError'))->toBeTrue()
+        ->and($response->json('result.content.0.text'))->toBe(
+            in_array($case, ['unknown', 'wrong-code'], true) ? 'An internal server error occurred.' : $message,
+        )
+        ->and($response->getContent())->not->toContain($proof)
+        ->and(DB::table('mcp_write_claims')->count())->toBe(0)
+        ->and($root->fresh()->owner_actor)->toBe((string) $owner->id);
+})->with(['unavailable', 'temporary', 'unknown', 'wrong-code']);
 
 test('a notification insert failure leaves the published durable key retryable without partial effects', function (): void {
     $owner = capstanUser(['role' => 'member']);
