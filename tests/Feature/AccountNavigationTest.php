@@ -12,15 +12,13 @@ function accountNavigationTargets(string $html): array
     $xpath = new DOMXPath($document);
     $targets = [];
 
-    foreach (['account-navigation', 'mobile-settings-navigation', 'desktop-settings-navigation'] as $testId) {
-        $nodes = $xpath->query('//*[@data-testid="'.$testId.'"]');
-        expect($nodes->length)->toBe(1);
-        $targets[$testId] = $nodes->item(0)?->getAttribute('href');
-    }
+    $nodes = $xpath->query('//*[@data-testid="account-navigation"]');
+    expect($nodes->length)->toBe(1);
+    $targets['account-navigation'] = $nodes->item(0)?->getAttribute('href');
 
-    $logout = $xpath->query('//*[@data-testid="mobile-logout-form"]');
+    $logout = $xpath->query('//*[@data-testid="bfc-user-menu-logout"]');
     expect($logout->length)->toBe(1);
-    $targets['mobile-logout-form'] = $logout->item(0)?->getAttribute('action');
+    $targets['bfc-user-menu-logout'] = $logout->item(0)?->getAttribute('action');
 
     return $targets;
 }
@@ -62,9 +60,7 @@ test('account navigation reaches the shared settings page in standalone and mana
 
     expect(accountNavigationTargets($dashboard->content()))->toBe([
         'account-navigation' => route('bfc.ui.home'),
-        'mobile-settings-navigation' => route('bfc.ui.home'),
-        'desktop-settings-navigation' => route('bfc.ui.home'),
-        'mobile-logout-form' => route('bfc.ui.logout'),
+        'bfc-user-menu-logout' => route('bfc.ui.logout'),
     ]);
     $this->get(route('bfc.ui.home'))->assertOk();
     $this->post(route('bfc.ui.logout'))->assertRedirect('/');
