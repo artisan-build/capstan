@@ -132,12 +132,13 @@ test('the app origin stays fully intact', function (): void {
     $this->get("https://app.test/artifacts/{$artifact->id}/content")->assertNotFound();
 });
 
-test('the sessionless package landing stays cookieless while package login starts a session', function (): void {
+test('the app-origin package landing and login both establish a web session', function (): void {
     $landing = $this->get('https://app.test/')->assertOk();
     $login = $this->get('https://app.test/bfc/login')->assertOk();
     $cookieNames = array_map(fn ($cookie) => $cookie->getName(), $login->headers->getCookies());
+    $landingCookieNames = array_map(fn ($cookie) => $cookie->getName(), $landing->headers->getCookies());
 
-    expect($landing->headers->getCookies())->toBe([])
-        ->and($landing->headers->has('Set-Cookie'))->toBeFalse()
+    expect($landingCookieNames)->toContain(config('session.cookie'))
+        ->and($landing->headers->has('Set-Cookie'))->toBeTrue()
         ->and($cookieNames)->toContain(config('session.cookie'));
 });
