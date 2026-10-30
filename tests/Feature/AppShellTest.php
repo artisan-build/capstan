@@ -2,8 +2,8 @@
 
 use App\Enums\PageLayout;
 use App\Http\Responses\BrandedErrorResponse;
-use App\Support\PagePublisher;
 use App\Support\AppBrand;
+use App\Support\PagePublisher;
 use App\View\Components\SidebarShell;
 use ArtisanBuild\BuiltForCloud\ManagedTransition;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionDirection;
@@ -16,8 +16,8 @@ use Illuminate\Session\TokenMismatchException;
 use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 use Illuminate\Support\HtmlString;
+use Illuminate\Support\Str;
 use Illuminate\View\ComponentSlot;
 use Laravel\Pennant\Feature;
 
