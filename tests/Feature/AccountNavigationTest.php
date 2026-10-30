@@ -12,7 +12,9 @@ function accountNavigationTargets(string $html): array
     $xpath = new DOMXPath($document);
     $targets = [];
 
-    expect($xpath->query('//*[@data-testid="account-navigation"]')->length)->toBe(0);
+    $settings = $xpath->query('//*[@data-testid="settings-navigation"]');
+    expect($settings->length)->toBe(1);
+    $targets['settings-navigation'] = $settings->item(0)?->getAttribute('href');
 
     $logout = $xpath->query('//*[@data-testid="bfc-user-menu-logout"]');
     expect($logout->length)->toBe(1);
@@ -21,7 +23,7 @@ function accountNavigationTargets(string $html): array
     return $targets;
 }
 
-test('the sidebar carries no Account link, and the settings page and logout still work in standalone and managed modes', function (string $mode): void {
+test('the sidebar links to settings and its members and credentials in standalone and managed modes', function (string $mode): void {
     config(['built-for-cloud.managed.client_secret' => str_repeat('n', 64)]);
     $attributes = ['role' => UserRole::Owner->value];
 
@@ -57,9 +59,22 @@ test('the sidebar carries no Account link, and the settings page and logout stil
     $dashboard = $this->actingAsVersioned($user)->get(route('bfc.dashboard'))->assertOk();
 
     expect(accountNavigationTargets($dashboard->content()))->toBe([
+        'settings-navigation' => route('bfc.ui.home'),
         'bfc-user-menu-logout' => route('bfc.ui.logout'),
     ]);
-    $this->get(route('bfc.ui.home'))->assertOk();
+    $settings = $this->get(route('bfc.ui.home'))->assertOk();
+    if ($mode === AuthorityMode::Managed->value) {
+        $settings->assertSeeHtml('href="#managed-members"')
+            ->assertSeeHtml('data-testid="managed-members-list"')
+            ->assertSee($user->name);
+    } else {
+        $settings->assertSeeHtml('href="'.route('bfc.members.index').'"');
+        $this->get(route('bfc.members.index'))->assertOk();
+    }
+    foreach (['bfc.ui.personal-credentials.index', 'bfc.ui.installation-credentials.index'] as $destination) {
+        $settings->assertSeeHtml('href="'.route($destination).'"');
+        $this->get(route($destination))->assertOk();
+    }
     $this->post(route('bfc.ui.logout'))->assertRedirect('/');
 })->with([
     AuthorityMode::Standalone->value,

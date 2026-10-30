@@ -54,12 +54,15 @@
                 </a>
             </nav>
 
-            @if (isset($sidebar) && $sidebar->isNotEmpty())
+            @if (filled($sidebar ?? null))
                 <div data-testid="bfc-sidebar-slot" class="bfc-sidebar-slot">{{ $sidebar }}</div>
             @endif
 
             <div data-testid="bfc-sidebar-bottom" class="bfc-sidebar-bottom">
                 <nav aria-label="Scalpels console" class="bfc-sidebar-links">
+                    @isset($sidebarFooter)
+                        {{ $sidebarFooter }}
+                    @endisset
                     <a href="{{ $scalpelsDocsUrl }}"
                        data-testid="bfc-header-docs"
                        class="bfc-shell-link">
