@@ -1,5 +1,5 @@
 @php
-    $accountIsCurrent = request()->routeIs(
+    $settingsIsCurrent = request()->routeIs(
         'bfc.ui.*',
         'bfc.members.*',
         'bfc.sessions.*',
@@ -18,5 +18,5 @@
             <a data-testid="branding-navigation" class="bfc-shell-link" href="{{ route('branding.show') }}" @if (request()->routeIs('branding.*')) aria-current="page" @endif>{{ __('Branding') }}</a>
         @endif
     @endif
-    <a data-testid="account-navigation" class="bfc-shell-link" href="{{ route('bfc.ui.home') }}" @if ($accountIsCurrent) aria-current="page" @endif>{{ __('Account') }}</a>
+    <a data-testid="settings-navigation" class="bfc-shell-link" href="{{ route('bfc.ui.home') }}" @if ($settingsIsCurrent) aria-current="page" @endif>{{ __('Settings') }}</a>
 </nav>

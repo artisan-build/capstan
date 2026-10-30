@@ -1,4 +1,4 @@
-{{-- Consumer override of built-for-cloud v0.21.0 (16469fa55163ed5c83a31514cede23ffbac99c24).
+{{-- Consumer override of the built-for-cloud shell layout.
      Only Capstan's branded head/product rendering, structural hooks and Flux/toast
      hooks differ. Keep the native package shell structure in sync on upgrades. --}}
 <!DOCTYPE html>
@@ -9,6 +9,7 @@
     @if ($stylesheetUrl)
         <link rel="stylesheet" href="{{ $stylesheetUrl }}">
     @endif
+    @stack('head')
     @include('partials.app-shell-accent')
     <style>
         .bfc-sidebar-slot .bfc-shell-link[aria-current="page"] { background: var(--color-accent, #6f5b46); color: var(--color-accent-foreground, #fffdf8); font-weight: 650; }
@@ -16,7 +17,6 @@
         .app-shell-error-code { font-size: .875rem; font-weight: 650; }
         .app-shell-error-title { color: var(--color-clay-ink, #29231d); font-size: 1.875rem; font-weight: 650; margin-top: .5rem; }
     </style>
-    @stack('head')
 </head>
 <body data-testid="bfc-layout"
       class="bfc-body min-h-screen bg-clay-paper font-sans text-clay-soft antialiased
@@ -30,7 +30,7 @@
            class="bfc-sidebar">
         <div data-testid="bfc-mobile-drawer" class="bfc-sidebar-content">
             <div class="flex items-center justify-between gap-3">
-                <a href="{{ \ArtisanBuild\BuiltForCloud\View\Layout::SCALPELS_URL }}"
+                <a href="{{ $scalpelsUrl }}"
                    data-testid="bfc-header-scalpels"
                    class="bfc-wordmark">
                     <img data-testid="app-shell-brand" src="{{ $wordmarkUrl }}" alt="Scalpels dashboard" width="480" height="138">
@@ -46,38 +46,49 @@
             </div>
 
             <nav aria-label="Scalpels" class="bfc-sidebar-links">
-                <a href="{{ url('/') }}"
+                <a href="{{ \Illuminate\Support\Facades\Route::has('bfc.dashboard') ? route('bfc.dashboard') : url('/') }}"
                    data-testid="bfc-header-app"
-                   class="bfc-shell-link">
-                    <x-app-logo-icon class="size-6 shrink-0 object-contain" />
+                   class="bfc-shell-link bfc-app-link">
+                    <x-app-logo-icon class="bfc-app-icon shrink-0 object-contain" />
                     <span class="truncate">{{ $brand->displayName }}</span>
-                </a>
-                <a href="{{ \ArtisanBuild\BuiltForCloud\View\Layout::SCALPELS_DOCS_URL }}"
-                   data-testid="bfc-header-docs"
-                   class="bfc-shell-link">
-                    Documentation
                 </a>
             </nav>
 
-            @isset($sidebar)
+            @if (filled($sidebar ?? null))
                 <div data-testid="bfc-sidebar-slot" class="bfc-sidebar-slot">{{ $sidebar }}</div>
-            @else
-                <div data-testid="bfc-sidebar-fallback" class="bfc-sidebar-slot">
-                    <span class="text-sm text-clay-muted">Application navigation</span>
-                </div>
-            @endisset
-
-            @if ($user)
-                <footer data-testid="bfc-sidebar-user" class="bfc-sidebar-user">
-                    <button type="button"
-                            popovertarget="bfc-user-menu"
-                            data-testid="bfc-user-menu-button"
-                            class="bfc-shell-control bfc-desktop-user-button">
-                        <span class="truncate">{{ $user->name }}</span>
-                        <span aria-hidden="true">&#8963;</span>
-                    </button>
-                </footer>
             @endif
+
+            <div data-testid="bfc-sidebar-bottom" class="bfc-sidebar-bottom">
+                <nav aria-label="Scalpels console" class="bfc-sidebar-links">
+                    @isset($sidebarFooter)
+                        {{ $sidebarFooter }}
+                    @endisset
+                    <a href="{{ $scalpelsDocsUrl }}"
+                       data-testid="bfc-header-docs"
+                       class="bfc-shell-link">
+                        Documentation
+                    </a>
+                    @if ($manageUrl)
+                        <a href="{{ $manageUrl }}"
+                           data-testid="bfc-sidebar-manage"
+                           class="bfc-shell-link">
+                            Manage
+                        </a>
+                    @endif
+                </nav>
+
+                @if ($user)
+                    <footer data-testid="bfc-sidebar-user" class="bfc-sidebar-user">
+                        <button type="button"
+                                popovertarget="bfc-user-menu"
+                                data-testid="bfc-user-menu-button"
+                                class="bfc-shell-control bfc-desktop-user-button">
+                            <span class="truncate">{{ $user->name }}</span>
+                            <span aria-hidden="true">&#8963;</span>
+                        </button>
+                    </footer>
+                @endif
+            </div>
         </div>
     </aside>
 
@@ -92,7 +103,7 @@
                 <path stroke-linecap="round" d="M4 7h16M4 12h16M4 17h16" />
             </svg>
         </button>
-        <a href="{{ url('/') }}" class="bfc-shell-link min-w-0">
+        <a href="{{ \Illuminate\Support\Facades\Route::has('bfc.dashboard') ? route('bfc.dashboard') : url('/') }}" class="bfc-shell-link min-w-0">
             <x-app-logo-icon class="size-6 shrink-0 object-contain" />
             <span class="truncate">{{ $brand->displayName }}</span>
         </a>

@@ -2,7 +2,9 @@
 
 use App\Enums\PageLayout;
 use App\Http\Responses\BrandedErrorResponse;
+use App\Support\AppBrand;
 use App\Support\PagePublisher;
+use App\View\Components\SidebarShell;
 use ArtisanBuild\BuiltForCloud\ManagedTransition;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionDirection;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionStatus;
@@ -14,7 +16,9 @@ use Illuminate\Session\TokenMismatchException;
 use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\HtmlString;
 use Illuminate\Support\Str;
+use Illuminate\View\ComponentSlot;
 use Laravel\Pennant\Feature;
 
 beforeEach(function (): void {
@@ -108,7 +112,7 @@ test('the consumer shell retains page head and script stacks around its main slo
         ->and($xpath->query('//*[@data-testid="bfc-main"]//*[@data-testid="fixture-slot"]')->item(0)?->textContent)->toBe($proof);
 });
 
-test('the sidebar slot preserves exactly the authorized app destinations and one account and logout entry', function (UserRole $role, bool $artifacts): void {
+test('the sidebar slot preserves exactly the authorized app destinations and one settings and logout entry', function (UserRole $role, bool $artifacts): void {
     config(['capstan.artifacts.render_origin' => $artifacts ? 'https://render.shell.test' : null]);
     Feature::flushCache();
     $user = capstanUser(['role' => $role->value]);
@@ -134,8 +138,49 @@ test('the sidebar slot preserves exactly the authorized app destinations and one
         ->and($xpath->query('//form[@action="'.route('bfc.ui.logout').'"]')->length)->toBe(1)
         ->and($xpath->query('//*[@data-testid="bfc-user-menu"]/form[@method="POST"][@action="'.route('bfc.ui.logout').'"]/input[@name="_token"]')->length)->toBe(1)
         ->and($xpath->query('//*[@data-testid="bfc-header-scalpels"]')->item(0)?->getAttribute('href'))->toBe(Layout::SCALPELS_URL)
-        ->and($xpath->query('//*[@data-testid="bfc-header-docs"]')->item(0)?->getAttribute('href'))->toBe(Layout::SCALPELS_DOCS_URL);
+        ->and($xpath->query('//*[@data-testid="bfc-header-docs"]')->item(0)?->getAttribute('href'))->toBe(Layout::SCALPELS_DOCS_URL.'/capstan');
 })->with([UserRole::Owner, UserRole::Admin, UserRole::Member])->with([false, true]);
+
+test('the consumer override renders string sidebar content and the bottom footer slot', function (bool $hasSidebar): void {
+    $proof = 'sidebar-'.Str::random(16);
+    $footerProof = 'footer-'.Str::random(16);
+    $layout = new SidebarShell(resolve(AppBrand::class)->current());
+    $html = $layout->render()->with($layout->data() + [
+        'slot' => new ComponentSlot('main-'.Str::random(16)),
+        'sidebar' => $hasSidebar ? $proof : '',
+        'sidebarFooter' => new HtmlString('<a data-testid="fixture-footer" href="/fixture">'.$footerProof.'</a>'),
+    ])->render();
+    $document = new DOMDocument;
+    @$document->loadHTML($html);
+    $xpath = new DOMXPath($document);
+
+    expect($xpath->query('//*[@data-testid="bfc-sidebar-slot"]')->length)->toBe($hasSidebar ? 1 : 0);
+    if ($hasSidebar) {
+        expect($xpath->query('//*[@data-testid="bfc-sidebar-slot"]')->item(0)?->textContent)->toBe($proof);
+    }
+    expect($xpath->query('//*[@data-testid="bfc-sidebar-bottom"]//*[@data-testid="fixture-footer"]')->item(0)?->textContent)->toBe($footerProof);
+})->with([true, false]);
+
+test('the consumer shell keeps console, product and deployment navigation separate', function (?string $deployment): void {
+    $issuer = 'https://console-'.Str::lower(Str::random(8)).'.test';
+    config([
+        'built-for-cloud.console.issuer' => $issuer,
+        'built-for-cloud.vitals.deployment_id' => $deployment,
+    ]);
+    $html = $this->actingAsVersioned(capstanUser())->get(route('bfc.dashboard'))->assertOk()->content();
+    $document = new DOMDocument;
+    @$document->loadHTML($html);
+    $xpath = new DOMXPath($document);
+    $docs = $issuer.'/docs/capstan'.($deployment === null ? '' : '?from='.rawurlencode($deployment));
+
+    expect($xpath->query('//*[@data-testid="bfc-header-scalpels"]')->item(0)?->getAttribute('href'))->toBe($issuer.'/dashboard')
+        ->and($xpath->query('//*[@data-testid="bfc-header-app"]')->item(0)?->getAttribute('href'))->toBe(route('bfc.dashboard'))
+        ->and($xpath->query('//*[@data-testid="bfc-sidebar-bottom"]//*[@data-testid="bfc-header-docs"]')->item(0)?->getAttribute('href'))->toBe($docs)
+        ->and($xpath->query('//*[@data-testid="bfc-sidebar-manage"]')->length)->toBe($deployment === null ? 0 : 1);
+    if ($deployment !== null) {
+        expect($xpath->query('//*[@data-testid="bfc-sidebar-bottom"]//*[@data-testid="bfc-sidebar-manage"]')->item(0)?->getAttribute('href'))->toBe($issuer.'/deployments/'.rawurlencode($deployment).'/manage');
+    }
+})->with([null, 'shell deployment/fixture']);
 
 test('authenticated HTML routes keep the brand sidebar and current section', function (): void {
     $owner = capstanUser(['role' => UserRole::Owner->value]);
@@ -170,7 +215,6 @@ test('authenticated HTML routes keep the brand sidebar and current section', fun
     ]);
 
     $routes = [
-        'landing' => [route('bfc.landing'), null],
         'sign in' => [route('bfc.login'), null],
         'password recovery' => [route('bfc.password.request'), null],
         'dashboard' => [route('bfc.dashboard'), route('bfc.dashboard')],
@@ -193,6 +237,7 @@ test('authenticated HTML routes keep the brand sidebar and current section', fun
     ];
 
     $this->actingAsVersioned($owner);
+    $this->get(route('bfc.landing'))->assertRedirect(route('bfc.dashboard'));
 
     foreach ($routes as $label => [$url, $section]) {
         $response = $this->get($url);
