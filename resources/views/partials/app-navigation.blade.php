@@ -1,13 +1,3 @@
-@php
-    $accountIsCurrent = request()->routeIs(
-        'bfc.ui.*',
-        'bfc.members.*',
-        'bfc.sessions.*',
-        'bfc.transitions.*',
-        'bfc.device.*',
-        'bfc.loopback.*',
-    ) || request()->is('settings', 'settings/*', 'bfc/device', 'bfc/members', 'bfc/me/*', 'bfc/transitions/*', 'bfc/loopback/*');
-@endphp
 <nav data-testid="app-shell-sidebar" class="bfc-sidebar-links" aria-label="{{ __('Platform') }}">
     <a class="bfc-shell-link" href="{{ route('bfc.dashboard') }}" @if (request()->routeIs('bfc.dashboard')) aria-current="page" @endif>{{ __('Dashboard') }}</a>
     <a class="bfc-shell-link" href="{{ route('postmaster.map') }}" @if (request()->routeIs('postmaster.*')) aria-current="page" @endif>{{ __('Postmaster') }}</a>
@@ -18,5 +8,4 @@
             <a data-testid="branding-navigation" class="bfc-shell-link" href="{{ route('branding.show') }}" @if (request()->routeIs('branding.*')) aria-current="page" @endif>{{ __('Branding') }}</a>
         @endif
     @endif
-    <a data-testid="account-navigation" class="bfc-shell-link" href="{{ route('bfc.ui.home') }}" @if ($accountIsCurrent) aria-current="page" @endif>{{ __('Account') }}</a>
 </nav>

@@ -12,9 +12,7 @@ function accountNavigationTargets(string $html): array
     $xpath = new DOMXPath($document);
     $targets = [];
 
-    $nodes = $xpath->query('//*[@data-testid="account-navigation"]');
-    expect($nodes->length)->toBe(1);
-    $targets['account-navigation'] = $nodes->item(0)?->getAttribute('href');
+    expect($xpath->query('//*[@data-testid="account-navigation"]')->length)->toBe(0);
 
     $logout = $xpath->query('//*[@data-testid="bfc-user-menu-logout"]');
     expect($logout->length)->toBe(1);
@@ -23,7 +21,7 @@ function accountNavigationTargets(string $html): array
     return $targets;
 }
 
-test('account navigation reaches the shared settings page in standalone and managed modes', function (string $mode): void {
+test('the sidebar carries no Account link, and the settings page and logout still work in standalone and managed modes', function (string $mode): void {
     config(['built-for-cloud.managed.client_secret' => str_repeat('n', 64)]);
     $attributes = ['role' => UserRole::Owner->value];
 
@@ -59,7 +57,6 @@ test('account navigation reaches the shared settings page in standalone and mana
     $dashboard = $this->actingAsVersioned($user)->get(route('bfc.dashboard'))->assertOk();
 
     expect(accountNavigationTargets($dashboard->content()))->toBe([
-        'account-navigation' => route('bfc.ui.home'),
         'bfc-user-menu-logout' => route('bfc.ui.logout'),
     ]);
     $this->get(route('bfc.ui.home'))->assertOk();
